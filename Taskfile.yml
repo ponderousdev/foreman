@@ -1,0 +1,446 @@
+# Taskfile for Foreman
+# https://taskfile.dev
+version: "3"
+
+output:
+  group:
+    begin: "::group::{{.TASK}}"
+    end: "::endgroup::"
+
+# ── Entry Points ───────────────────────────────────────────────────
+tasks:
+  default:
+    desc: Interactive task menu (tv)
+    cmds:
+      - task: menu-tv
+
+  menu:
+    desc: Interactive task menu (fzf)
+    silent: true
+    interactive: true
+    cmds:
+      - |
+        selected=$(task --list-all | fzf --reverse --header-lines=1)
+        if [ -n "$selected" ]; then
+          task_name=$(echo "$selected" | awk '{sub(/:$/, "", $2); print $2}')
+          task "$task_name"
+        fi
+
+  menu-tv:
+    desc: Interactive task menu (tv)
+    silent: true
+    interactive: true
+    cmds:
+      - |
+        selected=$(task --list-all | grep -v "task: Available" | grep -v "\* menu:" | tv)
+        if [ -n "$selected" ]; then
+          task_name=$(echo "$selected" | awk '{sub(/:$/, "", $2); print $2}')
+          task "$task_name"
+        fi
+
+  # ── CI / Verification Pipelines ────────────────────────────────
+  ci:
+    # Full local mirror of the CI pipeline — run before (or instead of) opening
+    # a PR to catch everything CI would, on demand, without waiting on a PR run.
+    # Builds on `verify` and adds the heavier / environment-dependent checks
+    # (the devcontainer permission assert needs a Docker daemon, like CI has).
+    desc: Full CI mirror (verify → [test:devcontainer:permissions →] test → security)
+    cmds:
+      - task: verify
+      - task: test:devcontainer:permissions
+      - task: test
+      - task: security
+
+  verify:
+    # Fast local gate (target: well under a minute) — safe for editors, git
+    # hooks, and AI agents to run on every change without getting bogged down.
+    # Add a check here ONLY if it stays fast; heavier or environment-dependent
+    # checks (test, security, the devcontainer permission assert) live in `ci`.
+    desc: Fast local gate (check → validate → guards)
+    cmds:
+      - task: check
+      - task: validate
+      - task: test:tasks
+      - task: test:hooks
+
+  # ── Quality Checks ────────────────────────────────────────────
+  check:
+    desc: Run all linters (parallel)
+    deps:
+      - lint
+
+  lint:
+    desc: Run all linters in parallel
+    deps:
+      - lint:yaml
+      - lint:shell
+      - lint:markdown
+      - lint:actions
+      - lint:hygiene
+
+  lint:yaml:
+    desc: yamllint
+    cmds:
+      - yamllint {{.CLI_ARGS | default "."}}
+
+  lint:shell:
+    desc: shellcheck + shfmt
+    vars:
+      SHELL_FILES:
+        sh: git ls-files '*.sh' '*.bash' 2>/dev/null | tr '\n' ' '
+    cmds:
+      - |
+        files="{{.CLI_ARGS}}"
+        [ -z "$files" ] && files="{{.SHELL_FILES}}"
+        [ -z "$files" ] && exit 0
+        shellcheck --severity=error $files
+        shfmt -d $files
+
+  lint:markdown:
+    # Check-only (no --fix) so this is a read-only gate like lint:prettier /
+    # lint:shell: CI and the pre-commit hook fail loudly instead of silently
+    # mutating the tree (and, in CI, discarding the fix while reporting green).
+    # Auto-fix lives in `task format` / `task format:file`. The bin-vs-npx
+    # dispatch + default glob set live in scripts/markdownlint.sh.
+    desc: markdownlint-cli2 (check mode)
+    cmds:
+      - ./scripts/markdownlint.sh check {{.CLI_ARGS}}
+
+  lint:actions:
+    desc: actionlint on GitHub workflows
+    env:
+      # SC2016 flags '$' in single quotes, but we intentionally single-quote
+      # jq expressions that use '$var' placeholders.
+      SHELLCHECK_OPTS: --exclude=SC2016
+    cmds:
+      - actionlint
+
+  lint:hygiene:
+    desc: File hygiene (trailing whitespace, EOF newlines, merge markers, etc.)
+    cmds:
+      - ./scripts/lint-hygiene.sh {{.CLI_ARGS}}
+
+  lint:commit-msg:
+    desc: Validate commit message (conventional commits)
+    cmds:
+      - npx --yes --package @commitlint/cli --package @commitlint/config-conventional -- commitlint --edit {{.CLI_ARGS}}
+
+  lint:commit-msg:text:
+    desc: "Validate a commit message read from stdin (usage: printf '%s' <message> | task lint:commit-msg:text)"
+    cmds:
+      - npx --yes --package @commitlint/cli --package @commitlint/config-conventional -- commitlint
+
+  # ── Validation ─────────────────────────────────────────────────
+  validate:
+    desc: Validate project config/artifacts
+    cmds:
+      - 'echo "No validate steps for this project type yet — see docs/CHECKLIST.md."'
+
+  guard:no-commit-to-main:
+    desc: Block direct commits to main
+    cmds:
+      - |
+        branch=$(git rev-parse --abbrev-ref HEAD)
+        if [ "$branch" = "main" ]; then
+          echo "Direct commits to main are blocked. Use a feature branch."
+          exit 1
+        fi
+
+  # ── Skills sync ────────────────────────────────────────────────
+  # Vendor shared agent skills from harmon-devkit, pinned in .skills-sync.yaml.
+  # The verify:skills* drift checks skip cleanly until the first `task sync:skills`,
+  # so a fresh scaffold stays green. See docs/CHECKLIST.md.
+  sync:skills:
+    desc: Vendor the pinned skill categories from harmon-devkit into .claude/skills
+    cmds:
+      - ./scripts/sync-skills.sh sync
+
+  verify:skills:
+    desc: "Skill drift check (network): fail if vendored skills differ from the pinned ref"
+    cmds:
+      - ./scripts/sync-skills.sh verify
+
+  verify:skills:offline:
+    desc: "Fast offline check that the vendored ref matches the manifest (no network)"
+    cmds:
+      - ./scripts/sync-skills.sh verify-offline
+
+  format:
+    desc: Auto-format code
+    cmds:
+      - |
+        files=$(git ls-files '*.sh' '*.bash')
+        [ -n "$files" ] && shfmt -w $files || true
+      # Best-effort markdown auto-fix (bin-vs-npx dispatch in the helper); must
+      # NOT abort `format` on un-auto-fixable rule violations — `lint:markdown`
+      # (check-only) is the gate.
+      - ./scripts/markdownlint.sh fix
+
+  format:file:
+    desc: "Format a single file by extension (usage: task format:file -- <path>)"
+    cmds:
+      - |
+        f={{.CLI_ARGS}}
+        [ -z "$f" ] && exit 0
+        [ -f "$f" ] || exit 0
+        case "$f" in
+        *.sh | *.bash) shfmt -w "$f" ;;
+        *.md | *.mdx) ./scripts/markdownlint.sh fix "$f" ;;
+        esac
+
+  fix:
+    desc: Format then lint
+    cmds:
+      - task: format
+      - task: lint
+
+  # ── Tests ──────────────────────────────────────────────────────
+  test:
+    desc: Run all tests
+    cmds:
+      - 'echo "TODO: wire tests for this project (see docs/architecture/tests.md); test files live in tests/"'
+
+  test:tasks:
+    desc: Guard the Taskfile itself (compiles; setup tasks are safe no-ops)
+    cmds:
+      - ./scripts/test-tasks.sh
+
+  test:devcontainer:root:
+    desc: Smoke test the primary (AI bot) devcontainer via the devcontainers CLI
+    cmds:
+      - ./scripts/devcontainer-smoke.sh .devcontainer/devcontainer.json
+
+  test:devcontainer:dev:
+    desc: Smoke test the dev (human) devcontainer via the devcontainers CLI
+    cmds:
+      - ./scripts/devcontainer-smoke.sh .devcontainer/dev/devcontainer.json
+
+  test:devcontainer:permissions:
+    desc: Unit-assert devcontainer permission invariants (no container needed)
+    cmds:
+      - ./scripts/devcontainer-assert.sh unit
+
+  test:hooks:
+    desc: Round-trip the Taskfile targets the Claude hooks delegate to
+    cmds:
+      - ./scripts/test-hooks.sh
+
+  # ── Security ───────────────────────────────────────────────────
+  security:
+    desc: Run all security checks (parallel)
+    deps:
+      - security:secrets
+      - security:audit
+
+  security:secrets:
+    desc: Scan for leaked secrets (gitleaks)
+    cmds:
+      - |
+        if [ -z "$GITHUB_STEP_SUMMARY" ]; then
+          gitleaks detect --no-banner --redact --source .
+        else
+          rc=0
+          gitleaks detect --no-banner --redact --source . \
+            --report-format json --report-path /tmp/foreman-gitleaks.json || rc=$?
+          node scripts/summarize-gitleaks.mjs /tmp/foreman-gitleaks.json
+          exit $rc
+        fi
+
+  security:audit:
+    desc: Dependency audit
+    cmds:
+      - echo "No package manifests to audit yet."
+
+  security:sast:
+    desc: "Static application security testing (Snyk) — optional/local, needs SNYK_TOKEN (not in CI or `task security`)"
+    cmds:
+      - snyk code test --exclude=.worktrees --severity-threshold=high
+
+  security:sca:
+    desc: "Software composition analysis (Snyk) — optional/local, needs SNYK_TOKEN (not in CI or `task security`)"
+    cmds:
+      - snyk test --severity-threshold=high --show-vulnerable-paths=all
+
+  # ── Secrets ────────────────────────────────────────────────────
+  # Destination-only helpers: the secret value stays on stdin — never in argv,
+  # env vars, Taskfile vars, or shell history (see docs/conventions.md).
+  secret:set:1p:
+    desc: "Set an existing 1Password field from stdin (usage: command | task secret:set:1p VAULT=... ITEM=... FIELD=... [SECTION=...])"
+    env:
+      VAULT: '{{.VAULT | default ""}}'
+      ITEM: '{{.ITEM | default ""}}'
+      FIELD: '{{.FIELD | default ""}}'
+      SECTION: '{{.SECTION | default ""}}'
+    cmds:
+      - ./scripts/secret-set-1p.sh
+
+  secret:set:gh:
+    desc: "Set a GitHub repo secret from stdin (usage: command | task secret:set:gh NAME=... REPO=owner/repo)"
+    env:
+      NAME: '{{.NAME | default ""}}'
+      REPO: '{{.REPO | default ""}}'
+    cmds:
+      - ./scripts/secret-set-gh.sh
+
+  # ── Setup ──────────────────────────────────────────────────────
+  bootstrap:
+    desc: One-time machine setup (Homebrew)
+    cmds:
+      # Idempotent: skip the installer when Homebrew is already present. The
+      # official installer's NONINTERACTIVE mode demands sudo up front and aborts
+      # even when there is nothing to install, so guard on `brew` existing.
+      - command -v brew >/dev/null 2>&1 || NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+  install:
+    desc: Install all project dependencies and tools
+    cmds:
+      # Use THIS repo's Brewfile by absolute path (never a user/global one), and
+      # don't cascade-upgrade unrelated already-installed brew dependents.
+      - HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew bundle --file={{.ROOT_DIR}}/Brewfile
+      - task: install:hooks
+
+  install:hooks:
+    desc: Install git hooks via lefthook
+    cmds:
+      - lefthook install
+
+  # ── GitHub setup ───────────────────────────────────────────────
+  # One-time, idempotent repo settings applied via gh (safe to re-run); run once
+  # the repo exists on GitHub. The remaining setup steps need a browser or a real
+  # credential and stay manual — see docs/CHECKLIST.md (branch ruleset import,
+  # Renovate/CodeRabbit app installs, Actions secrets, the CI GitHub App).
+  setup:github:
+    desc: >-
+      Apply idempotent GitHub repo settings via gh (Dependabot alerts, private
+      vulnerability reporting, CodeQL
+      variable, bot collaborator)
+    vars:
+      REPO: "ponderousdev/foreman"
+    cmds:
+      - gh api "repos/{{.REPO}}/vulnerability-alerts" --method PUT
+      # Private vulnerability reporting is a public-repo-only feature; harmon-init
+      # creates repos --private, so guard on visibility to avoid a 404 that would
+      # abort the task. Applies cleanly if the repo is later made public.
+      - |
+        if [ "$(gh api "repos/{{.REPO}}" --jq '.private')" = "false" ]; then
+          gh api "repos/{{.REPO}}/private-vulnerability-reporting" --method PUT
+        else
+          echo "Skipping private vulnerability reporting ({{.REPO}} is private; public-repo-only feature)."
+        fi
+      - gh variable set FULL_SECURITY_SCAN --repo "{{.REPO}}" --body true
+      - gh api "repos/{{.REPO}}/collaborators/evanharmon1-bot" --method PUT -f permission=push
+
+  setup:github-issue-types:
+    desc: Idempotently ensure the org's issue types are Bug/Feature/Task/Research (adds any missing; keeps the defaults). Requires `gh` with the admin:org scope.
+    cmds:
+      - ./scripts/setup-github-issue-types.sh --org "ponderousdev"
+
+  # ── Release ────────────────────────────────────────────────────
+  # Releases are intentional via release-please (.github/workflows/release.yml):
+  # merge the rolling release PR to cut a release. release:init seeds the first
+  # v0.1.0 tag; the release:patch/minor/major tasks remain as a manual override.
+  release:init:
+    desc: Create initial v0.1.0 tag
+    cmds:
+      - git tag -a v0.1.0 -m "Initial release"
+      - git push origin v0.1.0
+      - gh release create v0.1.0 --generate-notes --title "v0.1.0"
+
+  release:patch:
+    desc: Bump patch version and release
+    vars:
+      CURRENT_TAG:
+        sh: git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0"
+      NEXT_TAG:
+        sh: echo "{{.CURRENT_TAG}}" | awk -F. '{printf "%s.%s.%d", $1, $2, $3+1}'
+    cmds:
+      - echo "Releasing {{.NEXT_TAG}} (was {{.CURRENT_TAG}})"
+      - git tag -a {{.NEXT_TAG}} -m "Release {{.NEXT_TAG}}"
+      - git push origin {{.NEXT_TAG}}
+      - gh release create {{.NEXT_TAG}} --generate-notes --title "{{.NEXT_TAG}}"
+
+  release:minor:
+    desc: Bump minor version and release
+    vars:
+      CURRENT_TAG:
+        sh: git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0"
+      NEXT_TAG:
+        sh: echo "{{.CURRENT_TAG}}" | awk -F. '{printf "%s.%d.0", $1, $2+1}'
+    cmds:
+      - echo "Releasing {{.NEXT_TAG}} (was {{.CURRENT_TAG}})"
+      - git tag -a {{.NEXT_TAG}} -m "Release {{.NEXT_TAG}}"
+      - git push origin {{.NEXT_TAG}}
+      - gh release create {{.NEXT_TAG}} --generate-notes --title "{{.NEXT_TAG}}"
+
+  release:major:
+    desc: Bump major version and release
+    vars:
+      CURRENT_TAG:
+        sh: git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0"
+      NEXT_TAG:
+        sh: echo "{{.CURRENT_TAG}}" | awk -F. '{printf "v%d.0.0", substr($1,2)+1}'
+    cmds:
+      - echo "Releasing {{.NEXT_TAG}} (was {{.CURRENT_TAG}})"
+      - git tag -a {{.NEXT_TAG}} -m "Release {{.NEXT_TAG}}"
+      - git push origin {{.NEXT_TAG}}
+      - gh release create {{.NEXT_TAG}} --generate-notes --title "{{.NEXT_TAG}}"
+
+  # ── Clean ──────────────────────────────────────────────────────
+  clean:
+    desc: Remove build artifacts and caches
+    cmds:
+      - rm -rf .task
+
+  # ── Status ─────────────────────────────────────────────────────
+  status:
+    desc: Project status dashboard
+    cmds:
+      - ./scripts/status.sh
+
+  status:git:
+    desc: Git status section
+    cmds:
+      - ./scripts/status.sh git
+
+  status:gh:
+    desc: GitHub status section
+    cmds:
+      - ./scripts/status.sh gh
+
+  status:code:
+    desc: Codebase stats section
+    cmds:
+      - ./scripts/status.sh code
+
+  status:env:
+    desc: Environment info section
+    cmds:
+      - ./scripts/status.sh env
+
+  status:setup:
+    desc: Setup completeness audit (GitHub, toolchain, devcontainer, dev env)
+    cmds:
+      - ./scripts/status.sh setup
+
+  # ── Utilities ──────────────────────────────────────────────────
+  util:bunch-add:
+    desc: Scaffold the Bunch launcher in .meta (mirrors what the template generates)
+    cmds:
+      - ./scripts/meta-create.sh bunch 'Foreman' 'foreman' '~/git'
+
+  util:bunch-install:
+    desc: Move the Bunch file to iCloud and replace it with a symlink (macOS)
+    cmds:
+      - mv '.meta/Code Project - Foreman.bunch' '/Users/evan/Library/Mobile Documents/com~apple~CloudDocs/Bunches/'
+      - ln -s '/Users/evan/Library/Mobile Documents/com~apple~CloudDocs/Bunches/Code Project - Foreman.bunch' .meta
+
+  util:obsidian-add:
+    desc: Scaffold the Obsidian project note in .meta (mirrors what the template generates)
+    cmds:
+      - ./scripts/meta-create.sh obsidian 'Foreman' 'Evan Harmon'
+
+  util:obsidian-install:
+    desc: Move the Obsidian note to the vault and replace it with a symlink (macOS)
+    cmds:
+      - mv '.meta/Foreman.md' '/Users/evan/Local/Memex/Personal/Digital'
+      - ln -s '/Users/evan/Local/Memex/Personal/Digital/Foreman.md' .meta

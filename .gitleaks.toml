@@ -1,0 +1,12 @@
+# Gitleaks configuration for Foreman
+# https://github.com/gitleaks/gitleaks
+
+[extend]
+useDefault = true
+
+[allowlist]
+paths = [
+    '''\.git/''',
+    '''\.task/''',
+    '''\.worktrees/''',
+]

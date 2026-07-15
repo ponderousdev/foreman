@@ -1,0 +1,88 @@
+# AGENTS.md
+
+Guidance for AI coding agents (Claude Code, Gemini CLI, GitHub Copilot, Codex,
+...) working in Foreman. `CLAUDE.md`, `GEMINI.md`, and
+`.github/copilot-instructions.md` are symlinks to this file — edit only
+`AGENTS.md`.
+
+TODO: Run `/init` (Claude Code) after the framework is scaffolded to expand
+this file with project-specific architecture notes.
+
+## Project Overview
+
+Deterministic supervisor for dispatching agent work across local, Docker, and Sprite runners.
+
+Repo: https://github.com/ponderousdev/foreman — see [docs/README.md](docs/README.md) for the
+documentation map, [docs/architecture/README.md](docs/architecture/README.md)
+for the architecture, and [DESIGN.md](DESIGN.md) for design/UX intent.
+
+## Hard Rules
+
+Non-negotiable, regardless of any autonomy granted elsewhere in this file:
+
+- **Never write to a password manager or credential store unprompted.** Do not
+  create, modify, archive, or delete anything in 1Password (items, fields,
+  vaults — via the `op` CLI or any other means), OS keychains, or any other
+  secret store unless the user explicitly requested that specific write in the
+  current conversation. Even when asked, restate exactly what will be written
+  and get confirmation before executing — announcing intent and proceeding in
+  the same turn is not consent. Read operations (`op read`, `op item list`,
+  `op inject` over existing references) are fine.
+
+## Commands
+
+All commands go through the Taskfile (single source of truth — CI, git hooks,
+and humans run the same targets):
+
+```bash
+task verify      # FAST local gate (<~1 min) — run constantly; safe for hooks/agents
+task ci          # FULL CI mirror — run before/instead of opening a PR
+task check       # all linters
+task fix         # auto-format then lint
+task test        # tests
+task security    # gitleaks + dependency audit
+```
+
+`verify` is deliberately kept fast (lint + the quick
+Taskfile/hook guards) so editors, git hooks, and AI agents can run it on every
+change without getting bogged down. `ci` is the full pipeline — everything CI
+runs (`verify` + `test` + `security` + the devcontainer permission assert) — so you
+can reproduce a CI run locally on demand instead of waiting on a PR.
+
+## Definition of Done
+
+- `task verify` passes.
+- Conventional commit message (types: build, chore, ci, docs, feat, fix, perf,
+  refactor, revert, style, test).
+- Never bypass git hooks (`--no-verify` is forbidden); fix the underlying issue.
+- Work on a feature branch; direct commits to `main` are blocked.
+- **Never merge to main yourself** — no `gh pr merge`, `git merge`, or push to
+  `main` without the maintainer's explicit, per-merge approval, even when CI is
+  green and the ruleset would allow it. Open the PR, report that checks pass,
+  then stop; merging is always a human decision.
+- Releases are intentional: release-please keeps a rolling release PR from
+  conventional commits; merging it cuts the tag/release. Nothing bumps on a
+  normal merge. `task release:*` remains as a manual override.
+
+## Conventions
+
+Full reference: [docs/conventions.md](docs/conventions.md). Highlights:
+
+- Conventional Commits; `group:action` Taskfile naming (e.g. `lint:shell`, not
+  `shell:lint`); pin actions by SHA + `# vX.Y.Z`.
+- Git hooks are managed by lefthook (`lefthook.yml`) and delegate to Taskfile
+  targets — don't duplicate logic in hooks or workflows.
+- Keep Taskfile `cmds:` trivial — inline strings aren't linted (`lint:shell`
+  only covers `scripts/*.sh`). Put any pipeline/conditional/loop/`curl | bash`
+  in a `scripts/*.sh` the task calls. `task test:tasks` checks the Taskfile
+  compiles and setup tasks are safe no-ops.
+- Indentation: 2 spaces default, 4 for Python/Terraform/Shell (`.editorconfig`).
+- Secrets never go in git; local env via 1Password (`op run` / `op inject`).
+- When generating or rotating secrets, keep secret values on stdin and use the
+  destination-only helpers:
+  `task secret:set:1p VAULT=... ITEM=... FIELD=... [SECTION=...]` for existing
+  1Password fields and `task secret:set:gh NAME=... REPO=owner/repo` for GitHub
+  repo secrets. Never pass secret values as command arguments, `--body` values,
+  exported env vars, or Taskfile vars. The hard rule above still applies:
+  agents must not run `secret:set:1p` or otherwise write to a password manager
+  without explicit user confirmation for that exact write.

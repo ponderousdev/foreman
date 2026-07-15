@@ -1,0 +1,248 @@
+name: Claude Implement
+run-name: ${{ github.actor }} is running Claude Implement
+# Requires: CLAUDE_CODE_OAUTH_TOKEN secret, plus the CI GitHub App
+# (CI_APP_CLIENT_ID variable + CI_APP_PRIVATE_KEY secret). See docs/CHECKLIST.md
+# and docs/architecture/security.md.
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [opened, assigned, labeled]
+jobs:
+  implement:
+    # Authorized senders — an explicit allowlist (claude_authorized_members),
+    # not org membership. The `if:` gate and the Verify step below both derive
+    # from this list, so they stay in sync.
+    if: >-
+      (github.event.sender.login == 'evanharmon1') &&
+      (contains(github.event.comment.body, '@claude implement') ||
+       contains(github.event.review.body, '@claude implement') ||
+       contains(github.event.issue.body, '@claude implement') ||
+       (github.event.action == 'labeled' &&
+        github.event.label.name == 'claude-implement'))
+    # Runner switch: CI_RUNS_ON repo/org variable unset -> the rendered
+    # default; set it to a JSON runner spec to override without a commit.
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    timeout-minutes: 180
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+    steps:
+      # Egress firewall (must be the first step). Claude runs with Bash on a
+      # throwaway runner, so bound where that runner can talk: block all
+      # outbound traffic except the endpoints the toolchain + Claude genuinely
+      # need. This is the real exfiltration/callback boundary behind the scoped
+      # Bash allowlist. Targets GitHub-hosted ubuntu runners; if CI_RUNS_ON
+      # points at a self-hosted runner, harden-runner degrades to best-effort.
+      # STARTER LIST: the first real run logs any blocked endpoint in its run
+      # summary — add legitimate ones. Telemetry is off, so nothing leaves for
+      # StepSecurity.
+      - uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: block
+          disable-telemetry: true
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            codeload.github.com:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            raw.githubusercontent.com:443
+            uploads.github.com:443
+            pipelines.actions.githubusercontent.com:443
+            registry.npmjs.org:443
+            nodejs.org:443
+            get.pnpm.io:443
+            pypi.org:443
+            files.pythonhosted.org:443
+            api.anthropic.com:443
+            statsig.anthropic.com:443
+      # Defense in depth behind the job-level `if:` sender gate: re-assert the
+      # authorized-sender allowlist server-side BEFORE anything privileged runs,
+      # so a spoof-shaped gap in the `if:` expression can never even mint a
+      # push-capable token, let alone use it. Token-free — mirrors the `if:` gate.
+      - name: Verify sender is authorized
+        env:
+          SENDER: ${{ github.event.sender.login }}
+        run: |
+          case "$SENDER" in
+            "evanharmon1") echo "$SENDER is authorized"; exit 0 ;;
+          esac
+          echo "::error::$SENDER is not an authorized sender"
+          exit 1
+      # The narrow token Claude reaches via git/gh: push commits (contents), open
+      # PRs (pull-requests), comment (issues) — nothing more, and minted only
+      # AFTER the sender is authorized. It lacks workflows:write, so a push that
+      # edits .github/workflows/ is rejected by GitHub, keeping a prompt-injected
+      # run from rewriting CI.
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ vars.CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+      # Separate token for the project-board update only — organization-projects
+      # to move the Status card plus issues:read to resolve it by issue number.
+      # Claude inherits neither, so it is never wired into checkout, git identity,
+      # or the Claude step. continue-on-error: a missing org grant (e.g. on a
+      # personal fork) skips the board update instead of aborting the job.
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token-projects
+        continue-on-error: true
+        with:
+          client-id: ${{ vars.CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          permission-organization-projects: write
+          permission-issues: read
+      # Exception to the repo-wide `persist-credentials: false` hardening:
+      # this checkout deliberately persists the short-lived narrow CI App token
+      # so Claude's `git push` of the working branch can authenticate. The token
+      # is least-privilege (minted above) and expires with the job.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Configure git identity as the CI app bot
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          bot="${APP_SLUG}[bot]"
+          bot_id=$(gh api "/users/${bot}" --jq .id)
+          git config --global user.name "$bot"
+          git config --global user.email "${bot_id}+${bot}@users.noreply.github.com"
+      # Provision the full toolchain Claude needs to run `task verify` (and the
+      # git hooks its push triggers): the shared setup action + the lint CLIs
+      # that back `task check` and gitleaks for the pre-push `task security`
+      # hook. cache: false — this job holds a push-capable token, so it takes
+      # the cold-install trade rather than the PR-poisonable pnpm cache.
+      - uses: ./.github/actions/setup
+        with:
+          lint-tools: "true"
+          gitleaks: "true"
+          cache: "false"
+      - name: Set issue status to In Progress
+        if: steps.app-token-projects.outputs.token != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token-projects.outputs.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ORG_PROJECT_ID: ${{ vars.ORG_PROJECT_ID }}
+        run: |
+          [ -z "$ISSUE_NUMBER" ] && echo "No issue number, skipping" && exit 0
+
+          # Resolve the org project id: prefer the ORG_PROJECT_ID variable (set
+          # by `task setup:github-project`); fall back to the project by title.
+          PROJECT_ID="$ORG_PROJECT_ID"
+          if [ -z "$PROJECT_ID" ]; then
+            PROJECT_ID=$(gh api graphql -f query='
+              query($o:String!){organization(login:$o){projectsV2(first:100){nodes{id title}}}}
+              ' -f o=ponderousdev --jq '.data.organization.projectsV2.nodes[]|select(.title=="ponderousdev Project")|.id' 2>/dev/null | head -n1 || true)
+          fi
+          [ -z "$PROJECT_ID" ] && echo "No org project (set ORG_PROJECT_ID or create a project titled 'ponderousdev Project'), skipping" && exit 0
+
+          ITEM_ID=""
+          CURSOR=""
+          while true; do
+            PAGE=$(gh api graphql -f query='
+              query($i:ID!,$after:String){node(id:$i){...on ProjectV2{items(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{id content{...on Issue{number}}}}}}}
+              ' -F i="$PROJECT_ID" ${CURSOR:+-F after="$CURSOR"} 2>/dev/null || true)
+            ITEM_ID=$(echo "$PAGE" | jq -r ".data.node.items.nodes[]|select(.content.number?==$ISSUE_NUMBER)|.id" 2>/dev/null || true)
+            [ -n "$ITEM_ID" ] && break
+            HAS_NEXT=$(echo "$PAGE" | jq -r '.data.node.items.pageInfo.hasNextPage')
+            [ "$HAS_NEXT" != "true" ] && break
+            CURSOR=$(echo "$PAGE" | jq -r '.data.node.items.pageInfo.endCursor')
+          done
+
+          [ -z "$ITEM_ID" ] && echo "Issue #$ISSUE_NUMBER not in project, skipping" && exit 0
+
+          STATUS_DATA=$(gh api graphql -f query='
+            query($i:ID!){node(id:$i){...on ProjectV2{fields(first:20){nodes{...on ProjectV2SingleSelectField{id name options{id name}}}}}}}
+            ' -F i="$PROJECT_ID")
+
+          FIELD_ID=$(echo "$STATUS_DATA" | jq -r '.data.node.fields.nodes[]|select(.name=="Status")|.id')
+          # Case-insensitive: project boards vary between "In Progress"/"In progress".
+          OPTION_ID=$(echo "$STATUS_DATA" | jq -r '.data.node.fields.nodes[]|select(.name=="Status")|.options[]|select((.name|ascii_downcase)=="in progress")|.id')
+
+          if [ -z "$OPTION_ID" ]; then
+            echo "::warning::Status option matching 'in progress' not found. Available options:"
+            echo "$STATUS_DATA" | jq -r '.data.node.fields.nodes[]|select(.name=="Status")|.options[].name'
+            exit 0
+          fi
+
+          gh api graphql -f query='
+            mutation($p:ID!,$i:ID!,$f:ID!,$v:String!){
+              updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$v}}){projectV2Item{id}}
+            }' -F p="$PROJECT_ID" -F i="$ITEM_ID" -F f="$FIELD_ID" -F v="$OPTION_ID"
+          echo "Set issue #$ISSUE_NUMBER to In Progress"
+      - uses: anthropics/claude-code-action@d5726de019ec4498aa667642bc3a80fca83aa102 # v1.0.148
+        # GH_TOKEN lets Claude's own `gh` calls (e.g. `gh pr create`)
+        # authenticate as the CI app bot with the narrow token, matching the git
+        # identity above.
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
+          trigger_phrase: "@claude implement"
+          label_trigger: "claude-implement"
+          track_progress: true
+          base_branch: main
+          branch_prefix: claude/
+          branch_name_template: "{{prefix}}issue-{{entityNumber}}-{{description}}-{{sha}}"
+          # --max-budget-usd caps API-key spend; likely a no-op under
+          # CLAUDE_CODE_OAUTH_TOKEN (subscription) billing. Real runaway guards
+          # are timeout-minutes (job-level) and --max-turns.
+          # --allowedTools grants the file-editing tools plus a SCOPED Bash
+          # allowlist (space-separated `Bash(cmd *)` form per the Claude Code
+          # settings reference): the project runners, git, gh, and read-only
+          # inspection utilities — enough to implement a change, run
+          # `task verify`, commit, push, and open a PR. Deliberately NOT allowed:
+          # curl/wget (exfiltration; also covered by the egress firewall),
+          # rm/chmod/sudo, and arbitrary `bash -c`/`eval`. Claude edits files via
+          # the Edit/Write tools or `task` targets. Prefix matching is coarse and
+          # shell can compose, so this is defense-in-depth, not a hard sandbox —
+          # the real boundaries are the narrow token, the egress firewall, branch
+          # protection, and the ephemeral runner. Widen if a real run stalls on a
+          # denied command.
+          claude_args: >-
+            --model opus --effort high --max-budget-usd 25 --max-turns 200
+            --allowedTools "Edit,MultiEdit,Write,Read,NotebookEdit,Glob,Grep,LS,TodoWrite,WebFetch,Bash(task *),Bash(pnpm *),Bash(npx *),Bash(node *),Bash(git *),Bash(gh *),Bash(cd *),Bash(ls *),Bash(cat *),Bash(head *),Bash(tail *),Bash(grep *),Bash(rg *),Bash(find *),Bash(sed *),Bash(awk *),Bash(jq *),Bash(wc *),Bash(sort *),Bash(diff *),Bash(echo *),Bash(mkdir *),Bash(cp *),Bash(mv *),Bash(which *),Bash(pwd)"
+          prompt: |
+            Implement the change requested in this issue or comment.
+
+            Operating rules (non-negotiable):
+            - Do NOT ask clarifying questions. Pick the most reasonable
+              interpretation of the request and proceed. State any non-obvious
+              assumptions in the PR body so the reviewer can redirect if needed.
+            - The only acceptable terminal states are:
+                (a) an opened pull request on a claude/... branch, or
+                (b) an opened DRAFT pull request that documents what blocked you.
+              Do NOT end by leaving a summary comment on the issue — the PR is
+              the deliverable, not the comment.
+            - If `task verify` fails and you cannot resolve it within several
+              attempts, commit the best-effort state, push the branch, open a
+              DRAFT PR, and describe the failing step in the PR body. Do not
+              abandon the branch or dump a diff in a comment.
+
+            Workflow:
+            1. Make the code changes directly in the working tree.
+            2. Run `task verify` and fix any failures before continuing.
+            3. Commit with a conventional-commits message referencing this issue.
+            4. Push the branch to origin.
+            5. Open a pull request targeting main. In the PR body, link to this
+               issue with "Closes #${{ github.event.issue.number || github.event.pull_request.number }}", summarize
+               what changed, and note anything reviewers should pay attention to.
+
+            Do not post the diff as a comment. The PR is the deliverable.
+
+            Follow the conventions documented in AGENTS.md, including the
+            commit-message style.

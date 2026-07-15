@@ -1,0 +1,49 @@
+name: Release Please
+run-name: release-please maintaining the release PR
+
+# Releases stay intentional: release-please maintains a rolling release PR from
+# conventional commits (feat -> minor, fix -> patch; pre-1.0 feat bumps minor;
+# chore/docs/ci produce no release). Merging that PR — a deliberate act — is
+# what creates the tag, GitHub release, and CHANGELOG entry. Nothing is bumped
+# automatically on a normal merge to main.
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    # Runner switch: CI_RUNS_ON repo/org variable unset -> the rendered
+    # default; set it to a JSON runner spec to override without a commit.
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # CI GitHub App token, not GITHUB_TOKEN: PRs opened by GITHUB_TOKEN never
+      # trigger CI, and branch protection requires those checks to pass before
+      # the release PR can merge. (Same App the claude-* workflows use.)
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ vars.CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          # Least-privilege: release-please commits/tags/releases (contents),
+          # maintains the release PR (pull-requests), and applies the
+          # autorelease:* lifecycle labels (issues — PR labels use the Issues API).
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
+        with:
+          token: ${{ steps.app-token.outputs.token }}
