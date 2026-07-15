@@ -4,8 +4,15 @@
 - **Owner:** Evan Harmon
 - **Date:** 2026-07-15
 - **Related:** [milestone 1](https://github.com/ponderousdev/foreman/milestone/1) (#1–#35) ·
-  harmon-init ADR 0002 (`docs/decisions/0002-foreman-deterministic-supervisor.md`) ·
+  ADR 0002 in `ponderousdev/harmon-init`
+  (`docs/decisions/0002-foreman-deterministic-supervisor.md`) ·
   supersedes the pre-extraction source document
+
+> **On v1 code citations.** Foreman v1 does not live in this repo yet, so every
+> `harmon-init/scripts/foreman/...` path below points into `ponderousdev/harmon-init`.
+> #10 moves that source — and ADR 0002 — here, after which the qualifier drops and
+> the line numbers shift. Anchor on the named function; line numbers are a
+> convenience, not the reference.
 
 ## Problem / Why
 
@@ -15,7 +22,8 @@ Upgrades are merge conflicts rather than version bumps.
 
 It also has no boundary between the deterministic supervisor and the untrusted
 LLM it dispatches. Agents run as subprocesses on Foreman's own box with an
-inherited environment (`backend.py:103` — `os.environ.copy()`). That is
+inherited environment — `os.environ.copy()` in
+`harmon-init/scripts/foreman/backend.py:103`. That is
 acceptable for supervised work on trusted issues and wrong for anything else.
 
 v2 extracts Foreman to its own package and introduces a swappable Runner, so one
@@ -155,9 +163,9 @@ must be **liveness-checkable**: a bare PID is not a handle, because PIDs are
 reused. Use PID + process start-time.
 
 `wait(timeout_s)` and `kill()` are not new features — they restore v1 behavior
-(`backend.py:133` `proc.wait(timeout=timeout_min * 60)`, `_kill_group()` at
-`:147`, `timeouts.dispatch_min = 90`) that the original #19 protocol silently
-dropped.
+— in `harmon-init/scripts/foreman/backend.py`, `proc.wait(timeout=timeout_min * 60)`
+at `:133` and `_kill_group()` at `:147`, with `timeouts.dispatch_min = 90` in
+`.foreman.toml` — that the original #19 protocol silently dropped.
 
 v2.1 adds, driven by the Sprite:
 
