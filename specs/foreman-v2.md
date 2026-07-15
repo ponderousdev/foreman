@@ -1,9 +1,9 @@
 # Spec: Foreman v2 — the Runner seam
 
-- **Status:** Draft
+- **Status:** Approved
 - **Owner:** Evan Harmon
 - **Date:** 2026-07-15
-- **Related:** [milestone 1](https://github.com/ponderousdev/foreman/milestone/1) (#1–#35) ·
+- **Related:** [v2.0](https://github.com/ponderousdev/foreman/milestone/1) · [v2.1](https://github.com/ponderousdev/foreman/milestone/3) · [v2.2](https://github.com/ponderousdev/foreman/milestone/4) ·
   ADR 0002 in `ponderousdev/harmon-init`
   (`docs/decisions/0002-foreman-deterministic-supervisor.md`) ·
   supersedes the pre-extraction source document
@@ -434,69 +434,6 @@ probed empirically. All four must pass before any dispatch.
 - **Then** it re-derives state from GitHub and git, probes handle liveness
   (PID + start-time), and reattaches rather than redispatching.
 
-## Changes to the existing issues
-
-Nothing below is applied yet.
-
-**Rewrite (assert the opposite of a decision):**
-
-- **#5** — delete the "only the read-only token" invariant (D1); remove "laptop"
-  (D2); `max_parallel` cap of 3 becomes a default, not a hard cap.
-- **#13** — scope "push is denied" to sprite (D3); resolve the
-  `ANTHROPIC_AUTH_TOKEN` "managed variables" line, which is redundant under a
-  strict allowlist and implies the allowlist is not strict.
-- **#24** — the no-servers rule becomes capability-conditional, injected when
-  `ports` is absent, rather than a global prompt constant.
-- **#28** — two probed capabilities (D7); the current static per-runner
-  declaration is backwards on every axis.
-- **#29** — delete `ci:portable` and `verify_command_full`; replace with the
-  composed gate. This resolves the who-runs-full ambiguity and the #24/#29 e2e
-  conflict by deletion.
-- **#16 / #3** — drop consumer-stack acceptance criteria (React Compiler, Convex
-  codegen) — untestable in a Python repo, and in tension with #34's
-  genericization. Move to docs/examples.
-
-**Extend:**
-
-- **#10** — name the source (`harmon-init/scripts/foreman/`, 18 modules), the
-  history-preservation method, and the file inventory; move ADR 0002 and
-  `docs/architecture/foreman.md` too.
-- **#11** — resolve distribution: uv/pip cannot install a Python package from
-  GHCR as an index. Likely a `git+https` tag dependency while private.
-- **#14** — define the trusted input surface (body only? comments? linked
-  issues?); pin content against the plan→dispatch TOCTOU window.
-- **#15** — add the workflow-write assertion; reconcile the ruleset/bypass read
-  against the PAT's "no admin"; make every probe non-destructive.
-- **#19** — full protocol rewrite (see above); **drop the `blocked-by: #16`
-  edge** — it appears spurious and silently puts Wave 3 on the critical path.
-- **#21** — scope to local/docker handoff; the Sprite bundle strategy moves to
-  v2.1. Its current AC ("Sprite commits arrive through a bundle") is unverifiable
-  at #21's completion, since #21 → #22 → #30.
-- **#22** — per-unit lock + liveness probe; PID + start-time, not PID.
-- **#30** — drop `blocked-by: #25`; add the Fly entrypoint, secrets delivery, and
-  digest pinning.
-- **#35** — add a sprite dependency; resolve the paradox that disabling Issues at
-  publication hides the plan of record and breaks every `#N` reference in the
-  public history.
-
-**Move:** #6, #25, #26, #27 → v2.2. #8, #30–#33, #9, #34, #35 → v2.1.
-
-**Split:** #26 — the Coder/WSL2/"the bot" content is private operator runbook
-material, not a public-repo issue, and is exactly what #34 wants removed.
-
-**New:**
-
-- Define `foreman:attach` for local — there is no 5.3, and a dead subprocess
-  cannot be re-entered. Either exec `claude --resume` in the preserved worktree
-  or fail with those instructions.
-- v1 → v2 consumer migration — #12 flips harmon-init to a dependency, but live
-  consumers have vendored `scripts/foreman/` that `copier update` will not
-  remove.
-- Devcontainer image versioning + digest pinning — today it pushes `:latest`,
-  only on main.
-- Runner integration-test strategy — #11 wants Foreman's CI daemon-independent,
-  while #25/#30's criteria need real infrastructure.
-
 ## Open questions
 
 - **Distribution while private.** GHCR cannot serve wheels to uv. `git+https`
@@ -521,8 +458,9 @@ superseded, never edited), the architecture sections move to `docs/architecture/
 (living; they describe what *is*), and this spec keeps only requirements and
 acceptance criteria — reaching `Status: Implemented` when v2.0 ships, and staying
 in-tree as the record of what we set out to build.
-[Changes to the existing issues](#changes-to-the-existing-issues) is migration
-scaffolding: delete that section once the issues are updated.
+The migration section that mapped this spec onto the pre-existing issues has
+been removed now that it is applied — it was scaffolding, and the issues are
+the durable record of what it said.
 
 **Deferred with a known risk:** per-unit `~/.claude` isolation. Session
 transcripts partition by cwd (`~/.claude/projects/<escaped-cwd>/<id>.jsonl`), so
