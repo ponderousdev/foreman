@@ -337,12 +337,70 @@ devcontainers CLI), so a sprite agent runs the composed gate, opens a PR, Action
 runs the docker-keyed checks, and the shepherd fixes red CI. That is the designed
 loop exercised on the one repo that forces it.
 
+### D11: Distribution is a git-tag `uvx` invocation, not a package index
+
+**Consumers are not Python projects.** `omator`, `mowing-bidder-web`, and
+`lawnomator-site` all carry `package.json` and no `pyproject.toml`; harmon-init
+has none either. Nobody imports Foreman — it is a CLI. So "install a pinned
+Foreman dependency" had no project to be a dependency *of*, and the
+GHCR-vs-PyPI question was answering something nobody asked. Today's invocation
+is `PYTHONPATH=scripts python3 -m foreman` — bare `python3`, no venv, no
+dependency management, working only because the source is vendored.
+
+The wrapper Taskfile pins a version and invokes through `uvx`:
+
+```yaml
+vars:
+  # renovate: datasource=github-tags depName=ponderousdev/foreman
+  FOREMAN_VERSION: 1.2.3
+  FOREMAN: uvx --from git+https://github.com/ponderousdev/foreman@v{{.FOREMAN_VERSION}} foreman
+```
+
+Why:
+
+- **The pin lands where copier already owns it.** `taskfiles/foreman.yml` is
+  template output, so `copier update` bumps Foreman by rewriting a file it fully
+  controls — #12's "bump without conflicts" then holds *by construction* rather
+  than by hoping a merge stays clean.
+- **Auth needs no new infrastructure.** `.devcontainer/scripts/post-create-common.sh`
+  runs `gh auth setup-git` on the headless path (VS Code absent ⇒
+  `REMOTE_CONTAINERS` unset), bridging `GH_TOKEN` → git. That is the same
+  credential path `worktree.py:push()` already depends on — it calls `git push`
+  with no auth handling of its own.
+- **uv and Renovate are already present.** uv is pinned in the devcontainer
+  Dockerfile; `renovate.json` already runs three custom regex managers of exactly
+  this shape.
+- **It survives publication unchanged in shape.** Private:
+  `git+https://…@v1.2.3`. Public: `uvx foreman@1.2.3`. One line, no consumer
+  migration — which matters because [D10](#d10-public-readiness-moves-to-v21-behind-the-sprite)
+  makes public a *when*, not an *if*.
+
+Rejected: **GHCR** cannot serve wheels to a Python installer — it hosts OCI
+artifacts, not a package index. **`uv tool install` in post-create** puts the pin
+in the image, so consumers cannot pin independently and copier cannot bump it,
+which loses the point. **A private index** is infrastructure to run and pay for,
+solving what git+https solves for free.
+
+**Prerequisite:** the bot PAT's selected-repo list must include
+`ponderousdev/foreman`, or consumers cannot fetch it. That widens
+[D3](#d3-local-accepts-relaxed-separation)'s blast radius — an agent in a
+consumer repo could open a PR against foreman. Deliberate and small, but a
+decision rather than a side effect.
+
+**Consequence for #10:** Foreman needs a real `[project.scripts]` console entry
+point and a plain PEP 517 backend, **buildable from a git checkout**. The
+invocation changes from `PYTHONPATH=scripts python3 -m foreman` to `foreman`,
+which is a break the wrapper Taskfile (#12) owns.
+
 ## Requirements
 
 ### v2.0
 
 - [ ] Foreman is a standalone uv-managed package with preserved history, its own
       semver, and a thin harmon-init integration.
+- [ ] Foreman installs into a **non-Python** consumer via `uvx` from a git tag
+      ([D11](#d11-distribution-is-a-git-tag-uvx-invocation-not-a-package-index)),
+      with the pin in the copier-owned wrapper Taskfile and a console entry point.
 - [ ] Foreman runs only in the bot devcontainer; no bare-host path exists.
 - [ ] The Runner protocol carries `UnitSpec` (incl. cmd + timeout), `kill`, and a
       liveness-checkable `Handle`. A mock Runner satisfies it.
@@ -436,8 +494,6 @@ probed empirically. All four must pass before any dispatch.
 
 ## Open questions
 
-- **Distribution while private.** GHCR cannot serve wheels to uv. `git+https`
-  tag dependency, or a private index? Blocks #12's acceptance criterion.
 - **Secrets delivery to a Sprite.** There is no host, no `initializeCommand`, and
   no `op` CLI in the bot profile. Fly secrets set by Foreman at Machine-create
   time is the obvious answer; confirm it.
