@@ -82,9 +82,15 @@ runner *class* — both depend on the environment and how it is run, so
 | Environment | `docker` | `ports` |
 |---|---|---|
 | local, `max_parallel > 1` | yes — DinD | no — agents share one netns |
-| local, `max_parallel == 1` | yes | yes — *deferred, see [D9](#d9-ports-at-local-concurrency-1-mechanism-now-flip-later)* |
+| local, `max_parallel == 1` | yes | physically yes — **withheld in v2.0** ([D9](#d9-ports-at-local-concurrency-1-mechanism-now-flip-later)) |
 | sprite | no — [D5](#d5-sprites-do-not-run-docker) | yes — one microVM per unit |
 | docker (v2.2) | no — no socket for agents | yes — own netns per container |
+
+**This table states what each environment *can* do; what a runner *advertises* is
+narrower and is what you implement.** v2.0's LocalRunner returns `{"docker"}` and
+nothing else, at any `max_parallel` — the concurrency-1 `ports` cell is physically
+true and deliberately not advertised, per [D9](#d9-ports-at-local-concurrency-1-mechanism-now-flip-later).
+Implement the advertisement, not the table.
 
 The `ports` axis exists because the constraint it models is *concurrency inside a
 shared network namespace*, not "local." A sprite is alone in its own VM; a lone
@@ -94,7 +100,7 @@ agents cannot.
 ### The verify gate is composed, not selected
 
 There is no portable/full ladder and no `ci:portable`. The repo declares a
-baseline plus capability-keyed additions; Foreman runs the baseline and every
+baseline plus capability-keyed additions; the gate runs the baseline and every
 addition whose capability is present. Whatever does not run in-unit is GitHub
 Actions' job, and the shepherd classifies red CI and dispatches a fix.
 
@@ -116,8 +122,21 @@ Two mechanisms, two jobs:
 - `[verify]` capability keys — **soft/additive**. Missing → skip it; Actions
   covers it.
 
-A repo needing neither writes three lines and is done. Foreman never executes an
-agent-authored branch command on its own box under any runner.
+A repo needing neither writes three lines and is done.
+
+**Where the gate executes is runner-conditional, and that is security-relevant.**
+Under local, Foreman's own process runs the branch's gate in the worktree — v1
+behavior (`run_verify()` at `harmon-init/scripts/foreman/dispatch.py:286`) — and
+the branch is agent-authored, so agent-authored commands execute inside Foreman's
+container. That is co-location again ([D1](#d1-the-trust-boundary-is-the-container-not-the-process-environment)),
+bounded by trusted input ([D4](#d4-local-is-trusted-input-only)) and the PAT's
+scoping, not by isolation. Under sprite the gate runs in the guest and Foreman
+never invokes it — there, "no agent-authored branch command on Foreman's box" is a
+real invariant rather than a restatement of intent.
+
+The original #7/#29 rule ("never execute agent-authored branch commands on
+Foreman's trusted box") is therefore a **sprite-era invariant**. Writing it as
+universal would assert something local cannot deliver.
 
 ### Trust model, per runner
 
@@ -130,6 +149,7 @@ environment.** An env allowlist is defense in depth, not containment.
 | Foreman / agent separation | none — same container, same HOME, same netns | full — separate machines |
 | Agent reachable token | the bot PAT (accepted, [D3](#d3-local-accepts-relaxed-separation)) | read-only only |
 | Input trust | **trusted actors only** ([D4](#d4-local-is-trusted-input-only)) | untrusted content permitted |
+| Branch gate executes | in Foreman's container | in the guest VM |
 | Commit handoff | Foreman reads the shared worktree | `git bundle` → Foreman's clone |
 
 Local's blast radius is bounded by the **token**, not the env: a fine-grained PAT
@@ -348,6 +368,9 @@ loop exercised on the one repo that forces it.
 - [ ] `fetch`/`put`/`start`/`attach` land; Sprite commits arrive by `git bundle`
       and are pushed only by Foreman.
 - [ ] `capabilities() == {"ports"}`; guest-level egress control ships.
+- [ ] Sprite credential delivery is defined and proven before the v2.1 trust
+      contract is claimed: scoped read-only, no host-environment inheritance, not
+      persisted into the image or a committed file, and asserted by preflight.
 - [ ] The devcontainer image is digest-pinned and versioned.
 - [ ] Foreman is dogfooded against untrusted content, then published.
 
@@ -384,12 +407,15 @@ loop exercised on the one repo that forces it.
 - **Then** an attempted workflow-file write on a scratch ref is denied, and an
   unexpected success fails loudly before any dispatch.
 
-### Scenario: a timed-out agent is actually killed
+### Scenario: a timed-out agent's process group is terminated
 
 - **Given** a unit exceeding `timeouts.dispatch_min`
 - **When** the timeout fires
-- **Then** `kill()` terminates the process group, the worktree and session are
-  preserved, and the unit is reported as timed out — matching v1 behavior.
+- **Then** `kill()` terminates the agent's process group, the worktree and session
+  are preserved, and the unit is reported as timed out — matching v1 behavior.
+- **And** the report says *the process group was terminated*, not that the unit was
+  fully stopped: daemon-level descendants survive (see
+  [Notes](#notes)). Do not claim more than was done.
 
 ### Scenario: a crash does not double-dispatch
 
@@ -496,6 +522,18 @@ but the reports skew Windows, and no corruption has been observed here at
 `max_parallel = 3` on Linux. Revisit if concurrency rises materially; the fix is
 a per-unit `CLAUDE_CONFIG_DIR`. This is a LocalRunner-only problem — a Sprite is
 one HOME per unit by construction.
+
+**Accepted residual: daemon-level orphans survive `kill()`.** Local has DinD, so
+anything an agent starts with `docker run -d` is a child of dockerd, not of the
+agent — it escapes process-group termination entirely, at any concurrency, ports
+or no ports. A timed-out unit can therefore leave a container running and writing
+after Foreman reports it terminated, which is precisely the class of lying status
+ADR 0002 exists to prevent. v2.0 does not prune, because Foreman cannot force an
+agent to label its containers and snapshot-diffing the daemon is racy; the
+acceptance criterion above is worded to claim only what is done. Bounded by
+[D4](#d4-local-is-trusted-input-only) — this is agent misbehavior, not an attack —
+and it disappears under sprite (the VM stops) and under v2.2's DockerRunner, where
+per-unit containers make cleanup natural. Revisit there, not in v2.0.
 
 **Accepted residual:** the bot devcontainer runs `--privileged` (the
 docker-in-docker feature sets it), and privileged containers are escapable
