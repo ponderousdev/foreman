@@ -400,12 +400,22 @@ loop exercised on the one repo that forces it.
 - **When** planning under `runner = local`
 - **Then** the plan refuses and names sprite as the compatible runner.
 
-### Scenario: the workflow-edit restriction is proven, not assumed
+### Scenario: every preflight assertion is proven, not assumed
 
-- **Given** the bot PAT
+Fine-grained token permissions cannot be introspected, so each control below is
+probed empirically. All four must pass before any dispatch.
+
+- **Given** the write token, the read token, and a ruleset requiring pull requests
 - **When** `foreman:preflight` runs
-- **Then** an attempted workflow-file write on a scratch ref is denied, and an
-  unexpected success fails loudly before any dispatch.
+- **Then** the write token's authenticated login matches `expected_login`
+- **And** the applicable ruleset is confirmed to require pull requests for the
+  write actor, and a bypass-capable write actor fails
+- **And** the read token is proven unable to write
+- **And** the write token is proven unable to edit workflows — the control
+  [D3](#d3-local-accepts-relaxed-separation)'s relaxed separation leans on
+- **And** every probe is non-destructive: denial is the expected path, and an
+  unexpected success fails loudly *instead of* completing the write it was
+  testing for — a probe that succeeds must not be the thing that does damage.
 
 ### Scenario: a timed-out agent's process group is terminated
 
