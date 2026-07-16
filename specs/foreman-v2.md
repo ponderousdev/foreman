@@ -370,10 +370,15 @@ Why:
 - **uv and Renovate are already present.** uv is pinned in the devcontainer
   Dockerfile; `renovate.json` already runs three custom regex managers of exactly
   this shape.
-- **It survives publication unchanged in shape.** Private:
-  `git+https://…@v1.2.3`. Public: `uvx foreman@1.2.3`. One line, no consumer
-  migration — which matters because [D10](#d10-public-readiness-moves-to-v21-behind-the-sprite)
-  makes public a *when*, not an *if*.
+- **Publication changes one line of template output, and nothing else.** Only the
+  source expression moves — `git+https://github.com/ponderousdev/foreman@v{{.FOREMAN_VERSION}}`
+  becomes `foreman=={{.FOREMAN_VERSION}}`. Keep `--from` on both sides and even the
+  invocation shape holds steady (`uvx --from <spec> foreman`); the git URL is the
+  only part that is private-specific. What matters is what does *not* move: the pin
+  stays in the same copier-owned var, `task foreman:plan` keeps working, and no
+  consumer takes any action. That matters because
+  [D10](#d10-public-readiness-moves-to-v21-behind-the-sprite) makes public a *when*,
+  not an *if*. Publishing to PyPI then becomes optional rather than a prerequisite.
 
 Rejected: **GHCR** cannot serve wheels to a Python installer — it hosts OCI
 artifacts, not a package index. **`uv tool install` in post-create** puts the pin
