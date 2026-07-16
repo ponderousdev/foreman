@@ -86,16 +86,11 @@ images.
 
 ### The bot's fine-grained PAT
 
-Permissions — see
-[branch-protection.md](branch-protection.md#bot-account-pat-permissions), which
-is the source of truth; **nothing more than this**:
-
-| Permission | Level | Purpose |
-|---|---|---|
-| Contents | Read and write | Clone, push, create branches, commit |
-| Pull requests | Read and write | Open PRs, update PRs, comment |
-| Metadata | Read-only | Required by all tokens |
-| Actions · Checks · Commit statuses | Read-only | Observe CI results |
+Permissions live in
+[branch-protection.md](branch-protection.md#bot-account-pat-permissions) — that
+table is the source of truth, and this page does not restate it. **Nothing beyond
+it.** The step-by-step for creating one is
+[guides/bot-account.md](../guides/bot-account.md).
 
 **Deliberately denied**, each load-bearing rather than incidental:
 
