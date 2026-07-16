@@ -337,12 +337,92 @@ devcontainers CLI), so a sprite agent runs the composed gate, opens a PR, Action
 runs the docker-keyed checks, and the shepherd fixes red CI. That is the designed
 loop exercised on the one repo that forces it.
 
+### D11: Distribution is a git-tag `uvx` invocation, not a package index
+
+**Consumers are not Python projects.** `omator`, `mowing-bidder-web`, and
+`lawnomator-site` all carry `package.json` and no `pyproject.toml`; harmon-init
+has none either. Nobody imports Foreman — it is a CLI. So "install a pinned
+Foreman dependency" had no project to be a dependency *of*, and the
+GHCR-vs-PyPI question was answering something nobody asked. Today's invocation
+is `PYTHONPATH=scripts python3 -m foreman` — bare `python3`, no venv, no
+dependency management, working only because the source is vendored.
+
+The wrapper Taskfile pins a version and invokes through `uvx`:
+
+```yaml
+vars:
+  # renovate: datasource=github-tags depName=ponderousdev/foreman
+  FOREMAN_VERSION: 1.2.3
+  FOREMAN: uvx --from git+https://github.com/ponderousdev/foreman@v{{.FOREMAN_VERSION}} foreman
+```
+
+Why:
+
+- **The pin lands where copier already owns it.** `taskfiles/foreman.yml` is
+  template output, so `copier update` bumps Foreman by rewriting a file it fully
+  controls — #12's "bump without conflicts" then holds *by construction* rather
+  than by hoping a merge stays clean.
+- **Auth needs no new infrastructure.** `.devcontainer/scripts/post-create-common.sh`
+  runs `gh auth setup-git` on the headless path (VS Code absent ⇒
+  `REMOTE_CONTAINERS` unset), bridging `GH_TOKEN` → git. That is the same
+  credential path `worktree.py:push()` already depends on — it calls `git push`
+  with no auth handling of its own.
+- **uv and Renovate are already present.** uv is pinned in the devcontainer
+  Dockerfile; `renovate.json` already runs three custom regex managers of exactly
+  this shape.
+- **Publication changes one line of template output, and nothing else.** Only the
+  source expression moves — `git+https://github.com/ponderousdev/foreman@v{{.FOREMAN_VERSION}}`
+  becomes `foreman=={{.FOREMAN_VERSION}}`. Keep `--from` on both sides and even the
+  invocation shape holds steady (`uvx --from <spec> foreman`); the git URL is the
+  only part that is private-specific. What matters is what does *not* move: the pin
+  stays in the same copier-owned var, `task foreman:plan` keeps working, and no
+  consumer takes any action. That matters because
+  [D10](#d10-public-readiness-moves-to-v21-behind-the-sprite) makes public a *when*,
+  not an *if*. Publishing to PyPI then becomes optional rather than a prerequisite.
+
+Rejected: **GHCR** cannot serve wheels to a Python installer — it hosts OCI
+artifacts, not a package index. **`uv tool install` in post-create** puts the pin
+in the image, so consumers cannot pin independently and copier cannot bump it,
+which loses the point. **A private index** is infrastructure to run and pay for,
+solving what git+https solves for free.
+
+**Prerequisite — two grants, in order.** `evanharmon1-bot` currently has *no*
+access to `ponderousdev/foreman`: not a collaborator, not an org member. No PAT
+change fixes that, because a fine-grained PAT delegates its owner's access and
+can never exceed it. So:
+
+1. **Collaborator grant on `ponderousdev/foreman`** — `task setup:github` is the
+   documented, idempotent path (it grants `push`). This sets the ceiling.
+2. **Add `ponderousdev/foreman` to the bot PAT's selected-repo list** — a
+   fine-grained PAT only reaches repos explicitly selected, even ones its owner
+   can access. The PAT's resource owner must be `ponderousdev`, not the bot user.
+
+Effective access is `min(collaborator grant, PAT permissions)`, and the PAT's
+permission set is uniform across selected repos — so **per-repo granularity lives
+in the collaborator grant**, not the token. D11 needs only `pull`; `task
+setup:github` grants `push`, which is where [D10](#d10-public-readiness-moves-to-v21-behind-the-sprite)'s
+dogfooding lands anyway (Foreman pushing branches and opening PRs on its own
+repo). Taking the documented path is the recommendation; the residual is an
+injected agent spamming branches or PRs on foreman, bounded by the ruleset,
+CODEOWNERS, no-workflow-edit, and [D4](#d4-local-is-trusted-input-only) — noise,
+not compromise. See
+[`docs/architecture/security.md`](../docs/architecture/security.md) for the
+permission table and the creation procedure.
+
+**Consequence for #10:** Foreman needs a real `[project.scripts]` console entry
+point and a plain PEP 517 backend, **buildable from a git checkout**. The
+invocation changes from `PYTHONPATH=scripts python3 -m foreman` to `foreman`,
+which is a break the wrapper Taskfile (#12) owns.
+
 ## Requirements
 
 ### v2.0
 
 - [ ] Foreman is a standalone uv-managed package with preserved history, its own
       semver, and a thin harmon-init integration.
+- [ ] Foreman installs into a **non-Python** consumer via `uvx` from a git tag
+      ([D11](#d11-distribution-is-a-git-tag-uvx-invocation-not-a-package-index)),
+      with the pin in the copier-owned wrapper Taskfile and a console entry point.
 - [ ] Foreman runs only in the bot devcontainer; no bare-host path exists.
 - [ ] The Runner protocol carries `UnitSpec` (incl. cmd + timeout), `kill`, and a
       liveness-checkable `Handle`. A mock Runner satisfies it.
@@ -436,8 +516,6 @@ probed empirically. All four must pass before any dispatch.
 
 ## Open questions
 
-- **Distribution while private.** GHCR cannot serve wheels to uv. `git+https`
-  tag dependency, or a private index? Blocks #12's acceptance criterion.
 - **Secrets delivery to a Sprite.** There is no host, no `initializeCommand`, and
   no `op` CLI in the bot profile. Fly secrets set by Foreman at Machine-create
   time is the obvious answer; confirm it.
