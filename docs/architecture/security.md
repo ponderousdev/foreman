@@ -97,8 +97,7 @@ it.** The step-by-step for creating one is
 - **Workflows** — the bot cannot edit `.github/workflows/`. This is what stops
   the classic escalation: rewrite a workflow, let it run with Actions secrets,
   exfiltrate. It matters more than it looks, because an agent sharing the bot's
-  devcontainer can reach this token (see [foreman-v2.md](../../specs/foreman-v2.md)
-  D3), so this restriction is much of what stands between a prompt-injected agent
+  devcontainer can reach this token (see [D3](../../specs/foreman-v2.md#d3-local-accepts-relaxed-separation)), so this restriction is much of what stands between a prompt-injected agent
   and CI secrets. Assert it; do not assume it.
 - **Administration** — no ruleset, settings, or bypass changes. Note the
   consequence: reading a ruleset's bypass actors may need a permission the bot
