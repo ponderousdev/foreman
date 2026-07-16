@@ -95,7 +95,9 @@ is the source of truth; **nothing more than this**:
 | Contents | Read and write | Clone, push, create branches, commit |
 | Pull requests | Read and write | Open PRs, update PRs, comment |
 | Metadata | Read-only | Required by all tokens |
-| Actions · Checks · Commit statuses | Read-only | Observe CI results |
+| Actions | Read-only | View CI workflow run status |
+| Checks | Read-only | View check runs on PRs |
+| Commit statuses | Read-only | View status checks on commits |
 
 **Deliberately denied**, each load-bearing rather than incidental:
 
