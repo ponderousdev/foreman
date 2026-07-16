@@ -386,11 +386,28 @@ in the image, so consumers cannot pin independently and copier cannot bump it,
 which loses the point. **A private index** is infrastructure to run and pay for,
 solving what git+https solves for free.
 
-**Prerequisite:** the bot PAT's selected-repo list must include
-`ponderousdev/foreman`, or consumers cannot fetch it. That widens
-[D3](#d3-local-accepts-relaxed-separation)'s blast radius — an agent in a
-consumer repo could open a PR against foreman. Deliberate and small, but a
-decision rather than a side effect.
+**Prerequisite — two grants, in order.** `evanharmon1-bot` currently has *no*
+access to `ponderousdev/foreman`: not a collaborator, not an org member. No PAT
+change fixes that, because a fine-grained PAT delegates its owner's access and
+can never exceed it. So:
+
+1. **Collaborator grant on `ponderousdev/foreman`** — `task setup:github` is the
+   documented, idempotent path (it grants `push`). This sets the ceiling.
+2. **Add `ponderousdev/foreman` to the bot PAT's selected-repo list** — a
+   fine-grained PAT only reaches repos explicitly selected, even ones its owner
+   can access. The PAT's resource owner must be `ponderousdev`, not the bot user.
+
+Effective access is `min(collaborator grant, PAT permissions)`, and the PAT's
+permission set is uniform across selected repos — so **per-repo granularity lives
+in the collaborator grant**, not the token. D11 needs only `pull`; `task
+setup:github` grants `push`, which is where [D10](#d10-public-readiness-moves-to-v21-behind-the-sprite)'s
+dogfooding lands anyway (Foreman pushing branches and opening PRs on its own
+repo). Taking the documented path is the recommendation; the residual is an
+injected agent spamming branches or PRs on foreman, bounded by the ruleset,
+CODEOWNERS, no-workflow-edit, and [D4](#d4-local-is-trusted-input-only) — noise,
+not compromise. See
+[`docs/architecture/security.md`](../docs/architecture/security.md) for the
+permission table and the creation procedure.
 
 **Consequence for #10:** Foreman needs a real `[project.scripts]` console entry
 point and a plain PEP 517 backend, **buildable from a git checkout**. The
