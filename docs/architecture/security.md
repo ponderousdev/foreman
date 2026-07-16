@@ -84,8 +84,74 @@ images.
   separately as the `ponderousdev-ci` GitHub App — see below.)
 - **Operator** (you) — full access from the human `dev/` devcontainer or host.
 
-TODO: note the exact PAT scopes and any capabilities the bot is intentionally
-denied (e.g. no Tailscale, no production credentials).
+### The bot's fine-grained PAT
+
+Permissions — see
+[branch-protection.md](branch-protection.md#bot-account-pat-permissions), which
+is the source of truth; **nothing more than this**:
+
+| Permission | Level | Purpose |
+|---|---|---|
+| Contents | Read and write | Clone, push, create branches, commit |
+| Pull requests | Read and write | Open PRs, update PRs, comment |
+| Metadata | Read-only | Required by all tokens |
+| Actions · Checks · Commit statuses | Read-only | Observe CI results |
+
+**Deliberately denied**, each load-bearing rather than incidental:
+
+- **Workflows** — the bot cannot edit `.github/workflows/`. This is what stops
+  the classic escalation: rewrite a workflow, let it run with Actions secrets,
+  exfiltrate. It matters more than it looks, because an agent sharing the bot's
+  devcontainer can reach this token (see [foreman-v2.md](../../specs/foreman-v2.md)
+  D3), so this restriction is much of what stands between a prompt-injected agent
+  and CI secrets. Assert it; do not assume it.
+- **Administration** — no ruleset, settings, or bypass changes. Note the
+  consequence: reading a ruleset's bypass actors may need a permission the bot
+  does not have.
+- **Tailscale / production credentials** — the bot profile installs no
+  Tailscale and no 1Password CLI, so the container holds no path to production
+  secrets.
+
+### Effective access = min(collaborator grant, PAT permissions)
+
+A fine-grained PAT is a **delegation of its owner's access** and can never
+exceed it. Two independent layers must both allow an operation:
+
+1. **The repo collaborator grant** on `evanharmon1-bot` — *per repo*, and where
+   granularity actually lives.
+2. **The PAT's selected-repo list plus permission set** — the permission set is
+   **uniform across every selected repo**; there is no per-repo matrix.
+
+So a repo where the bot is a `pull` collaborator stays read-only even though the
+PAT carries `contents: write`. That is why the bot has write on `ponderous-site`
+and read on `mowing-bidder-web` under one token — the collaborator grant caps it.
+
+Practical consequence: to narrow the bot on a repo, change the **collaborator
+grant**, not the PAT.
+
+### Creating or extending the PAT
+
+The collaborator half is automated; the token half is not.
+
+1. **Collaborator grant** — `task setup:github` (idempotent) adds
+   `evanharmon1-bot` as a Write collaborator on this repo. It is the documented
+   path; prefer it over doing it by hand.
+2. **The PAT itself** — manual, as `evanharmon1-bot`:
+   github.com → Settings → Developer settings → Personal access tokens →
+   Fine-grained tokens.
+   - **Resource owner:** the org that owns the repos (e.g. `ponderousdev`) — not
+     the bot user, or org repos are unreachable. The org may require approval.
+   - **Repository access:** *Only select repositories* — pick exactly the repos
+     the bot works on. This list is the blast radius; keep it tight.
+   - **Permissions:** the table above, and nothing else.
+   - **Expiration:** set one, and record the rotation date.
+3. **The value** goes to 1Password and reaches the devcontainer as `GH_TOKEN`
+   via the env-file that `initializeCommand` populates — never into git, never
+   into `containerEnv`.
+
+**One PAT per resource owner.** A token scoped to `ponderousdev` cannot reach
+`evanharmon1/…` repos and vice versa, so a personal-account repo and an org repo
+need separate tokens — the same containment logic as one CI App per org.
 
 ## CI automation identity (GitHub App)
 
@@ -215,14 +281,12 @@ even the in-org radius small:
 
 ## Token & secret inventory
 
-TODO: enumerate the tokens/secrets this repo depends on and where each lives:
-
 | Secret / variable | Used by | Stored in | Rotation |
 |---|---|---|---|
 | `CI_APP_CLIENT_ID` (var) + `CI_APP_PRIVATE_KEY` (secret) | release-please, claude-*, project-automation | repo or org Actions variable + secret | rotate App key per policy |
 | `CLAUDE_CODE_OAUTH_TOKEN` | claude-* workflows | repo Actions secret | re-run `claude setup-token` |
-| `SNYK_TOKEN` | `task security:sast`/`sca` (optional, local-only — not in CI) | local env / 1Password | TODO |
-| TODO | TODO | TODO | TODO |
+| `GH_TOKEN` (bot PAT) | the devcontainer agent's git pushes; `uvx` fetches of private deps | 1Password → devcontainer env-file | manual; re-issue before expiry |
+| `SNYK_TOKEN` | `task security:sast`/`sca` (optional, local-only — not in CI) | local env / 1Password | manual |
 
 > **`CLAUDE_CODE_OAUTH_TOKEN` must be an OAuth token, not an API key.** Generate
 > it with `claude setup-token`; the value starts **`sk-ant-oat01-`** and bills the
