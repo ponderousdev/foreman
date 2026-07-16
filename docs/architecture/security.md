@@ -108,9 +108,14 @@ is the source of truth; **nothing more than this**:
 - **Administration** — no ruleset, settings, or bypass changes. Note the
   consequence: reading a ruleset's bypass actors may need a permission the bot
   does not have.
-- **Tailscale / production credentials** — the bot profile installs no
-  Tailscale and no 1Password CLI, so the container holds no path to production
-  secrets.
+- **Tailscale and on-demand secret fetch** — the bot profile installs no
+  1Password CLI, so there is **no path to pull arbitrary secrets on demand**, and
+  no Tailscale, so no tailnet reach. Note what this does *not* say: the container
+  is not secret-free. It holds whatever the env-file carries — today `GH_TOKEN`,
+  `CLAUDE_CODE_OAUTH_TOKEN`, `AGENT_DECK_TELEGRAM_KEY`. That set is a **property
+  of the 1Password Environment behind the env-file**, i.e. a convention you
+  maintain, not a guarantee the profile enforces. Put a production credential in
+  that Environment and it lands in the container, next to the agent.
 
 ### Effective access = min(collaborator grant, PAT permissions)
 
@@ -126,8 +131,14 @@ So a repo where the bot is a `pull` collaborator stays read-only even though the
 PAT carries `contents: write`. That is why the bot has write on `ponderous-site`
 and read on `mowing-bidder-web` under one token — the collaborator grant caps it.
 
-Practical consequence: to narrow the bot on a repo, change the **collaborator
-grant**, not the PAT.
+Practical consequence — **two levers, different jobs**, and picking the wrong one
+is why this gets confusing:
+
+| Goal | Lever |
+|---|---|
+| Change the *level* on a repo the bot still works (write → read) | the **collaborator grant** — a PAT cannot express per-repo levels |
+| Stop *this token* reaching a repo, while the bot keeps access | remove it from the PAT's **selected-repo list** |
+| Revoke the bot from a repo entirely | drop the **collaborator grant** — and the list entry too, so the token stops carrying reach it cannot use |
 
 ### Creating or extending the PAT
 
