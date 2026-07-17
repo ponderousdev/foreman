@@ -126,6 +126,43 @@ def _delete_ref(call: GhCall, slug: str, ref: str) -> int:
     return rc
 
 
+# A probe PASSES only on an EXPLICIT authorization/ruleset denial — never on a
+# transport error, 5xx, or malformed request, which would let a broken API
+# masquerade as "cannot write" (fail-closed, CodeRabbit). GitHub answers a
+# permission denial with 403 and a ruleset/branch-protection block with 422.
+_DENIAL_MARKERS = (
+    "HTTP 403",
+    "HTTP 422",
+    "Resource not accessible",
+    "not permitted",
+    "protected branch",
+    "at least 1 approving review",
+    "changes must be made through a pull request",
+    "tag protection",
+    "ruleset",
+    "cannot be updated",
+    "required status check",
+)
+
+
+def _is_denial(detail: str) -> bool:
+    lowered = detail.lower()
+    return any(marker.lower() in lowered for marker in _DENIAL_MARKERS)
+
+
+def _denied_probe(name: str, detail: str, denied_msg: str) -> Probe:
+    """Classify a rejected write: an explicit denial passes; any other error
+    is inconclusive and FAILS (fail closed)."""
+    if _is_denial(detail):
+        return Probe(name, True, denied_msg)
+    return Probe(
+        name,
+        False,
+        f"the write was rejected, but not by a recognizable authorization or "
+        f"ruleset denial — treating as INCONCLUSIVE (fail closed): {detail}",
+    )
+
+
 def _force_move_ref(call: GhCall, slug: str, ref: str, sha: str) -> tuple[int, str]:
     rc, out, err = call(
         [
@@ -176,6 +213,12 @@ def run_preflight(
                 f"'{expected_login}'",
             )
         )
+    # Identity is the gate on every later probe: if the authenticated token is
+    # not the expected one, running mutation probes could exercise refs,
+    # workflows, and tags with the wrong — possibly privileged — token. Stop
+    # here (CodeRabbit, critical).
+    if not probes[-1].ok:
+        return probes
 
     # 2 — the effective rules for the default branch require pull requests.
     rc, rules = _api_json(
@@ -229,9 +272,9 @@ def _probe_read_token_cannot_write(
     scratch = f"refs/heads/foreman-preflight-read-probe-{suffix}"
     rc, detail = _create_ref(read, slug, scratch, main_sha)
     if rc != 0:
-        return Probe(
+        return _denied_probe(
             "read token cannot write",
-            True,
+            detail,
             "read-token ref creation was rejected as expected",
         )
     # Unexpected success: the write already happened — bounded to the
@@ -272,19 +315,27 @@ def _probe_no_workflow_edit(
             content_b64=content,
         )
         if push_rc != 0:
-            return Probe(
+            return _denied_probe(
                 "write token cannot edit workflows",
-                True,
+                push_detail,
                 "workflow-file push was rejected as expected (no workflows "
                 "permission) — D3's load-bearing control holds",
             )
+        # Unexpected success — clean up the scratch branch and report whether
+        # the cleanup actually landed (never claim a teardown that failed).
+        cleanup_rc = _delete_ref(write, slug, scratch_ref)
+        cleaned = (
+            "scratch branch deleted"
+            if cleanup_rc == 0
+            else (f"scratch branch {scratch_ref} LEFT BEHIND (delete it manually)")
+        )
         return Probe(
             "write token cannot edit workflows",
             False,
-            "the write token PUSHED a workflow file (inert YAML, no `on:` "
-            "trigger — it cannot run). The PAT has workflow permission it "
-            "must not have; scratch branch deleted. Rescope the PAT NOW: "
-            "a prompt-injected agent could otherwise reach Actions secrets",
+            "the write token PUSHED a workflow file (inert YAML, no trigger "
+            f"key — it cannot run); {cleaned}. The PAT has workflow permission "
+            "it must not have. Rescope the PAT NOW: a prompt-injected agent "
+            "could otherwise reach Actions secrets",
         )
     finally:
         _delete_ref(write, slug, scratch_ref)
@@ -318,12 +369,12 @@ def _probe_tag_immutability(
     # 5a — creation: a scratch v* name, never the probe tag (creation could
     # succeed, and the probe tag must stay exactly where setup put it).
     scratch_tag = f"refs/tags/v0.0.0-probe-{suffix}"
-    rc, _detail = _create_ref(write, slug, scratch_tag, main_sha)
+    rc, detail = _create_ref(write, slug, scratch_tag, main_sha)
     if rc != 0:
         probes.append(
-            Probe(
+            _denied_probe(
                 "write token cannot create version tags",
-                True,
+                detail,
                 "v* tag creation was rejected as expected (creation ruleset)",
             )
         )
@@ -367,12 +418,12 @@ def _probe_tag_immutability(
             )
         )
     else:
-        rc, _detail = _force_move_ref(write, slug, f"tags/{PROBE_TAG}", move_target)
+        rc, detail = _force_move_ref(write, slug, f"tags/{PROBE_TAG}", move_target)
         if rc != 0:
             probes.append(
-                Probe(
+                _denied_probe(
                     "write token cannot move version tags",
-                    True,
+                    detail,
                     "force-moving the probe tag was rejected as expected "
                     "(immutability ruleset, no bypass actors)",
                 )
@@ -396,14 +447,14 @@ def _probe_tag_immutability(
                 )
             )
 
-    rc, _out, _err = write(
+    rc, _out, err = write(
         ["api", "--method", "DELETE", f"repos/{slug}/git/refs/tags/{PROBE_TAG}"]
     )
     if rc != 0:
         probes.append(
-            Probe(
+            _denied_probe(
                 "write token cannot delete version tags",
-                True,
+                err.strip(),
                 "deleting the probe tag was rejected as expected",
             )
         )

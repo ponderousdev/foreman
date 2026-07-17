@@ -56,8 +56,11 @@ removed explicitly, and you must be able to prove which Foreman runs.
    pinned dependency and nothing else:
 
    ```bash
-   task foreman:plan -- --issue <n>    # must succeed with no scripts/foreman present
-   command -v foreman || true          # the console script, not a vendored module
+   # Must succeed with no scripts/foreman present. Foreman is invoked via
+   # `uvx` (not PATH-installed), so assert the wrapper resolves to the pin
+   # rather than looking for a `foreman` binary on PATH.
+   task foreman:plan -- --issue <n>
+   grep -q 'uvx --from git+https://github.com/ponderousdev/foreman@v' taskfiles/foreman.yml
    ```
 
    A quick guard for CI or a runbook: fail if vendored source reappears.

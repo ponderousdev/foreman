@@ -314,9 +314,9 @@ every consumer's next `uvx` resolution. See
 ## Extending
 
 - **Backends**: `src/foreman/backends/<name>.sh` is the entire vendor
-  surface (`run` / `resume <ref>` / `capabilities`). v1 ships `claude.sh` and
-  `mock.sh` (hermetic seam proof). A new vendor is one small file, added when
-  concretely needed.
+  surface (`run` / `resume <ref>` / `capabilities`). v2.0 ships `claude.sh`
+  and `mock.sh` (hermetic seam proof). A new vendor is one small file, added
+  when concretely needed.
 - **Runners**: implement the `Runner` protocol (`src/foreman/runner/`) and
   pair it with a commit-handoff strategy in `foreman.runner.select`. Nothing
   in dispatch changes.

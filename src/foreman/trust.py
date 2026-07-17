@@ -101,9 +101,13 @@ def required_for(
 
 
 def _is_trusted(gh: GitHub, cfg: Config, login: str | None) -> bool:
+    # D13 trusts exactly the configured actor list — nothing more. The
+    # self-authored exception (foreman's own posted content) belongs only to
+    # correction comments (spec.trusted_comments), never to arming, issue
+    # authorship, or edits, so the viewer is NOT trusted here.
     if not login:
         return False
-    return login in cfg.trusted_actors or login == gh.viewer()
+    return login in cfg.trusted_actors
 
 
 def classify_unit(gh: GitHub, cfg: Config, unit: "Unit", mode: str) -> UnitTrust:

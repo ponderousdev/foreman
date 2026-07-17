@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from foreman import runner as runner_mod
@@ -49,6 +50,14 @@ AGENT_ENV_BASE = ("PATH", "HOME", "USER", "LANG", "TERM")
 # The read-only token Foreman's operator provisions for agents; handed to
 # the unit as GH_TOKEN. Required before any dispatch (#13).
 AGENT_TOKEN_VAR = "FOREMAN_AGENT_GH_TOKEN"
+# The ONLY host-side FOREMAN_* variables forwarded to the unit — an explicit
+# allowlist, not a prefix sweep, so a new operator-only FOREMAN_* control or
+# secret is never exposed to the agent by default (#13, spec "explicit
+# FOREMAN_* variables"). Foreman's per-unit FOREMAN_* values (prompt/result/
+# session/log paths, timeout, billing, …) are layered on by run_backend and
+# are not host-inherited. FOREMAN_ANTHROPIC_API_KEY is included so `billing =
+# "api"` reaches the adapter; under subscription billing it is simply absent.
+AGENT_FOREMAN_ENV = ("FOREMAN_ANTHROPIC_API_KEY",)
 # Reaping window after kill(): the group is already dead or dying; this only
 # bounds how long we wait for the recorded status to become readable.
 KILL_REAP_S = 30
@@ -116,12 +125,9 @@ def agent_env(cfg: Config) -> dict[str, str]:
     """The TOTAL environment a unit receives (#13) — the runner passes it
     verbatim, never merged with os.environ. See the module docstring."""
     env: dict[str, str] = {}
-    for name in AGENT_ENV_BASE:
+    for name in (*AGENT_ENV_BASE, *AGENT_FOREMAN_ENV):
         value = os.environ.get(name)
         if value is not None:
-            env[name] = value
-    for name, value in os.environ.items():
-        if name.startswith("FOREMAN_") and name != AGENT_TOKEN_VAR:
             env[name] = value
     read_token = os.environ.get(AGENT_TOKEN_VAR, "")
     if not read_token:
@@ -224,6 +230,22 @@ def run_backend(
         status = runner.wait(handle, KILL_REAP_S)
 
     return result_from_wait(unit_run_dir, status, timed_out=timed_out)
+
+
+def remaining_timeout_s(unit_run_dir: Path, full_timeout_s: int) -> int:
+    """Seconds left on the ORIGINAL dispatch deadline (#22): full timeout
+    minus the elapsed time since run_started.started_at. Falls back to the
+    full timeout when the record is missing or unparseable — never negative."""
+    started_path = unit_run_dir / "run_started.json"
+    if not started_path.exists():
+        return full_timeout_s
+    try:
+        started_raw = json.loads(started_path.read_text(encoding="utf-8"))["started_at"]
+        started = datetime.fromisoformat(started_raw)
+    except (json.JSONDecodeError, KeyError, ValueError, OSError):
+        return full_timeout_s
+    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+    return max(0, int(full_timeout_s - elapsed))
 
 
 def result_from_wait(

@@ -46,6 +46,9 @@ STATUS_FILE = "exit-status"
 STDOUT_LOG = "adapter-stdout.log"
 KILL_GRACE_S = 10
 _POLL_S = 0.1
+# Supervisor-side exec (git ops) is bounded so a stuck command cannot pin a
+# dispatch worker. Generous — merge-tree/rebase on a big repo is still seconds.
+EXEC_TIMEOUT_S = 300
 
 # $0 is a label for ps; $1 is the status-file path; the rest is the adapter
 # argv. See the module docstring for why the trap is a handler, not an ignore.
@@ -141,7 +144,21 @@ class LocalRunner:
         deadline = time.monotonic() + _READY_WAIT_S
         while not ready.exists() and proc.poll() is None:
             if time.monotonic() >= deadline:
-                break  # wait() will classify whatever this is
+                # The wrapper never installed its TERM trap. Returning a handle
+                # now would let a prompt kill() misclassify a recordless death
+                # as an abnormal wrapper failure. Kill and fail the spawn.
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    proc.wait(timeout=5)
+                except (ProcessLookupError, subprocess.TimeoutExpired):
+                    pass
+                self._procs.pop(proc.pid, None)
+                ready.unlink(missing_ok=True)
+                raise ForemanError(
+                    f"unit #{spec.unit} wrapper did not become ready within "
+                    f"{_READY_WAIT_S}s — not dispatching (the interpreter is "
+                    "wedged; nothing was left running)"
+                )
             time.sleep(0.01)
         ready.unlink(missing_ok=True)
         starttime = _proc_starttime(proc.pid) or ""
@@ -194,21 +211,33 @@ class LocalRunner:
         self._reap(handle)
 
     def logs(self, handle: Handle) -> Iterator[str]:
+        # Stream line-by-line: an unbounded agent log must not be slurped
+        # whole into supervisor memory.
         for name in (STDOUT_LOG, "agent.log"):
             path = Path(handle.run_dir) / name
             if not path.exists():
                 continue
-            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-                yield line
+            with path.open(encoding="utf-8", errors="replace") as log:
+                for line in log:
+                    yield line.rstrip("\r\n")
 
-    def exec(self, handle: Handle, cmd: list[str]) -> ExecResult:
+    def exec(
+        self, handle: Handle, cmd: list[str], *, timeout_s: int = EXEC_TIMEOUT_S
+    ) -> ExecResult:
         """Supervisor-side command in the unit's workdir (git ops, not agent
-        code) — runs with Foreman's own environment by design."""
+        code) — runs with Foreman's own environment by design. Bounded by a
+        timeout so a stuck command cannot block a dispatch worker forever."""
         workdir = str(handle.payload.get("workdir") or handle.run_dir)
         try:
-            proc = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True)
+            proc = subprocess.run(
+                cmd, cwd=workdir, capture_output=True, text=True, timeout=timeout_s
+            )
         except FileNotFoundError as exc:
             raise ForemanError(f"exec: command not found: {cmd[0]}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise ForemanError(
+                f"exec: '{' '.join(cmd)}' exceeded {timeout_s}s in {workdir}"
+            ) from exc
         return ExecResult(
             returncode=proc.returncode, stdout=proc.stdout, stderr=proc.stderr
         )

@@ -30,7 +30,7 @@ from foreman.config import Config
 from foreman.github import GitHub
 from foreman.graph import Target, Unit, dependency_satisfied
 from foreman.runner import Selection, WaitTimeout
-from foreman.util import ForemanError, info, write_text
+from foreman.util import ForemanError, info, warn, write_text
 
 RETRIGGER_SUBJECT = "chore: retrigger ci (foreman)"
 
@@ -194,7 +194,12 @@ def dispatch_unit(
     outcome.duration_s = time.monotonic() - started
     _post_status(gh, unit, outcome)
     if outcome.status == "pr-open":
-        _forget_unit(cfg, root, selection, unit)
+        # The PR is already open — best-effort cleanup must never turn a
+        # successful dispatch into a reported failure. Log and move on.
+        try:
+            _forget_unit(cfg, root, selection, unit)
+        except Exception as exc:  # noqa: BLE001 — cleanup is non-fatal
+            warn(f"#{unit.number}: post-PR cleanup failed (PR is open): {exc}")
     return outcome
 
 
@@ -348,9 +353,18 @@ def _reattach_unit(
         status = runner.wait(handle, 0)
         info(f"#{unit.number}: reattached — unit already exited")
     except WaitTimeout:
-        info(f"#{unit.number}: reattached to live unit; waiting up to {timeout_min}m")
+        # Honor the ORIGINAL deadline across reattachment: a live agent gets
+        # only the time remaining from its first dispatch, so repeated
+        # Foreman crashes cannot extend a unit's run indefinitely (#22).
+        remaining_s = backend_mod.remaining_timeout_s(run_dir, timeout_min * 60)
+        info(
+            f"#{unit.number}: reattached to live unit; {remaining_s // 60}m "
+            "left on the original deadline"
+        )
         try:
-            status = runner.wait(handle, timeout_min * 60)
+            if remaining_s <= 0:
+                raise WaitTimeout("original deadline already elapsed")
+            status = runner.wait(handle, remaining_s)
         except WaitTimeout:
             timed_out = True
             runner.kill(handle)

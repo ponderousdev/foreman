@@ -4,10 +4,13 @@ untrusted-input boundary escalate to a human instead."""
 
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from foreman import shepherd as shepherd_mod
 from foreman.config import Config
+from foreman.runner import Selection
 from tests.fakes import make_github
 from tests.mock_runner import MockRunner
 
@@ -79,26 +82,19 @@ class UntrustedThreadEscalates(unittest.TestCase):
         cfg = Config(trusted_actors=["reviewer"])
         gh, runner = make_github(cfg)
         runner.when(["pr", "view", "10"], self._status())
-        runner.when(["api", "graphql"], {"data": {}})  # unused; threads injected below
 
         # Inject review_threads directly: one untrusted-authored, unresolved.
         gh.review_threads = lambda number: [thread("drive-by-attacker")]  # type: ignore
-
-        from foreman.runner import Selection
 
         selection = Selection(
             runner=MockRunner(caps=set()),  # local: no untrusted-input
             make_handoff=lambda w, h: None,
             refusal=lambda req: None,
         )
-        work = shepherd_mod.shepherd_pr(
-            gh,
-            cfg,
-            __import__("pathlib").Path("/tmp"),
-            selection,
-            {"number": 10, "_unit": 5},
-            [],
-        )
+        with tempfile.TemporaryDirectory() as tmp:
+            work = shepherd_mod.shepherd_pr(
+                gh, cfg, Path(tmp), selection, {"number": 10, "_unit": 5}, []
+            )
         self.assertEqual(work.state, "escalated")
         self.assertIn("untrusted", work.detail)
         self.assertIn("#46", work.detail)
@@ -109,10 +105,8 @@ class UntrustedThreadEscalates(unittest.TestCase):
         # assert the escalation guard does NOT fire; the adjudication path
         # itself needs a full agent run, out of scope for this unit test.
         cfg = Config(trusted_actors=["reviewer"])
-        gh, runner = make_github(cfg)
+        gh, _runner = make_github(cfg)
         gh.review_threads = lambda number: [thread("drive-by")]  # type: ignore
-        from foreman.runner import Selection
-
         selection = Selection(
             runner=MockRunner(caps={"untrusted-input", "ports"}),
             make_handoff=lambda w, h: None,

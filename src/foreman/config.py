@@ -131,7 +131,12 @@ def load(root: Path) -> Config:
     for env_name, (attr, cast) in _ENV_OVERRIDES.items():
         raw = os.environ.get(env_name)
         if raw:
-            setattr(cfg, attr, cast(raw))
+            try:
+                setattr(cfg, attr, cast(raw))
+            except ValueError as exc:
+                raise ForemanError(
+                    f"{env_name}: invalid value {raw!r} ({exc})"
+                ) from exc
     _validate(cfg)
     return cfg
 
@@ -213,6 +218,8 @@ def _validate(cfg: Config) -> None:
         isinstance(login, str) and login for login in cfg.trusted_actors
     ):
         raise ForemanError("config: trusted_actors must be a list of logins")
+    if not isinstance(cfg.max_parallel, int) or isinstance(cfg.max_parallel, bool):
+        raise ForemanError("config: max_parallel must be an integer")
     if cfg.max_parallel < 1:
         raise ForemanError("config: max_parallel must be >= 1")
     if "/" in cfg.branch_prefix or not cfg.branch_prefix:

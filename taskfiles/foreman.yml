@@ -55,6 +55,11 @@ tasks:
     cmds:
       - "{{.FOREMAN}} retry {{.CLI_ARGS}}"
 
+  attach:
+    desc: "Resume a preserved failed unit in place (usage: task foreman:attach -- --unit N)"
+    cmds:
+      - "{{.FOREMAN}} attach {{.CLI_ARGS}}"
+
   cleanup:
     desc: "Prune worktrees + foreman-created branches for closed units (in-flight untouched)"
     cmds:

@@ -264,9 +264,21 @@ class GitHub:
         )
         try:
             nodes = out["data"]["repository"]["issue"]["userContentEdits"]["nodes"]
-        except (KeyError, TypeError):
-            warn(f"content edits: unexpected GraphQL shape for issue #{number}")
-            return []
+        except (KeyError, TypeError) as exc:
+            # Fail closed (D13): an unreadable edit history must never look
+            # like "no untrusted edits" and silently permit dispatch.
+            raise ForemanError(
+                f"content edits: unreadable GraphQL response for issue "
+                f"#{number} — failing closed (cannot attest the edit history)"
+            ) from exc
+        if nodes is not None and len(nodes) >= 100:
+            # The connection caps at 100; a fuller page means edits we cannot
+            # see. Fail closed rather than classify on partial evidence.
+            raise ForemanError(
+                f"content edits: issue #{number} has >= 100 edits — the "
+                "history exceeds one page and cannot be fully attested; "
+                "failing closed (D13)"
+            )
         edits: list[dict] = []
         for node in nodes or []:
             edits.append(

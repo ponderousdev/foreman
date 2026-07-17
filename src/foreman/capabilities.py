@@ -69,10 +69,13 @@ def refusal(required: set[str], advertised: set[str], runner_name: str) -> str |
     missing = sorted(required - advertised)
     if not missing:
         return None
+    # A suggested runner must satisfy the COMPLETE requirement set, not just
+    # the part this runner was missing — otherwise required {docker, ports}
+    # would recommend sprite, which does not advertise docker (D5).
     compatible = [
         f"{name} ({milestone})"
         for name, (caps, milestone) in _PLANNED_RUNNERS.items()
-        if set(missing) <= caps
+        if required <= caps
     ]
     message = (
         f"requires capability {', '.join(missing)} — not advertised by "

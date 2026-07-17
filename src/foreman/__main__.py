@@ -1,4 +1,6 @@
-"""Entry point: PYTHONPATH=scripts python3 -m foreman <command> [flags]."""
+"""Entry point for ``python -m foreman <command> [flags]``. The installed
+console script ``foreman`` (pyproject ``[project.scripts]``) is the primary
+invocation; this module makes ``-m`` work identically."""
 
 import sys
 

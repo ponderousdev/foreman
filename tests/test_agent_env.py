@@ -30,7 +30,6 @@ class AgentEnvAllowlist(unittest.TestCase):
                 "HOME": "/home/bot",
                 "LANG": "C.UTF-8",
                 "FOREMAN_AGENT_GH_TOKEN": "read-token",
-                "FOREMAN_SANDBOXED": "1",
                 "CLAUDE_CODE_OAUTH_TOKEN": "oauth",
                 # Must never reach the agent env:
                 "GH_TOKEN": "WRITE-token",
@@ -38,18 +37,24 @@ class AgentEnvAllowlist(unittest.TestCase):
                 "ANTHROPIC_API_KEY": "api-key",
                 "ANTHROPIC_AUTH_TOKEN": "auth-token",
                 "SOME_RANDOM_SECRET": "nope",
+                # An operator-only FOREMAN_* control must NOT leak by prefix —
+                # the allowlist is explicit, not a sweep.
+                "FOREMAN_SANDBOXED": "1",
+                "FOREMAN_SECRET_KNOB": "nope",
             }
         )
         env = backend_mod.agent_env(Config())
         self.assertEqual(env["GH_TOKEN"], "read-token")  # read token AS GH_TOKEN
         self.assertEqual(env["PATH"], "/usr/bin")
         self.assertEqual(env["HOME"], "/home/bot")
-        self.assertEqual(env["FOREMAN_SANDBOXED"], "1")
         self.assertEqual(env["CLAUDE_CODE_OAUTH_TOKEN"], "oauth")
         self.assertNotIn("GITHUB_TOKEN", env)
         self.assertNotIn("ANTHROPIC_API_KEY", env)
         self.assertNotIn("ANTHROPIC_AUTH_TOKEN", env)
         self.assertNotIn("SOME_RANDOM_SECRET", env)
+        # No blanket FOREMAN_* forwarding: operator-only vars stay out.
+        self.assertNotIn("FOREMAN_SANDBOXED", env)
+        self.assertNotIn("FOREMAN_SECRET_KNOB", env)
         # The raw provisioning var is consumed, not passed through.
         self.assertNotIn("FOREMAN_AGENT_GH_TOKEN", env)
         self.assertNotEqual(env["GH_TOKEN"], "WRITE-token")

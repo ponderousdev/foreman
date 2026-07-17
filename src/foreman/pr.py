@@ -85,7 +85,11 @@ def pr_title(cfg: Config, unit: Unit, result: ResultContract) -> str:
     match = TITLE_RE.match(proposed)
     if match:
         scope = f"({match.group('scope')})" if match.group("scope") else ""
-        title = f"{commit_type}{scope}: {match.group('subject')}"
+        # Preserve the Conventional-Commit breaking marker: dropping the `!`
+        # would silently downgrade a breaking change (and mislead release
+        # tooling that keys the major bump off it).
+        bang = match.group("bang") or ""
+        title = f"{commit_type}{scope}{bang}: {match.group('subject')}"
     else:
         if proposed:
             warn(f"#{unit.number}: proposed_pr_title not conventional; regenerating")
