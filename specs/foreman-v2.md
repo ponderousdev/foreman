@@ -553,9 +553,12 @@ The model:
   local naming sprite, dispatchable under sprite. No exclusion, no runner-name
   branch.
 - **Pinning stays absolute.** Arming attests the content as the arming actor
-  saw it. Trusted post-arming edits keep the attestation — trusted editors are
-  attestors. An untrusted post-arming edit breaks it: fail closed until a
-  trusted actor re-arms, and the re-armed unit carries `untrusted-input`.
+  saw it. A trusted post-arming edit **refreshes the pin** — a trusted edit is
+  itself a new attestation — so dispatch carries the latest state whose every
+  post-arming edit is trusted-authored, re-validated at dispatch: never a
+  stale snapshot, and never silently. An untrusted post-arming edit breaks the
+  attestation: fail closed until a trusted actor re-arms, and the re-armed
+  unit carries `untrusted-input`.
 
 Two consequences worth naming. On a public repo, D4's repo predicate already
 makes every unit `untrusted-input`, so D13 mostly matters for the private
@@ -578,15 +581,22 @@ consumer's devcontainer — next to that consumer's own write token. Branches
 and PRs are bounded by the ruleset and CODEOWNERS; tags were bounded by
 nothing.
 
-Therefore: **before any consumer pins a Foreman tag, `refs/tags/v*` carries a
-ruleset** — creation reserved to the release path (release-please's CI App,
-and org admins for the manual `task release:*` override), update and deletion
-blocked for everyone. The importable JSON ships at
-`.github/Tag Protection Ruleset - Protect Version Tags.json`;
+Therefore: **before any consumer pins a Foreman tag, `refs/tags/v*` carries
+two rulesets** — split deliberately, because a bypass actor bypasses *every*
+rule in its ruleset, so one combined ruleset would hand the release path's
+bypass the power to move tags too. **Creation** (bypassable by the release
+path: release-please's CI App, and org admins for the manual `task release:*`
+override) lives apart from **update + deletion**, which carry **no bypass
+actors at all** — moving or deleting a version tag requires a repo admin to
+first edit that ruleset, a deliberate, audit-logged act; a bad release is a
+new patch version, never a moved tag. The importable JSONs ship in
+`.github/`;
 [`docs/architecture/branch-protection.md`](../docs/architecture/branch-protection.md)
-documents it. Preflight (#15) probes the control empirically: the write token
-must fail to create a scratch tag in the protected namespace, and an
-unexpected success is deleted and fails preflight loudly.
+documents both. Preflight (#15) probes all three controls empirically: the
+write token must fail to create a scratch `v*` tag, and must fail to move or
+delete the sacrificial probe tag (`v0.0.0-probe`, created at setup — never a
+release tag); an unexpected success is cleaned up best-effort and fails
+preflight loudly.
 
 D11's push-grant recommendation stands *because* of this decision — with tags
 immutable, the bot's `push` grant on foreman is branch/PR noise again.
@@ -628,7 +638,8 @@ immutable, the bot's `push` grant on foreman is branch/PR noise again.
       the `untrusted-input` capability.
 - [ ] Preflight asserts login, that `main`'s effective rules require PRs for
       the write actor, read-token cannot write, **write-token cannot edit
-      workflows**, and **write-token cannot create or move version tags**
+      workflows**, and **write-token cannot create, move, or delete version
+      tags**
       ([D14](#d14-version-tags-are-immutable)) — every probe bounded to a
       scratch ref it cleans up. The ruleset bypass-actor audit is a documented
       operator-tier check, not a bot assertion.
@@ -706,7 +717,10 @@ immutable, the bot's `push` grant on foreman is branch/PR noise again.
   refusal names it as absent, and sprite is named as the compatible runner.
 - **When** planning under `runner = sprite` (v2.1)
 - **Then** the unit is dispatchable, and the dispatched prompt contains exactly
-  the content pinned at arming.
+  the pinned content — the arming-time state, or the latest state whose every
+  post-arming edit is trusted-authored.
+- **And** a trusted post-arming edit refreshes the pin: dispatch carries the
+  edited content, re-validated at dispatch, never a stale snapshot.
 - **And** an untrusted post-arming edit invalidates the arming — dispatch fails
   closed until a trusted actor re-arms the edited content.
 
@@ -729,10 +743,14 @@ dispatch.
   [D3](#d3-local-accepts-relaxed-separation)'s relaxed separation leans on. The
   probe's file content is inert YAML with no `on:` trigger, so even an
   unexpected success cannot cause a workflow run
-- **And** the write token is proven unable to create or update a version tag
-  ([D14](#d14-version-tags-are-immutable)) — probed with a scratch tag inside
-  the protected `v*` namespace; an unexpected success is deleted and fails
-  preflight loudly
+- **And** the write token is proven unable to create, move, or delete a
+  version tag ([D14](#d14-version-tags-are-immutable)) — creation probed with
+  a scratch `v*` tag name; update and deletion probed against the sacrificial
+  probe tag `v0.0.0-probe` (created at setup, never a release tag). An
+  unexpected success is cleaned up best-effort — the scratch tag deleted, the
+  probe tag's SHA restored — and fails preflight loudly, naming anything the
+  operator must fix: an unexpectedly *deleted* probe tag cannot be recreated
+  by the bot, since creation is denied
 - **And** no probe mutates anything beyond a scratch ref it cleans up; none
   targets `main`.
 
