@@ -2,10 +2,21 @@
 
 Foreman is a **deterministic supervisor** for milestone-driven agent work. It
 reads a milestone's (or a single issue's) dependency graph from GitHub,
-dispatches the currently-unblocked issues to isolated headless agents in git
-worktrees, verifies each result with the repo's own CI gate, opens PRs, and
-keeps those PRs healthy (CI repair, review adjudication, rebases) until a
-human merges them.
+dispatches the currently-unblocked issues to isolated headless agents through
+a swappable **Runner seam**, verifies each result with the repo's own
+composed gate, opens PRs, and keeps those PRs healthy (CI repair, review
+adjudication, rebases) until a human merges them.
+
+> **v2 (the Runner seam).** Where a unit executes is a config flip behind one
+> seam: `local` (v2.0, subprocess in the bot devcontainer), `sprite` (v2.1,
+> one Fly microVM per unit), `docker` (v2.2, one sibling container per unit).
+> The immutable decisions behind this — the trust model, capabilities, the
+> composed gate, distribution — are
+> [ADR 0003](../decisions/0003-foreman-v2-runner-seam.md) (D1–D14); the living
+> requirements are [`specs/foreman-v2.md`](../../specs/foreman-v2.md). The
+> package lives at `src/foreman/` and installs as the `foreman` console script
+> (there is no more `scripts/foreman/` vendored source — see
+> [distribution](#distribution-d11) below).
 
 Everything that can be a crisp pass/fail check is plain code; LLMs write code
 and adjudicate review findings, but they never judge "done" and never gate
@@ -88,7 +99,9 @@ All entry points are Taskfile tasks; each takes `-- --milestone <n|title>` or
 
 ```bash
 task foreman:plan      # dry run: graph, waves, ready set, validation
-task foreman:preflight # read-only agent spec analysis; drafts correction comments
+task foreman:vet      # read-only agent spec analysis; drafts correction comments
+task foreman:preflight # empirically assert the security controls (login, PR rule,
+                       #   read-only token, no workflow edit, tag immutability)
 task foreman:dispatch  # dispatch ready units → verify → open PRs (idempotent)
 task foreman:shepherd  # repair CI, adjudicate reviews, rebase, merge order
 task foreman:watch     # loop plan→dispatch→shepherd (-- --interval 5m)
@@ -104,11 +117,12 @@ task foreman:cleanup   # prune worktrees/branches for closed units
 2. **Isolate** — `git worktree add` under `.worktrees/foreman/`, branch
    `foreman/<type>/<n>-<slug>` off the discovered `<remote>/<default>`.
 3. **Prompt** — assembled deterministically: fixed preamble
-   (`scripts/foreman/prompts/implementer-preamble.md`), the full issue +
-   sub-issue bodies, **trusted** comments only (author association OWNER /
-   MEMBER / COLLABORATOR, or foreman's own corrections — drive-by comments
-   on public repos are an injection surface), and the `## Handoff` sections
-   from merged dependency PRs.
+   (`src/foreman/prompts/implementer-preamble.md`), the full issue +
+   sub-issue bodies, **trusted** comments only (author in `trusted_actors`,
+   or foreman's own corrections — drive-by comments on public repos are an
+   injection surface), and the `## Handoff` sections from merged dependency
+   PRs. A capability-conditional preamble adds the no-port-binding rule
+   where `ports` is absent (#24).
 4. **Dispatch** — the backend adapter runs headless in the worktree with a
    timeout enforced by foreman. The session ref is captured from the FIRST
    stream event (killed agents emit no final event; resume depends on this).
@@ -117,8 +131,12 @@ task foreman:cleanup   # prune worktrees/branches for closed units
    AC→test mapping. Exit 0 without a valid contract counts as a crash.
    Ambiguity escalates via `BLOCKED.md` + a blocked result — never invented
    through.
-6. **Verify** — foreman itself runs the repo's `verify_command` (default:
-   full `task ci`) in the worktree. The agent's self-report is never trusted.
+6. **Verify** — foreman composes the gate from advertised capabilities
+   (baseline `[verify] default`, then capability-keyed additions) and, under
+   local, runs it itself in the worktree; under sprite it travels to the
+   guest. The agent's self-report is never trusted. A verify failure names
+   the full log path and is classified by `signatures.toml` before any
+   resume, so an environmental failure is never handed back as a code bug.
 7. **Freshness gate** — immediately before pushing: the issue is still open,
    still armed, dependencies still satisfied, the spec hash (bodies +
    trusted comments) unchanged since dispatch, and no PR appeared meanwhile.
@@ -136,7 +154,7 @@ task foreman:cleanup   # prune worktrees/branches for closed units
 Deterministic triggers → bounded agent actions on open foreman PRs:
 
 - **Red CI** → classify by the signature catalog
-  (`scripts/foreman/signatures.toml`) first. `environment` failures get one
+  (`src/foreman/signatures.toml`) first. `environment` failures get one
   empty-commit retry (the retrigger primitive — assume the bot token cannot
   re-run workflow jobs) and then the human queue; an agent must never "fix"
   infra by weakening code. `quota_wait` (the agent backend's own usage
@@ -186,10 +204,10 @@ USD budgets bind. Switching is a config flip plus one secret.
   identity to equal `expected_login` — a leaked-context or wrong-account run
   refuses to write.
 - **Write contract**: every GitHub mutation lives in
-  `scripts/foreman/github.py` and nowhere else. Foreman may create/push its
+  `src/foreman/github.py` and nowhere else. Foreman may create/push its
   own branches, open non-draft PRs, edit its own PRs and their
   foreman-namespace labels, upsert one marker-identified status comment per
-  unit, resolve threads it dispositioned, post human-approved preflight
+  unit, resolve threads it dispositioned, post human-approved vet
   corrections, and ensure its label definitions. It must never merge, close
   or reopen issues, edit issue bodies/titles, touch human comments, or write
   fields/types/dependency edges — those operations do not exist in the
@@ -203,15 +221,25 @@ USD budgets bind. Switching is a config flip plus one secret.
 ## Configuration (.foreman.toml)
 
 ```toml
+runner = "local"              # where units execute: local | sprite | docker
 backend = "claude"            # default adapter; per-issue input overrides
 require_approval = true       # explicit arming (false = default-armed + holds)
 inputs = "auto"               # auto | fields | labels
-verify_command = ["task", "ci"]
+trusted_actors = ["you", "your-bot"]  # D4/D13 trust boundary; see below
+required_capabilities = []    # hard requirements; a mismatch is refused at plan time
 max_parallel = 3
 branch_prefix = "foreman"
 expected_login = "your-bot"   # identity assertion; "" skips
 billing = "subscription"      # subscription | api
 sandboxed = false             # FOREMAN_SANDBOXED=1 env inside the bot container
+
+# The composed verify gate (#29): a baseline plus capability-keyed additions.
+# The gate runs the baseline and every addition whose capability is present;
+# whatever does not run in-unit is GitHub Actions' job.
+[verify]
+default = ["task", "verify"]          # runs everywhere — no special capability
+docker  = ["task", "verify:docker"]   # additionally when `docker` is present
+ports   = ["task", "e2e"]             # additionally when `ports` is present (sprite)
 
 [budgets]
 dispatch_usd = 20.0           # binds in api billing mode
@@ -222,14 +250,76 @@ dispatch_min = 90
 shepherd_min = 30
 ```
 
+## The Runner seam (v2)
+
+One `Runner` protocol; `local`/`sprite`/`docker` implement it; selection is
+config. The seam must not leak: graph, GitHub, and eligibility code contain no
+runner-*name* branches (enforced by `tests/test_leak.py`) — those layers vary
+only by consuming advertised **capabilities**.
+
+**Capabilities are computed per environment, never per runner class** (D7):
+`docker` is probed (is a daemon reachable?), `ports` is derived from
+`max_parallel`, and `untrusted-input` follows from the boundary by policy.
+LocalRunner advertises `{"docker"}` and nothing else in v2.0 — the
+concurrency-1 `ports` cell is physically true but deliberately withheld (D9).
+
+**Trust (D4/D13).** Arming authorizes; authorship classifies. The actor on
+the most recent arming-label event must be a `trusted_actor`, always. The
+issue/sub-issue author and post-arming editors classify the *input*: any
+untrusted contribution injects the `untrusted-input` capability into the
+unit's requirements, so the unit is refused under `local` (naming `sprite`)
+and dispatchable under `sprite`. A repo is untrusted-input unless it is
+private *and* every account with access is a trusted actor (public ⇒ always
+untrusted; unenumerable ⇒ fail closed). Plan-affecting config — `runner`,
+`trusted_actors`, `required_capabilities`, `[verify]` — is read from the
+default branch of Foreman's own clone, never a dispatched branch.
+
+**Crash safety.** A unit's handle (PID + process start-time) is serialized
+under `.foreman/runs/`; a restarted Foreman re-derives state from GitHub and
+git, takes a per-unit lock, probes liveness, and reattaches rather than
+redispatching. Exit status is recorded by the spawn wrapper (atomic rename),
+so it survives a restart; a dead process with no recorded status is reported
+as abnormal, never guessed.
+
+## `foreman preflight` — the security assertion gate
+
+Fine-grained token permissions cannot be introspected, so `foreman preflight`
+proves five controls empirically before any dispatch, each bounded to a
+scratch ref it cleans up: the write-token login matches `expected_login`; the
+default branch requires PRs; the read token cannot write; the write token
+cannot edit workflows; and the write token cannot create, move, or delete
+version tags (D14). The ruleset bypass-actor audit is a documented
+operator-tier check, not a bot assertion. (v1's read-only issue-analysis
+command that used this name is now `foreman vet`.)
+
+## Distribution (D11)
+
+Consumers are not Python projects, so there is no package index: a repo pins a
+version in its copier-owned wrapper Taskfile and invokes through `uvx`:
+
+```yaml
+# taskfiles/foreman.yml — template output
+vars:
+  # renovate: datasource=github-tags depName=ponderousdev/foreman
+  FOREMAN_VERSION: 2.0.0
+  FOREMAN: uvx --from git+https://github.com/ponderousdev/foreman@v{{.FOREMAN_VERSION}} foreman
+```
+
+Version tags are immutable (D14) because a moved tag is code execution in
+every consumer's next `uvx` resolution. See
+[migrating consumers off vendored Foreman](../guides/foreman-migration.md).
+
 ## Extending
 
-- **Backends**: `scripts/foreman/backends/<name>.sh` is the entire vendor
+- **Backends**: `src/foreman/backends/<name>.sh` is the entire vendor
   surface (`run` / `resume <ref>` / `capabilities`). v1 ships `claude.sh` and
   `mock.sh` (hermetic seam proof). A new vendor is one small file, added when
   concretely needed.
+- **Runners**: implement the `Runner` protocol (`src/foreman/runner/`) and
+  pair it with a commit-handoff strategy in `foreman.runner.select`. Nothing
+  in dispatch changes.
 - **Signatures**: when an unmatched CI failure gets an LLM diagnosis, add its
   regex to `signatures.toml` — the LLM diagnoses once, code recognizes
   forever.
 - **Agent definitions**: `.claude/agents/foreman-*` wrap the same one-sourced
-  runbooks in `scripts/foreman/prompts/` for interactive use.
+  runbooks in `src/foreman/prompts/` for interactive use.
