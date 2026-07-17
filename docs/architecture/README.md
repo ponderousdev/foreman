@@ -1,28 +1,64 @@
 # Architecture
 
 How the system is built, secured, governed, and tested — plus the **subject
-hubs** below.
-
-TODO: Describe the high-level architecture of Foreman.
+hubs** below. The deep dive lives in [foreman.md](foreman.md); this page is
+the map.
 
 ## Overview
 
-TODO: Add a Mermaid diagram of the main components and data flow. Keep this
-diagram in sync with reality — PRs that change components, routing, or
-infrastructure should update it.
+Foreman is a deterministic supervisor: plain code decides scheduling,
+readiness, verification, doneness, and trust; LLM agents only produce
+artifacts that deterministic gates measure. Where a unit executes is a config
+flip behind one **Runner seam** (`local` / `sprite` / `docker`), and the seam
+must not leak — policy code consumes advertised **capabilities**, never a
+runner name.
 
 ```mermaid
 flowchart LR
-    A[TODO: source] --> B[TODO: build] --> C[TODO: deploy]
+    GH[GitHub issues + graph] --> PLAN[plan: waves, trust, capabilities]
+    PLAN -->|eligible units| DISPATCH[dispatch]
+    DISPATCH -->|UnitSpec| SEAM{Runner seam}
+    SEAM -->|local: subprocess| LOCAL[bot devcontainer]
+    SEAM -->|sprite v2.1: microVM| SPRITE[Fly Machine]
+    SEAM -->|docker v2.2: container| DOCKER[sibling container]
+    LOCAL --> GATE[composed verify gate]
+    GATE -->|green| PUSH[Foreman-owned push + PR]
+    PUSH --> SHEP[shepherd: CI/rebase/adjudicate]
+    SHEP -->|ready-to-merge| HUMAN[[human merges — Foreman never does]]
 ```
 
 ## Components
 
-TODO: List the major components and what each is responsible for.
+Everything lives in the `foreman` package under `src/foreman/`:
+
+- **`runner/`** — the seam: `Runner` protocol, `UnitSpec`/`Handle`/
+  `ExitStatus`, the handle store and per-unit lock, `create`/`select`, and
+  `runner/local.py` (LocalRunner: status-recording spawn wrapper, PID +
+  start-time liveness, group kill). The only place a runner name becomes
+  behavior.
+- **`capabilities.py`** — the computed capability model (docker/ports/
+  untrusted-input) and the plan-time refusal composer.
+- **`trust.py`** — the D4 repo predicate and D13 per-unit classification.
+- **`gate.py` + `verify.py`** — composition of the `[verify]` gate and its
+  execution.
+- **`handoff.py`** — commit-return strategies (v2.0: shared worktree; the
+  workflow-diff tripwire lives here).
+- **`dispatch.py` / `shepherd.py` / `watch.py`** — the supervisor loop.
+- **`graph.py` / `inputs.py` / `spec.py`** — units, edges, doneness, human
+  inputs, prompt assembly.
+- **`github.py`** — the entire GitHub mutation surface, write-contract-guarded.
+- **`backend.py` + `backends/*.sh`** — the agent-adapter vendor seam.
+- **`preflight.py`** — the empirical security-assertion gate (`foreman
+  preflight`).
 
 ## Data Flow
 
-TODO: Describe how data moves through the system.
+Inputs are stored (issue bodies, labels/fields, comments); machine state is
+re-derived from GitHub + git every tick and never stored. A crash mid-wave is
+safe: the rerun re-derives state, takes the per-unit lock, probes the
+persisted handle's liveness, and reattaches rather than redispatching. Commits
+return to Foreman through the handoff strategy and Foreman — never the agent —
+pushes with the write token.
 
 ## Subject hubs
 

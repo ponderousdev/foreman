@@ -22,6 +22,9 @@ pre-commit:
     markdown:
       glob: "*.{md,mdx}"
       run: task lint:markdown -- {staged_files}
+    python:
+      glob: "*.py"
+      run: task lint:python -- {staged_files}
     actions:
       glob: ".github/workflows/*.{yml,yaml}"
       run: task lint:actions

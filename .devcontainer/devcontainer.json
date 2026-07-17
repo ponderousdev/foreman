@@ -59,9 +59,15 @@
   // low|medium|high for the persisted effortLevel field, while the env var
   // accepts low|medium|high|max. Resolution order at runtime: env var >
   // settings.json effortLevel > model default.
+  //
+  // FOREMAN_DEVCONTAINER: the D2 startup tripwire marker — Foreman refuses
+  // to start without it. Lives in this profile's runtime config, NOT the
+  // shared Dockerfile: the dev/human profile builds from the same image, and
+  // an image-baked marker would mark the very container D2 exists to refuse.
   "containerEnv": {
     "CODER": "${localEnv:CODER}",
-    "CLAUDE_CODE_EFFORT_LEVEL": "max"
+    "CLAUDE_CODE_EFFORT_LEVEL": "max",
+    "FOREMAN_DEVCONTAINER": "bot"
   },
   "postCreateCommand": "bash .devcontainer/post-create.sh",
   "postStartCommand": "bash .devcontainer/post-start.sh",

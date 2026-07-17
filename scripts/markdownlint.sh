@@ -33,6 +33,7 @@ default_globs=(
     '#**/.venv/**'
     '#**/.task/**'
     '#.foreman/**'
+    '#.pytest_cache/**'
 )
 
 if [ -x node_modules/.bin/markdownlint-cli2 ]; then

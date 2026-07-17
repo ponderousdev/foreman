@@ -23,6 +23,7 @@
     "**/.terraform/**",
     "**/.venv/**",
     "**/.task/**",
-    "**/node_modules/**"
+    "**/node_modules/**",
+    ".pytest_cache/**"
   ]
 }

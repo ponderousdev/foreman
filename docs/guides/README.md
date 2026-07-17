@@ -15,5 +15,8 @@ Calm, repeatable how-tos read *in advance* (the crisis counterpart is
   **Coder** setup.
 - [devcontainer-performance.md](devcontainer-performance.md) — tuning CPU/RAM
   for the devcontainer; the real levers live in Coder and WSL2, not this repo.
+- [foreman-migration.md](foreman-migration.md) — move a consumer off vendored
+  `scripts/foreman/` onto the pinned `uvx` dependency (idempotent), plus the
+  v1→v2 `.foreman.toml` key migration.
 
 TODO: add more guides, e.g. "local development setup", "add a feature", "how X works".

@@ -37,6 +37,20 @@ node_modules/
 # Taskfile fingerprint cache
 .task/
 
+# Python (uv-managed package)
+.venv/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+dist/
+
+# Foreman runtime state (unit logs, run handles, worktree locks — disposable
+# operational artifacts; GitHub + git are the state of record)
+.foreman/
+.foreman-stop
+
 # Git worktrees
 .worktrees/
 

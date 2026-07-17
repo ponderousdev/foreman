@@ -32,6 +32,16 @@ it points here.
   `yaml:lint`).
 - Pipeline order is **`check → build → validate → test → security`**, with
   `verify` (local gate) and `ci` (full) as the aggregates.
+- **Task vocabulary (one meaning, ecosystem-wide — #16).** `check` = lint +
+  format + typecheck (the fast hook gate); `build` = application bundles;
+  `test` = port-free tests; **`verify` = check + build + test**; `e2e` =
+  port-binding browser tests; **`ci` = verify + e2e + security**. This is the
+  vocabulary a consumer's composed gate keys on: `[verify] default` is the
+  port-free `verify`, and the `ports`-keyed addition is `e2e`. It matches
+  harmon-init 4.0.0
+  ([#304](https://github.com/evanharmon1/harmon-init/pull/304)); the fast
+  hook-gate role is `check`, so `verify` genuinely includes tests. `typecheck`
+  is a sibling of lint under `check`, never named "lint".
 - **`lint:*` and `check` are read-only gates** — they report and fail, never
   modify files. All auto-fixing lives in **`task format`**, **`task format:file
   -- <path>`**, and **`task fix`** (= format then lint). Pre-commit hooks run the

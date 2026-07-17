@@ -45,9 +45,11 @@ post-generation [docs/CHECKLIST.md](docs/CHECKLIST.md).
 ├── .claude/             # Claude Code settings + skills
 ├── .devcontainer/       # Dual-profile devcontainer (AI bot + dev/ human)
 ├── .github/             # Workflows, templates, CODEOWNERS, branch ruleset
+├── src/foreman/         # The foreman package (Runner seam, dispatch, shepherd)
 ├── docs/                # Documentation (see docs/README.md)
 ├── scripts/             # Repo utility scripts (hygiene, status, summaries)
 ├── specs/               # Specifications
+├── taskfiles/           # foreman:* task namespace (dogfood)
 ├── tests/               # Tests
 ├── AGENTS.md            # AI agent guidance (CLAUDE.md/GEMINI.md symlink here)
 ├── DESIGN.md            # Design / UX intent (AI-facing)
@@ -62,8 +64,9 @@ post-generation [docs/CHECKLIST.md](docs/CHECKLIST.md).
 
 | Command | What it does |
 |---|---|
-| `task verify` | Local merge gate: lint |
-| `task check` | All linters in parallel |
+| `task verify` | Local merge gate: check + validate + guards |
+| `task check` | All linters + typecheck (ruff, mypy, …) in parallel |
+| `task foreman:plan` | Dry-run the supervisor: graph, waves, trust, capabilities |
 | `task fix` | Auto-format, then lint |
 | `task test` | Run tests (see [docs/architecture/tests.md](docs/architecture/tests.md)) |
 | `task security` | gitleaks + dependency audit |

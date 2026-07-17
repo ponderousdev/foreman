@@ -2,6 +2,10 @@
 # https://taskfile.dev
 version: "3"
 
+includes:
+  # Foreman's own supervisor commands (dogfood): task foreman:plan, etc.
+  foreman: ./taskfiles/foreman.yml
+
 output:
   group:
     begin: "::group::{{.TASK}}"
@@ -65,9 +69,20 @@ tasks:
 
   # ── Quality Checks ────────────────────────────────────────────
   check:
-    desc: Run all linters (parallel)
+    desc: Run all linters + typecheckers (parallel)
     deps:
       - lint
+      - typecheck
+
+  typecheck:
+    desc: Run all typecheckers
+    deps:
+      - typecheck:python
+
+  typecheck:python:
+    desc: mypy over src/foreman (pins from uv.lock)
+    cmds:
+      - uv run --locked mypy
 
   lint:
     desc: Run all linters in parallel
@@ -77,6 +92,13 @@ tasks:
       - lint:markdown
       - lint:actions
       - lint:hygiene
+      - lint:python
+
+  lint:python:
+    desc: Ruff lint + format check (pins from uv.lock)
+    cmds:
+      - uv run --locked ruff check {{.CLI_ARGS | default "."}}
+      - uv run --locked ruff format --check {{.CLI_ARGS | default "."}}
 
   lint:yaml:
     desc: yamllint
@@ -168,6 +190,7 @@ tasks:
   format:
     desc: Auto-format code
     cmds:
+      - uv run --locked ruff format .
       - |
         files=$(git ls-files '*.sh' '*.bash')
         [ -n "$files" ] && shfmt -w $files || true
@@ -186,6 +209,7 @@ tasks:
         case "$f" in
         *.sh | *.bash) shfmt -w "$f" ;;
         *.md | *.mdx) ./scripts/markdownlint.sh fix "$f" ;;
+        *.py) uv run --locked ruff format "$f" ;;
         esac
 
   fix:
@@ -198,7 +222,12 @@ tasks:
   test:
     desc: Run all tests
     cmds:
-      - 'echo "TODO: wire tests for this project (see docs/architecture/tests.md); test files live in tests/"'
+      - task: test:python
+
+  test:python:
+    desc: Foreman unit tests (pytest; hermetic — fake gh transport, no network)
+    cmds:
+      - uv run --locked pytest {{.CLI_ARGS}}
 
   test:tasks:
     desc: Guard the Taskfile itself (compiles; setup tasks are safe no-ops)
@@ -247,9 +276,9 @@ tasks:
         fi
 
   security:audit:
-    desc: Dependency audit
+    desc: Dependency audit (pip-audit over the exported uv.lock)
     cmds:
-      - echo "No package manifests to audit yet."
+      - ./scripts/audit-python.sh
 
   security:sast:
     desc: "Static application security testing (Snyk) — optional/local, needs SNYK_TOKEN (not in CI or `task security`)"
