@@ -82,7 +82,7 @@ by the boundary — see [D7](#d7-capabilities-are-computed-per-environment).
 |---|---|
 | `docker` | A usable Docker daemon is reachable from inside the unit. |
 | `ports` | The unit may bind ports and run long-lived servers or a browser without colliding. |
-| `untrusted-input` | The unit may be given untrusted content: the boundary is expected to contain a fully compromised agent, and no write credential is reachable inside it. |
+| `untrusted-input` | The unit may be given untrusted content: the boundary is expected to contain a fully compromised agent, and no repository-write credential is reachable inside it. |
 
 | Environment | `docker` | `ports` | `untrusted-input` |
 |---|---|---|---|
@@ -107,7 +107,9 @@ enforced without a runner-name branch: planning derives the repo's trust (the
 predicate in D4) and, for an untrusted repo, injects `untrusted-input` into
 `required_capabilities`. The ordinary hard-mismatch refusal does the rest —
 eligibility consumes advertised capabilities and never asks which runner it is
-talking to.
+talking to. Per-issue trust rides the same rail: a unit with untrusted authors
+or editors gets the same injection
+([D13](#d13-untrusted-content-classifies-the-unit-arming-authorizes-it)).
 
 ### The verify gate is composed, not selected
 
@@ -199,6 +201,21 @@ and the shepherd cannot dispatch a fix for workflow-caused red CI. The commit
 handoff (#21) detects a workflow-touching diff *before* pushing and fails the
 unit with that classification, rather than letting the push die at the last
 step as a bare 403.
+
+### Input surfaces beyond the issue
+
+Issue #14 defines what enters the implementer's prompt. The shepherd is an LLM
+consumer too: it reads PR review comments ("adjudicate reviews") and CI output —
+and on a public repo anyone can comment on a PR, so post-publication the
+shepherd consumes world-writable content. The rule generalizes (#46): every
+role's input surface is defined and classified, not just the implementer's.
+Dispatch decisions consume deterministic signals — CI conclusions,
+`signatures.toml` classifications, mergeability — plus trusted-authored text;
+untrusted-authored text either never enters a prompt or subjects the consuming
+run to the same capability rule as any unit
+([D13](#d13-untrusted-content-classifies-the-unit-arming-authorizes-it)). A fix
+unit dispatched for red CI on an untrusted-origin branch inherits that branch's
+classification.
 
 ### Runner protocol
 
@@ -299,10 +316,13 @@ entirely different trust story.
 Building the bare-host path would defeat the protections that justify the tool.
 Do not build it and do not present it as an option.
 
-Enforced as a startup tripwire: the bot devcontainer bakes a marker (an env var
-in the image, e.g. `FOREMAN_DEVCONTAINER=bot`) and Foreman refuses to start
-without it. A guard against accident, not intent — trivially spoofable,
-deliberately cheap.
+Enforced as a startup tripwire: the bot profile sets a marker (an env var, e.g.
+`FOREMAN_DEVCONTAINER=bot`, in the bot `devcontainer.json`'s `containerEnv`) and
+Foreman refuses to start without it. The marker lives in the profile's *runtime*
+config, not the shared Dockerfile: the dev/human profile builds from the same
+Dockerfile, so an image-baked marker would mark the very container D2 exists to
+refuse — and the Sprite guest besides. A guard against accident, not intent —
+trivially spoofable, deliberately cheap.
 
 ### D3: Local accepts relaxed separation
 
@@ -324,9 +344,11 @@ edit its issues* is a trusted actor. A **public** repo is always untrusted —
 the world can file issues. A **private** repo is untrusted unless every account
 with repo access (collaborators API, `affiliation=all`: direct, outside, and
 via org or team) appears in `trusted_actors`. If the access list cannot be
-enumerated, **fail closed** and refuse. Per-issue gating (#14) still validates
-author, arming actor, and editors regardless — this predicate is the belt over
-those braces.
+enumerated, **fail closed** and refuse. Per-issue gating (#14) still runs
+regardless — a trusted arming actor is required on every runner, and author or
+editor trust classifies the unit
+([D13](#d13-untrusted-content-classifies-the-unit-arming-authorizes-it)) — this
+predicate is the belt over those braces.
 
 **The mechanism.** For an untrusted repo, planning injects `untrusted-input`
 into `required_capabilities`; local never advertises it, so the standard
@@ -349,9 +371,10 @@ checks are GitHub Actions' job, per the composed gate.
 ### D6: One agent image (the bot devcontainer)
 
 `devcontainers/ci` already resolves `devcontainer.json` (features and all) and
-pushes `ghcr.io/ponderousdev/foreman-devcontainer` on every push to main, built
-on `ubuntu-latest`. That is a plain OCI image, built amd64, which
-neutralizes #30's arm64 footgun for free.
+pushes `ghcr.io/ponderousdev/foreman-devcontainer` on pushes to main that touch
+`.devcontainer/**` or the build workflow (a paths filter — a package release
+does not rebuild the image), built on `ubuntu-latest`. That is a plain OCI
+image, built amd64, which neutralizes #30's arm64 footgun for free.
 
 Fly boots OCI images as a microVM root filesystem — a Docker image is a
 *packaging format*, not a runtime. The DinD binaries inside are **inert weight,
@@ -448,15 +471,17 @@ Why:
 - **uv and Renovate are already present.** uv is pinned in the devcontainer
   Dockerfile; `renovate.json` already runs three custom regex managers of exactly
   this shape.
-- **Publication changes one line of template output, and nothing else.** Only the
-  source expression moves — `git+https://github.com/ponderousdev/foreman@v{{.FOREMAN_VERSION}}`
-  becomes `foreman=={{.FOREMAN_VERSION}}`. Keep `--from` on both sides and even the
-  invocation shape holds steady (`uvx --from <spec> foreman`); the git URL is the
-  only part that is private-specific. What matters is what does *not* move: the pin
-  stays in the same copier-owned var, `task foreman:plan` keeps working, and no
-  consumer takes any action. That matters because
-  [D10](#d10-public-readiness-moves-to-v21-behind-the-sprite) makes public a *when*,
-  not an *if*. Publishing to PyPI then becomes optional rather than a prerequisite.
+- **Publication costs consumers nothing, in two independent steps.** Going
+  public makes the same `git+https` URL work token-free — zero changes anywhere.
+  If Foreman is *later* published to PyPI (optional, never a prerequisite), only
+  the source expression moves —
+  `git+https://github.com/ponderousdev/foreman@v{{.FOREMAN_VERSION}}` becomes
+  `foreman=={{.FOREMAN_VERSION}}`. Keep `--from` on both sides and even the
+  invocation shape holds steady (`uvx --from <spec> foreman`). What matters is
+  what does *not* move: the pin stays in the same copier-owned var,
+  `task foreman:plan` keeps working, and no consumer takes any action. That
+  matters because [D10](#d10-public-readiness-moves-to-v21-behind-the-sprite)
+  makes public a *when*, not an *if*.
 
 Rejected: **GHCR** cannot serve wheels to a Python installer — it hosts OCI
 artifacts, not a package index. **`uv tool install` in post-create** puts the pin
@@ -480,11 +505,14 @@ permission set is uniform across selected repos — so **per-repo granularity li
 in the collaborator grant**, not the token. D11 needs only `pull`; `task
 setup:github` grants `push`, which is where [D10](#d10-public-readiness-moves-to-v21-behind-the-sprite)'s
 dogfooding lands anyway (Foreman pushing branches and opening PRs on its own
-repo). Taking the documented path is the recommendation; the residual is an
-injected agent spamming branches or PRs on foreman, bounded by the ruleset,
-CODEOWNERS, no-workflow-edit, and [D4](#d4-local-is-trusted-input-only) — noise,
-not compromise. See
-[`docs/architecture/security.md`](../docs/architecture/security.md) for the
+repo). Taking the documented path is the recommendation — **conditional on
+[D14](#d14-version-tags-are-immutable)**. With version tags immutable, the
+residual is an injected agent spamming branches or PRs on foreman, bounded by
+the ruleset, CODEOWNERS, no-workflow-edit, and
+[D4](#d4-local-is-trusted-input-only) — noise, not compromise. Without D14 it
+would be compromise: `contents: write` can move tags, and a moved version tag is
+code execution in every consumer's devcontainer on its next `uvx` resolution.
+See [`docs/architecture/security.md`](../docs/architecture/security.md) for the
 permission table and the creation procedure.
 
 **Consequence for #10:** Foreman needs a real `[project.scripts]` console entry
@@ -504,6 +532,64 @@ without a Fly bill. DockerRunner therefore does not advertise
 `untrusted-input`. Revisiting this requires real hardening — a separate host
 for the daemon, or a gVisor-class runtime — and a new decision, not a config
 flip.
+
+### D13: Untrusted content classifies the unit; arming authorizes it
+
+The trust-model table permits untrusted content under sprite, and v2.1's
+dogfooding dispatches issues authored outside `trusted_actors` — so per-issue
+gating cannot simply exclude untrusted authorship, or the sprite's purpose is
+unreachable. (The original #14 criterion — "an issue authored by an untrusted
+actor is excluded even when armed" — predates the `untrusted-input` capability
+and contradicted both.)
+
+The model:
+
+- **Arming authorizes.** The actor on the most recent arming-label event must
+  be in `trusted_actors` — on every runner, always. Arming is the human
+  authorization to dispatch and to spend.
+- **Authorship classifies.** Author and post-arming-editor trust classify the
+  unit's input: any untrusted contribution injects `untrusted-input` into the
+  unit's `required_capabilities`, riding exactly D4's rail — refused under
+  local naming sprite, dispatchable under sprite. No exclusion, no runner-name
+  branch.
+- **Pinning stays absolute.** Arming attests the content as the arming actor
+  saw it. Trusted post-arming edits keep the attestation — trusted editors are
+  attestors. An untrusted post-arming edit breaks it: fail closed until a
+  trusted actor re-arms, and the re-armed unit carries `untrusted-input`.
+
+Two consequences worth naming. On a public repo, D4's repo predicate already
+makes every unit `untrusted-input`, so D13 mostly matters for the private
+dogfood phase (#35) — and for **GitHub Apps**, which can author issues without
+being collaborators (Renovate files its dashboard issue in this very repo) and
+are invisible to D4's collaborators-API enumeration. Per-issue classification
+is what catches them.
+
+### D14: Version tags are immutable
+
+[D11](#d11-distribution-is-a-git-tag-uvx-invocation-not-a-package-index) makes
+`git+https://…@vX.Y.Z` the distribution channel, which makes a version tag
+executable distribution: whoever can move one chooses the code every consumer
+runs next. A tag is a mutable ref; `contents: write` can force-move or delete
+it; the bot PAT is agent-reachable under local
+([D3](#d3-local-accepts-relaxed-separation)) and D11 requires
+`ponderousdev/foreman` on its selected-repo list. Without tag protection, a
+prompt-injected agent could move a version tag and execute code in every
+consumer's devcontainer — next to that consumer's own write token. Branches
+and PRs are bounded by the ruleset and CODEOWNERS; tags were bounded by
+nothing.
+
+Therefore: **before any consumer pins a Foreman tag, `refs/tags/v*` carries a
+ruleset** — creation reserved to the release path (release-please's CI App,
+and org admins for the manual `task release:*` override), update and deletion
+blocked for everyone. The importable JSON ships at
+`.github/Tag Protection Ruleset - Protect Version Tags.json`;
+[`docs/architecture/branch-protection.md`](../docs/architecture/branch-protection.md)
+documents it. Preflight (#15) probes the control empirically: the write token
+must fail to create a scratch tag in the protected namespace, and an
+unexpected success is deleted and fails preflight loudly.
+
+D11's push-grant recommendation stands *because* of this decision — with tags
+immutable, the bot's `push` grant on foreman is branch/PR noise again.
 
 ## Requirements
 
@@ -528,17 +614,24 @@ flip.
 - [ ] `capabilities()` is computed per environment; the verify gate is composed
       from it; `required_capabilities` mismatches — and unknown capability
       names anywhere in config — are refused before dispatch.
-- [ ] Trusted-actor gating validates author, arming actor, and post-arming
-      editors; the trusted input surface is defined; content is pinned against
-      TOCTOU.
+- [ ] Per-issue gating requires a trusted arming actor on every runner and pins
+      content against TOCTOU; author and post-arming-editor trust classify the
+      unit — untrusted contributions inject `untrusted-input` into its required
+      capabilities
+      ([D13](#d13-untrusted-content-classifies-the-unit-arming-authorizes-it))
+      rather than excluding it outright; the trusted input surface is defined.
+- [ ] Every agent role's input surface is defined and enforced in code —
+      implementer (#14), shepherd and `vet` (#46); shepherd decisions consume
+      deterministic signals and trusted-authored text only.
 - [ ] `runner = local` against an untrusted-input repo (public, or private with
       access beyond `trusted_actors`; fail closed) is refused at plan time via
       the `untrusted-input` capability.
 - [ ] Preflight asserts login, that `main`'s effective rules require PRs for
-      the write actor, read-token cannot write, and **write-token cannot edit
-      workflows** — every probe bounded to a scratch ref it cleans up. The
-      ruleset bypass-actor audit is a documented operator-tier check, not a bot
-      assertion.
+      the write actor, read-token cannot write, **write-token cannot edit
+      workflows**, and **write-token cannot create or move version tags**
+      ([D14](#d14-version-tags-are-immutable)) — every probe bounded to a
+      scratch ref it cleans up. The ruleset bypass-actor audit is a documented
+      operator-tier check, not a bot assertion.
 - [ ] Per-unit lock + liveness probe prevent double-dispatch after a crash.
 - [ ] The Foreman v2 architecture ADR is landed.
 
@@ -552,13 +645,21 @@ flip.
       control ships.
 - [ ] Sprite credential delivery is defined and proven before the v2.1 trust
       contract is claimed: scoped read-only, no host-environment inheritance, not
-      persisted into the image or a committed file, and asserted by preflight.
+      persisted into the image or a committed file, and asserted by preflight —
+      with delivery scoping that accounts for Fly app secrets being app-scoped
+      (per-unit isolation needs Machine-level delivery or per-unit apps; #30).
 - [ ] The devcontainer image is digest-pinned and versioned.
 - [ ] The Fly API token lives in a dedicated agents-only Fly org with a spend
       limit, and is the narrowest shape that can manage agent Machines (an
       app-scoped deploy token if that suffices; org-wide only as fallback). It
       is supervisor-only — never delivered into any unit environment — and the
-      trust model records it as agent-reachable under local anyway (D1).
+      trust model records it as agent-reachable under local anyway (D1). Its
+      API reach includes agent-Machine config and exec, so any secret riding
+      Machine config is readable by whoever holds it (#30, #31).
+- [ ] Before untrusted dogfooding, every push- and PR-triggered workflow is
+      audited for what a Foreman-pushed branch of untrusted origin can reach;
+      jobs holding secrets or write permissions are gated so such branches
+      cannot trigger them (#35).
 - [ ] A unit outlives its supervisor safely: a guest-side timeout stops a
       Machine whose Foreman died; preserved Machines have a GC/TTL policy
       (stopped Machines still bill for rootfs storage); unit logs are written
@@ -595,13 +696,27 @@ flip.
 - **Then** planning injects `untrusted-input` into the required capabilities,
   the refusal names it as absent, and sprite is named as the compatible runner.
 
+### Scenario: an untrusted-authored issue dispatches only where the boundary permits it
+
+- **Given** an issue authored by an account outside `trusted_actors`, armed by
+  a trusted actor
+- **When** planning under `runner = local`
+- **Then** the unit's required capabilities include `untrusted-input`
+  ([D13](#d13-untrusted-content-classifies-the-unit-arming-authorizes-it)), the
+  refusal names it as absent, and sprite is named as the compatible runner.
+- **When** planning under `runner = sprite` (v2.1)
+- **Then** the unit is dispatchable, and the dispatched prompt contains exactly
+  the content pinned at arming.
+- **And** an untrusted post-arming edit invalidates the arming — dispatch fails
+  closed until a trusted actor re-arms the edited content.
+
 ### Scenario: every preflight assertion is proven, not assumed
 
 Fine-grained token permissions cannot be introspected, so each control below is
 probed empirically — within a hard rule: probes only ever touch scratch refs
 they clean up, never `main`. For an API probe the call *is* the write, so
 "non-destructive" means *bounded*: an unexpected success is confined to a
-scratch ref, and preflight fails loudly on it. All four must pass before any
+scratch ref, and preflight fails loudly on it. All five must pass before any
 dispatch.
 
 - **Given** the write token, the read token, and a ruleset requiring pull requests
@@ -614,6 +729,10 @@ dispatch.
   [D3](#d3-local-accepts-relaxed-separation)'s relaxed separation leans on. The
   probe's file content is inert YAML with no `on:` trigger, so even an
   unexpected success cannot cause a workflow run
+- **And** the write token is proven unable to create or update a version tag
+  ([D14](#d14-version-tags-are-immutable)) — probed with a scratch tag inside
+  the protected `v*` namespace; an unexpected success is deleted and fails
+  preflight loudly
 - **And** no probe mutates anything beyond a scratch ref it cleans up; none
   targets `main`.
 
@@ -648,10 +767,13 @@ recorded cadence (e.g. alongside PAT rotation). See #15.
 Each is tracked; none is unowned.
 
 - **Secrets delivery to a Sprite** (#30). There is no host, no
-  `initializeCommand`, and no `op` CLI in the bot profile. Fly secrets set by
-  Foreman at Machine-create time is the obvious answer; confirm it. Weigh
-  per-unit GitHub App installation tokens (repo-scoped, ~1 h) against a static
-  read PAT — noting `timeouts.dispatch_min = 90` outlives a 1 h token.
+  `initializeCommand`, and no `op` CLI in the bot profile. "Fly secrets" is the
+  obvious answer with a scoping trap: Fly *app* secrets are app-scoped — every
+  Machine in the app sees them — so per-unit tokens need Machine-config `env`
+  (readable by any holder of the Fly API token, which is agent-reachable under
+  local, D1/D3) or one app per unit. Weigh per-unit GitHub App installation
+  tokens (repo-scoped, ~1 h) against a static read PAT — noting
+  `timeouts.dispatch_min = 90` outlives a 1 h token.
 - **Devcontainer image boot time on Fly** (#33). Measure before optimizing. The
   build workflow reclaims ~13GB of runner disk, so the image is large.
 - **Runner test strategy** (#40). Does CI boot a real Fly Machine, or is that a
@@ -664,7 +786,7 @@ Each is tracked; none is unowned.
 **This document's lifecycle.** It currently does three jobs that
 [`specs/README.md`](README.md) layers apart, deliberately, while the design is
 still moving — splitting now would create three copies to drift. Once the design
-settles: D1–D12 become the architecture ADR that #19 already requires (immutable;
+settles: D1–D14 become the architecture ADR that #19 already requires (immutable;
 superseded, never edited), the architecture sections move to `docs/architecture/`
 (living; they describe what *is*), and this spec keeps only requirements and
 acceptance criteria — reaching `Status: Implemented` when v2.0 ships, and staying
@@ -705,8 +827,25 @@ sprite's allowlist necessarily includes github.com and api.anthropic.com, so a
 prompt-injected agent can push what it holds to an attacker-controlled repo
 with attacker-supplied credentials. The asset is bounded by what the unit
 holds: a read token whose selected-repo list mixes no private repos into
-untrusted dispatches (#13), ideally minted per unit (#30). Egress control
-(#31) narrows the channel; it cannot close this one.
+untrusted dispatches (#13), ideally minted per unit (#30) — and
+`CLAUDE_CODE_OAUTH_TOKEN`, a spendable credential against the operator's Claude
+subscription, which is part of the same prize. Weigh `billing = "api"` with a
+per-unit, budget-capped API key for untrusted dispatches (v1 already supports
+`FOREMAN_ANTHROPIC_API_KEY` and USD budgets); if the OAuth token ships into
+untrusted units anyway, record that as a decision, not a default inherited
+silently (#30). Egress control (#31) narrows the channel; it cannot close this
+one.
+
+**Residual to bound before v2.1 dogfooding: CI executes Foreman-pushed
+branches.** A sprite contains the agent, but its commits return by bundle and
+Foreman pushes them as a *same-repo* branch and opens a PR — so push- and
+PR-triggered workflows run attacker-influenced inputs (Taskfile, Dockerfile,
+tests) with whatever the job holds, and same-repo guards
+(`head.repo == repository`) treat the branch as trusted. No-workflow-edit stops
+workflow *rewrites*, not attacker-modified *inputs* to existing workflows.
+Today `build.yml` runs with `contents: read` (good), while
+`devcontainer-build.yml` holds `packages: write` and triggers on
+`.devcontainer/**` PR paths. #35 carries the audit criterion.
 
 **Vocabulary migration (decided with #16):** one task vocabulary across the
 ecosystem — `verify` = check + build + test, `ci` = verify + e2e + security —
@@ -715,6 +854,22 @@ in all but name, so hooks lose no speed). The template change lands in
 harmon-init as #16's counterpart change there; Foreman's own repo follows when
 its dogfood `.foreman.toml` lands. Without this, dogfooding would run a
 test-free in-unit gate.
+
+**Naming: `preflight` is the assertion gate.** v1 ships a `foreman:preflight`
+that means something else — a read-only agent analysis of target issues that
+drafts correction comments for human approval. That command is renamed
+`foreman:vet` during extraction (#10), freeing the name for #15's security
+assertions. One rename, done at the move, so no consumer ever sees both
+meanings.
+
+**"Sprite" is this project's word, pinned to the Machines API.** SpriteRunner
+drives the Fly Machines API, booting the pinned OCI image — one Machine per
+unit, created and stopped by Foreman (#30). It is not Fly's separately launched
+"Sprites" product (sprites.dev), whose image, lifecycle, and billing semantics
+differ. Evaluating that product is a separate decision — relevant to #33's
+prime-and-snapshot evaluation, since checkpoint/restore is native there — and
+adopting it would rewrite #30's mechanics, not just rename them. The
+[glossary](../docs/glossary.md) disambiguates.
 
 **Package versioning:** the milestone is "v2.0" but release-please starts
 wherever it is told. Decide the first tag deliberately (#11) — aligning at
