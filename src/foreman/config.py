@@ -16,11 +16,17 @@ from foreman.util import ForemanError, warn
 
 CONFIG_FILE = ".foreman.toml"
 
+# Runner names describe WHERE execution happens (ADR 0003); the registry in
+# foreman.runner resolves them. sprite ships in v2.1, docker in v2.2 — both
+# names are already valid config so plan-time refusals can name them.
+KNOWN_RUNNERS = ("local", "sprite", "docker")
+
 
 @dataclass
 class Config:
     backend: str = "claude"
     backend_version: str = ""  # expected CLI version prefix; "" = don't assert
+    runner: str = "local"  # where units execute: local | sprite (v2.1) | docker (v2.2)
     require_approval: bool = True  # strict arming: only foreman-approved units dispatch
     inputs: str = "auto"  # auto | fields | labels
     verify_command: list[str] = field(default_factory=lambda: ["task", "ci"])
@@ -62,6 +68,7 @@ class Config:
 
 _ENV_OVERRIDES: dict[str, tuple[str, Callable[[str], object]]] = {
     "FOREMAN_BACKEND": ("backend", str),
+    "FOREMAN_RUNNER": ("runner", str),
     "FOREMAN_INPUTS": ("inputs", str),
     "FOREMAN_MAX_PARALLEL": ("max_parallel", int),
     "FOREMAN_BILLING": ("billing", str),
@@ -120,6 +127,11 @@ def _apply(cfg: Config, data: dict, source: str) -> None:
 
 
 def _validate(cfg: Config) -> None:
+    if cfg.runner not in KNOWN_RUNNERS:
+        raise ForemanError(
+            f"config: runner must be one of {'|'.join(KNOWN_RUNNERS)}, "
+            f"got '{cfg.runner}'"
+        )
     if cfg.inputs not in ("auto", "fields", "labels"):
         raise ForemanError(
             f"config: inputs must be auto|fields|labels, got '{cfg.inputs}'"

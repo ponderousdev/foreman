@@ -6,6 +6,13 @@ Date: 2026-07-12
 
 Accepted
 
+Amended by [ADR 0003](0003-foreman-v2-runner-seam.md) (2026-07-17): Foreman
+is extracted to the standalone `ponderousdev/foreman` package, distributed
+as a pinned `uvx` git-tag invocation (D11). "Shipped by the template to
+every generated repo" below describes v1; harmon-init now retains only a
+thin wrapper integration, and `scripts/foreman/` is no longer
+template-shipped source.
+
 ## Context
 
 A milestone contains well-specced issues with dependency edges. Working them
