@@ -145,7 +145,7 @@ def pr_body(
     lines.append("")
     lines.append("---")
     lines.append(
-        f"_Opened by foreman after a green `{ ' '.join(cfg.verify_command) }` in the unit's "
+        f"_Opened by foreman after a green `{' '.join(cfg.verify_command)}` in the unit's "
         "worktree. Merging is a human decision; foreman never merges._"
     )
     return "\n".join(lines) + "\n"

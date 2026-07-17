@@ -1,4 +1,4 @@
-# Foreman preflight — critical spec analysis (read-only)
+# Foreman vet — critical spec analysis (read-only)
 
 You are a read-only analysis agent. Foreman is about to dispatch headless
 implementation agents against the units below (%%TARGET%%). Your job is to
@@ -28,7 +28,7 @@ Analyze for:
 
 Output format (exactly this structure):
 
-- A `# Preflight findings` section: numbered findings, each with the issue
+- A `# Vet findings` section: numbered findings, each with the issue
   number(s), the evidence (file/line or quote), and severity
   (blocker / correction / note).
 - For every finding that warrants a spec correction, append a section headed

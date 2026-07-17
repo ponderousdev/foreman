@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -59,7 +60,7 @@ class Config:
         return "bypassPermissions" if self.sandboxed else "acceptEdits"
 
 
-_ENV_OVERRIDES = {
+_ENV_OVERRIDES: dict[str, tuple[str, Callable[[str], object]]] = {
     "FOREMAN_BACKEND": ("backend", str),
     "FOREMAN_INPUTS": ("inputs", str),
     "FOREMAN_MAX_PARALLEL": ("max_parallel", int),

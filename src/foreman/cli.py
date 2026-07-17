@@ -1,7 +1,11 @@
 """Command-line interface. Taskfile targets are thin wrappers over these
-subcommands: plan, preflight, dispatch, shepherd, watch, status, retry,
-cleanup. plan/status/preflight-draft are read-only by construction
+subcommands: plan, vet, dispatch, shepherd, watch, status, retry,
+cleanup. plan/status/vet-draft are read-only by construction
 (github.GitHub.read_only) — the write contract is enforced, not promised.
+
+Naming note (spec, "Naming"): `vet` is v1's issue-analysis command, renamed
+from `preflight` during extraction so #15's security assertion gate can take
+the `preflight` name without two meanings ever coexisting.
 """
 
 from __future__ import annotations
@@ -14,8 +18,11 @@ from pathlib import Path
 from foreman import backend as backend_mod
 from foreman import dispatch as dispatch_mod
 from foreman import inputs as inputs_mod
-from foreman import report, shepherd as shepherd_mod, spec, watch as watch_mod, worktree
-from foreman.config import Config, load as load_config
+from foreman import report, spec, worktree
+from foreman import shepherd as shepherd_mod
+from foreman import watch as watch_mod
+from foreman.config import Config
+from foreman.config import load as load_config
 from foreman.github import Gh, GitHub
 from foreman.graph import (
     Target,
@@ -48,15 +55,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     _add_target_args(p_plan)
 
-    p_preflight = sub.add_parser(
-        "preflight",
+    p_vet = sub.add_parser(
+        "vet",
         help="read-only agent analysis of the target; drafts correction comments",
     )
-    _add_target_args(p_preflight)
-    p_preflight.add_argument(
+    _add_target_args(p_vet)
+    p_vet.add_argument(
         "--post",
         action="store_true",
-        help="post the human-reviewed drafted comments from .foreman/preflight/comments/",
+        help="post the human-reviewed drafted comments from .foreman/vet/comments/",
     )
 
     p_dispatch = sub.add_parser(
@@ -162,9 +169,7 @@ def _print_plan(gh: GitHub, cfg: Config, target: Target) -> int:
     notices = _concurrent_activity(gh, target)
     if notices:
         print()
-        print(
-            "Concurrent-activity notice (collisions possible — preflight should look):"
-        )
+        print("Concurrent-activity notice (collisions possible — vet should look):")
         for notice in notices:
             print(f"  - {notice}")
     return 1 if fail_loud else 0
@@ -416,9 +421,9 @@ def cmd_cleanup(_args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_preflight(args: argparse.Namespace) -> int:
+def cmd_vet(args: argparse.Namespace) -> int:
     cfg, root, gh = _context(read_only=not args.post)
-    comments_dir = root / cfg.runtime_dir / "preflight" / "comments"
+    comments_dir = root / cfg.runtime_dir / "vet" / "comments"
     if args.post:
         posted = 0
         for path in sorted(comments_dir.glob("*.md")):
@@ -426,7 +431,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
             body = path.read_text(encoding="utf-8").strip()
             if not body:
                 continue
-            gh.post_preflight_correction(number, body, human_approved=True)
+            gh.post_vet_correction(number, body, human_approved=True)
             path.rename(path.with_suffix(".posted"))
             posted += 1
             info(f"posted correction comment on #{number}")
@@ -443,7 +448,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
         bodies.append(f"# Unit #{number}: {unit.title}\n\n{unit.body}")
         for sub in unit.sub_issues:
             bodies.append(
-                f"## Sub-issue #{sub['number']}: {sub.get('title','')}\n\n{sub.get('body') or ''}"
+                f"## Sub-issue #{sub['number']}: {sub.get('title', '')}\n\n{sub.get('body') or ''}"
             )
         for comment in comments:
             bodies.append(f"### Comment on #{number}\n\n{comment.get('body') or ''}")
@@ -452,8 +457,8 @@ def cmd_preflight(args: argparse.Namespace) -> int:
         "CONCURRENT": "\n".join(_concurrent_activity(gh, target)) or "(none detected)",
         "UNITS": "\n\n---\n\n".join(bodies),
     }
-    prompt = spec.load_prompt("preflight", tokens)
-    run_dir = root / cfg.runtime_dir / "preflight"
+    prompt = spec.load_prompt("vet", tokens)
+    run_dir = root / cfg.runtime_dir / "vet"
     run_dir.mkdir(parents=True, exist_ok=True)
     prompt_file = run_dir / "prompt.md"
     write_text(prompt_file, prompt)
@@ -478,11 +483,11 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     comments_dir.mkdir(parents=True, exist_ok=True)
     for number, body in drafted.items():
         write_text(comments_dir / f"{number}.md", body)
-    info(f"preflight findings: {findings_file}")
+    info(f"vet findings: {findings_file}")
     if drafted:
         info(
             f"{len(drafted)} drafted correction comment(s) in {comments_dir} — review/edit "
-            "them, then run: task foreman:preflight -- --post"
+            "them, then run: foreman vet --post"
         )
     else:
         info("no correction comments drafted")
@@ -517,7 +522,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
 _COMMANDS = {
     "plan": cmd_plan,
-    "preflight": cmd_preflight,
+    "vet": cmd_vet,
     "dispatch": cmd_dispatch,
     "shepherd": cmd_shepherd,
     "watch": cmd_watch,

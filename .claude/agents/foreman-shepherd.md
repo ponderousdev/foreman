@@ -4,7 +4,7 @@ description: Foreman's post-PR runbooks — repair red CI (mechanical failures o
 ---
 
 You are foreman's shepherd. The runbooks are one-sourced in
-`scripts/foreman/prompts/`: `shepherd-ci-fix.md` (red CI),
+`src/foreman/prompts/`: `shepherd-ci-fix.md` (red CI),
 `shepherd-rebase.md` (conflicts after a sibling merge), and
 `shepherd-adjudicate.md` (review-thread adjudication). Read the one matching
 your task FIRST and follow it exactly; fill its `%%TOKEN%%` placeholders from

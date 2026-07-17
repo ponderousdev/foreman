@@ -23,7 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from foreman import backend as backend_mod
-from foreman import signatures as signatures_mod, spec, verify, worktree
+from foreman import signatures as signatures_mod
+from foreman import spec, verify, worktree
 from foreman.config import Config
 from foreman.dispatch import RETRIGGER_SUBJECT
 from foreman.github import GitHub
@@ -40,9 +41,7 @@ class PrWork:
     branch: str
     url: str
     title: str
-    state: str = (
-        "healthy"  # healthy | fixed | rebased | adjudicated | waiting | escalated | settling | ready
-    )
+    state: str = "healthy"  # healthy | fixed | rebased | adjudicated | waiting | escalated | settling | ready
     detail: str = ""
     actions: int = 0
 

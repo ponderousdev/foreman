@@ -24,6 +24,9 @@ brew "snyk/tap/snyk"
 # Runtime for npx-based tools (commitlint, markdownlint-cli2)
 brew "node"
 
+# Python package manager (the foreman package itself is uv-managed)
+brew "uv"
+
 # Devcontainer
 brew "hadolint"
 

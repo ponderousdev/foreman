@@ -7,7 +7,7 @@ import unittest
 
 from foreman import inputs as inputs_mod
 from foreman.config import Config
-from foreman.tests.fakes import issue_json, make_github
+from tests.fakes import issue_json, make_github
 
 
 class ArmingLabels(unittest.TestCase):

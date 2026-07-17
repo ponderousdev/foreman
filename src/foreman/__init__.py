@@ -8,8 +8,13 @@ to mergeable. Every merge is a human decision — foreman never merges.
 State of record is GitHub + git, re-derived every tick; foreman stores no
 local state files (worktrees and logs are disposable operational artifacts).
 
-Spec: https://github.com/evanharmon1/harmon-init/issues/258
+Spec: specs/foreman-v2.md (this repo)
 Docs: docs/architecture/foreman.md
 """
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("foreman")
+except PackageNotFoundError:  # running from a bare checkout without install
+    __version__ = "0.0.0"

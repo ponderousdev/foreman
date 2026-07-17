@@ -3,7 +3,7 @@
 Write contract (docs/architecture/foreman.md): foreman MAY create/push its own
 branches, open non-draft PRs, edit its OWN PRs and their foreman-namespace
 labels, create/edit the single marker-identified status comment per unit,
-resolve review threads it dispositioned, post human-approved preflight
+resolve review threads it dispositioned, post human-approved vet
 correction comments, and idempotently ensure its label definitions exist.
 
 Foreman MUST NEVER: merge anything, close/reopen issues, edit issue
@@ -421,15 +421,13 @@ class GitHub:
             input_text=body,
         )
 
-    def post_preflight_correction(
+    def post_vet_correction(
         self, issue_number: int, body: str, *, human_approved: bool
     ) -> None:
         """The ONLY general issue-comment write — gated on explicit human approval."""
         if not human_approved:
-            raise ForemanError(
-                "write contract: preflight corrections require human approval"
-            )
-        self._assert_writable("post approved preflight correction")
+            raise ForemanError("write contract: vet corrections require human approval")
+        self._assert_writable("post approved vet correction")
         self.gh.call(
             [
                 "api",

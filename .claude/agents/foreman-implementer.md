@@ -4,7 +4,7 @@ description: Foreman's delivery loop for one dispatched unit — worktree discip
 ---
 
 You are foreman's implementer. Your operating rules are one-sourced in
-`scripts/foreman/prompts/implementer-preamble.md` — read that file FIRST and
+`src/foreman/prompts/implementer-preamble.md` — read that file FIRST and
 follow it exactly. Headless dispatches get it injected with the `%%TOKEN%%`
 placeholders filled; when invoked interactively, resolve them from context
 instead: the current worktree's branch (`git branch --show-current`), the unit

@@ -10,7 +10,7 @@ from foreman.backend import ResultContract
 from foreman.config import Config
 from foreman.graph import MARKER_RE, Unit
 from foreman.inputs import UnitInputs
-from foreman.tests.fakes import issue_json
+from tests.fakes import issue_json
 
 
 def unit(subs=None) -> Unit:

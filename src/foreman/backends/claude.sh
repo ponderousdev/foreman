@@ -48,7 +48,7 @@ if [ "${FOREMAN_BILLING:-subscription}" = "api" ]; then
     unset CLAUDE_CODE_OAUTH_TOKEN
 fi
 
-# Read-only analysis mode (preflight): plain-text final output on stdout
+# Read-only analysis mode (vet): plain-text final output on stdout
 # (foreman captures it), no file edits, no shell.
 if [ "${FOREMAN_READONLY:-0}" = "1" ]; then
     exec claude -p --permission-mode default \

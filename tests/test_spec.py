@@ -8,7 +8,7 @@ import unittest
 from foreman import spec
 from foreman.config import Config
 from foreman.graph import Unit
-from foreman.tests.fakes import issue_json, make_github
+from tests.fakes import issue_json, make_github
 
 BODY = """Intro.
 

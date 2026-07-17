@@ -28,7 +28,7 @@ echo "mock adapter: cwd=$(pwd) cmd=$cmd status=${FOREMAN_MOCK_STATUS:-completed}
 
 if [ "${FOREMAN_READONLY:-0}" = "1" ]; then
     cat <<'FINDINGS'
-# Mock preflight findings
+# Mock vet findings
 
 No real analysis — this is the seam-proof adapter.
 

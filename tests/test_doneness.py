@@ -7,7 +7,7 @@ import unittest
 from foreman.config import Config
 from foreman.graph import dependency_satisfied
 from foreman.inputs import UnitInputs
-from foreman.tests.fakes import issue_json, make_github, pr_json
+from tests.fakes import issue_json, make_github, pr_json
 
 
 def cfg_with_bot() -> Config:

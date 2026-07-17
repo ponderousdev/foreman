@@ -7,7 +7,7 @@ import unittest
 
 from foreman.config import Config
 from foreman.graph import Target, Unit, detect_cycle, load_target, waves
-from foreman.tests.fakes import issue_json, make_github
+from tests.fakes import issue_json, make_github
 
 
 def bare_unit(number: int, blocked_by: list[int] | None = None) -> Unit:

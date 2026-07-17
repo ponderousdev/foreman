@@ -111,7 +111,7 @@ def resolve(gh: GitHub, cfg: Config, issue: dict, mode: str) -> UnitInputs:
                 )
         if timeout is not None:
             try:
-                out.timeout_min = int(timeout)  # type: ignore[arg-type]
+                out.timeout_min = int(timeout)  # type: ignore[call-overload]
             except (TypeError, ValueError):
                 out.errors.append(
                     f"#{number}: {FIELD_TIMEOUT} is not a number: {timeout!r}"

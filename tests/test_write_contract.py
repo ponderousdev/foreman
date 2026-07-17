@@ -12,8 +12,8 @@ import unittest
 from foreman import github as github_mod
 from foreman.config import Config
 from foreman.github import STATUS_MARKER
-from foreman.tests.fakes import make_github
 from foreman.util import ForemanError
+from tests.fakes import make_github
 
 
 def _mutations(gh):
@@ -31,8 +31,8 @@ def _mutations(gh):
             lambda: gh.upsert_status_comment(1, STATUS_MARKER + "\nb"),
         ),
         (
-            "post_preflight_correction",
-            lambda: gh.post_preflight_correction(1, "b", human_approved=True),
+            "post_vet_correction",
+            lambda: gh.post_vet_correction(1, "b", human_approved=True),
         ),
         ("resolve_review_thread", lambda: gh.resolve_review_thread("T_x")),
     ]
@@ -68,10 +68,10 @@ class IdentityAssertion(unittest.TestCase):
 
 
 class GuardedChannels(unittest.TestCase):
-    def test_preflight_comment_requires_human_approval(self):
+    def test_vet_comment_requires_human_approval(self):
         gh, runner = make_github()
         with self.assertRaises(ForemanError):
-            gh.post_preflight_correction(1, "body", human_approved=False)
+            gh.post_vet_correction(1, "body", human_approved=False)
         self.assertFalse(runner.called_with_prefix(["api", "--method", "POST"]))
 
     def test_own_pr_guard_rejects_foreign_prs(self):
