@@ -20,10 +20,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from foreman import backend as backend_mod
+from foreman import gate, report, spec, verify, worktree
 from foreman import handoff as handoff_mod
 from foreman import pr as pr_mod
-from foreman import report, spec, verify, worktree
 from foreman import runner as runner_mod
+from foreman import signatures as signatures_mod
+from foreman import trust as trust_mod
 from foreman.config import Config
 from foreman.github import GitHub
 from foreman.graph import Target, Unit, dependency_satisfied
@@ -51,9 +53,13 @@ class Outcome:
 
 
 def eligibility(
-    gh: GitHub, cfg: Config, target: Target
+    gh: GitHub, cfg: Config, target: Target, selection: Selection
 ) -> tuple[list[Unit], list[Outcome]]:
-    """Split units into ready-to-dispatch and skipped (with reasons)."""
+    """Split units into ready-to-dispatch and skipped (with reasons).
+
+    Trust and capability checks consume the unit's classification and the
+    selection's refusal composer — never a runner name (the leak test keeps
+    it that way)."""
     ready: list[Unit] = []
     skipped: list[Outcome] = []
     remote_name = worktree.remote(cfg)
@@ -75,6 +81,23 @@ def eligibility(
             skipped.append(
                 Outcome(unit, "not-armed", detail="no foreman approval input")
             )
+            continue
+        if unit.trust is not None and unit.trust.refusals:
+            skipped.append(
+                Outcome(unit, "refused", detail="; ".join(unit.trust.refusals))
+            )
+            continue
+        cap_message = selection.refusal(unit.required_capabilities)
+        if cap_message:
+            detail = cap_message
+            if unit.trust is not None and unit.trust.contributors:
+                detail += " (untrusted contributions: " + ", ".join(
+                    unit.trust.contributors[:3]
+                )
+                if len(unit.trust.contributors) > 3:
+                    detail += ", …"
+                detail += ")"
+            skipped.append(Outcome(unit, "refused", detail=detail))
             continue
         spec_info = spec.validate(unit)
         if spec_info.errors:
@@ -233,6 +256,8 @@ def _dispatch_locked(
         run_dir, recorded_hash=recorded_hash, base_sha=base_sha, branch=branch
     )
 
+    advertised = selection.runner.capabilities()
+    gate_cmds = gate.compose(cfg, advertised)
     handoffs = spec.collect_handoffs(gh, cfg, unit)
     prompt_text = spec.assemble_dispatch_prompt(
         gh,
@@ -244,6 +269,8 @@ def _dispatch_locked(
         comments=comments,
         excluded_comments=excluded,
         handoffs=handoffs,
+        verify_display=gate.describe(gate_cmds),
+        capabilities=advertised,
     )
     prompt_file = run_dir / "prompt.md"
     write_text(prompt_file, prompt_text)
@@ -264,6 +291,7 @@ def _dispatch_locked(
         unit_run_dir=run_dir,
         prompt_file=prompt_file,
         timeout_min=timeout_min,
+        gate_cmds=gate_cmds,
     )
     return _conclude(
         gh,
@@ -446,12 +474,44 @@ def _conclude(
             + ", ".join(workflow_touched),
         )
 
-    ok, verify_tail = verify.run_verify(cfg, wt_path, run_dir)
+    gate_cmds = gate.compose(cfg, runner.capabilities())
+    ok, verify_tail, failed_cmd = verify.run_gate(gate_cmds, wt_path, run_dir)
     if not ok:
+        failed_display = " ".join(failed_cmd or gate_cmds[0])
+        # Route the failure through the signature catalog BEFORE any resume
+        # state (#18): an environmental failure must never be handed back to
+        # an agent as a code bug to "fix" by weakening code.
+        sig = signatures_mod.match(verify_tail, signatures_mod.load())
+        if sig is not None and sig.action == "environment":
+            return preserved(
+                "failed",
+                f"environmental failure '{sig.name}' during verify — fix the "
+                f"environment, not the code.\n\nfull log: {run_dir / 'verify.log'}",
+                f"environmental failure '{sig.name}' during verify "
+                f"({failed_display}) — needs a human, not an agent",
+            )
         return preserved(
             "failed",
-            "verification failed:\n\n" + verify_tail,
-            f"verification failed ({' '.join(cfg.verify_command)})",
+            "verification failed ("
+            + failed_display
+            + f")\n\nfull log: {run_dir / 'verify.log'}\n\n"
+            + verify_tail,
+            f"verification failed ({failed_display})",
+        )
+
+    # D4/D13 re-evaluated at dispatch: visibility, access, authorship, or
+    # arming drift between plan and push fails closed (TOCTOU).
+    repo_now = trust_mod.repo_trust(gh, cfg)
+    trust_now = trust_mod.classify_unit(gh, cfg, unit, mode or "labels")
+    drift = list(trust_now.refusals)
+    cap_message = selection.refusal(trust_mod.required_for(cfg, repo_now, trust_now))
+    if cap_message:
+        drift.append(cap_message)
+    if drift:
+        return preserved(
+            "refused",
+            "trust re-validation failed at dispatch: " + "; ".join(drift),
+            "not pushed — trust drift (fail closed): " + "; ".join(drift),
         )
 
     fresh = pr_mod.freshness_check(
@@ -476,6 +536,7 @@ def _conclude(
         human_tasks=human_tasks,
         spec_hash_hex=recorded_hash,
         base_sha=base_sha,
+        verify_display=gate.describe(gate_cmds),
     )
     url = pr_mod.open_pr(
         gh, cfg, unit, title=title, body=body, branch=branch, base=gh.default_branch()
@@ -515,7 +576,7 @@ def run_dispatch(
     *,
     max_parallel: int | None = None,
 ) -> list[Outcome]:
-    ready, outcomes = eligibility(gh, cfg, target)
+    ready, outcomes = eligibility(gh, cfg, target, selection)
     if ready:
         info(
             f"dispatching {len(ready)} unit(s): {', '.join('#' + str(u.number) for u in ready)}"

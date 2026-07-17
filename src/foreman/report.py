@@ -54,6 +54,7 @@ STATE_ICONS = {
     "merged": "🎉",
     "skipped": "⏭",
     "not-armed": "🔒",
+    "refused": "⛔",
 }
 
 

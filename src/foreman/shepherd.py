@@ -23,8 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from foreman import backend as backend_mod
+from foreman import gate, spec, verify, worktree
 from foreman import signatures as signatures_mod
-from foreman import spec, verify, worktree
 from foreman.config import Config
 from foreman.dispatch import RETRIGGER_SUBJECT
 from foreman.github import GitHub
@@ -170,13 +170,16 @@ def _resume_agent(
     )
 
 
-def _common_tokens(gh: GitHub, cfg: Config, work: PrWork) -> dict[str, str]:
+def _common_tokens(
+    gh: GitHub, cfg: Config, selection: Selection, work: PrWork
+) -> dict[str, str]:
+    composed = gate.compose(cfg, selection.runner.capabilities())
     return {
         "PR_URL": work.url,
         "BRANCH": work.branch,
         "UNIT_NUMBER": str(work.unit_number),
         "DEFAULT_BRANCH": gh.default_branch(),
-        "VERIFY_COMMAND": " ".join(cfg.verify_command),
+        "VERIFY_COMMAND": gate.describe(composed),
     }
 
 
@@ -231,7 +234,7 @@ def shepherd_pr(
             return work
         # Mechanical (or novel) failure → one bounded agent fix.
         work.actions += 1
-        tokens = _common_tokens(gh, cfg, work)
+        tokens = _common_tokens(gh, cfg, selection, work)
         tokens["FAILURE_EXCERPT"] = failure_text or json.dumps(failed[:3], indent=2)
         result = _resume_agent(
             gh, cfg, root, selection, work, "shepherd-ci-fix", tokens
@@ -281,14 +284,16 @@ def shepherd_pr(
                 )
             return work
         work.actions += 1
-        tokens = _common_tokens(gh, cfg, work)
+        tokens = _common_tokens(gh, cfg, selection, work)
         tokens["CONFLICTS"] = "\n".join(f"- {c}" for c in conflicts)
         result = _resume_agent(
             gh, cfg, root, selection, work, "shepherd-rebase", tokens
         )
         if result.ok:
-            ok, _tail = verify.run_verify(
-                cfg, wt_path, backend_mod.unit_dir(cfg, root, work.unit_number)
+            ok, _tail, _failed = verify.run_gate(
+                gate.compose(cfg, selection.runner.capabilities()),
+                wt_path,
+                backend_mod.unit_dir(cfg, root, work.unit_number),
             )
             if ok:
                 selection.make_handoff(wt_path, None).push(
@@ -316,7 +321,7 @@ def shepherd_pr(
                 f"- thread `{thread['id']}` on `{thread.get('path') or 'PR'}` by @{author}:\n"
                 f"  > " + (first.get("body") or "").strip().replace("\n", "\n  > ")
             )
-        tokens = _common_tokens(gh, cfg, work)
+        tokens = _common_tokens(gh, cfg, selection, work)
         tokens["THREADS"] = "\n".join(rendered)
         result = _resume_agent(
             gh, cfg, root, selection, work, "shepherd-adjudicate", tokens

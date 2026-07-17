@@ -36,9 +36,12 @@ non-negotiable.
 4. Commit as you go with Conventional Commits
    (`%%COMMIT_TYPE%%(scope): subject`), referencing `#%%UNIT_NUMBER%%`.
    Leave the worktree clean: no uncommitted or untracked files.
-5. Before finishing, run the full verification gate — `%%VERIFY_COMMAND%%` —
-   in the worktree and fix every failure. Foreman re-runs the same gate and
-   will not open a PR on red; your run just catches failures cheaply.
+5. Inner loop vs final gate: while iterating, use fast, focused feedback —
+   `task check`, `task test`, a single test file — not the full gate on
+   every edit. Then, before finishing, run the full authoritative gate —
+   `%%VERIFY_COMMAND%%` — in the worktree once and fix every failure.
+   Foreman re-runs the same gate and will not open a PR on red; your run
+   just catches failures cheaply.
 6. Self-review your final diff against the spec before finishing. Check
    follow-through: a fix applied to one call site must be applied to every
    sibling site.

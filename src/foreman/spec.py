@@ -111,14 +111,18 @@ def human_only_tasks(unit: Unit, info: SpecInfo) -> list[str]:
 
 
 def trusted_comments(gh: GitHub, cfg: Config, number: int) -> tuple[list[dict], int]:
-    """Comments safe to embed in prompts + count of excluded ones."""
+    """Comments safe to embed in prompts + count of excluded ones.
+
+    Trusted means the author is in `trusted_actors` (or foreman itself) —
+    the explicit-actor list that D4/D13 use everywhere; author-association
+    trust (v1's comment_trust) is gone. Excluded comments never reach a
+    prompt, which is why they do not join the D13 classification either."""
     kept: list[dict] = []
     excluded = 0
     me = gh.viewer()
     for comment in gh.issue_comments(number):
         author = (comment.get("user") or {}).get("login", "")
-        association = comment.get("author_association", "")
-        if association in cfg.comment_trust or author == me:
+        if author == me or author in cfg.trusted_actors:
             kept.append(comment)
         else:
             excluded += 1
@@ -176,17 +180,24 @@ def assemble_dispatch_prompt(
     comments: list[dict],
     excluded_comments: int,
     handoffs: list[tuple[int, str]],
+    verify_display: str,
+    capabilities: set[str],
 ) -> str:
     tokens = {
         "UNIT_NUMBER": str(unit.number),
         "UNIT_TITLE": unit.title,
         "BRANCH": branch,
         "DEFAULT_BRANCH": default_branch,
-        "VERIFY_COMMAND": " ".join(cfg.verify_command),
+        "VERIFY_COMMAND": verify_display,
         "RESULT_FILE": result_file,
         "COMMIT_TYPE": unit.inputs.commit_type if unit.inputs else cfg.default_type,
     }
     sections = [load_prompt("implementer-preamble", tokens)]
+    if "ports" not in capabilities:
+        # Capability-conditional, never a global prompt constant (#24): the
+        # constraint models concurrency in a shared netns, not "local". A
+        # sprite has ports and must keep its browser.
+        sections.append(load_prompt("ports-constraint", tokens))
 
     sections.append(f"# Unit #{unit.number}: {unit.title}\n\n{unit.body.strip()}")
     for sub in unit.sub_issues:

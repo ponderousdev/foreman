@@ -103,6 +103,7 @@ def pr_body(
     human_tasks: list[str],
     spec_hash_hex: str,
     base_sha: str,
+    verify_display: str,
 ) -> str:
     lines: list[str] = []
     lines.append(marker(unit.number, spec_hash_hex, base_sha))
@@ -145,7 +146,7 @@ def pr_body(
     lines.append("")
     lines.append("---")
     lines.append(
-        f"_Opened by foreman after a green `{' '.join(cfg.verify_command)}` in the unit's "
+        f"_Opened by foreman after a green `{verify_display}` in the unit's "
         "worktree. Merging is a human decision; foreman never merges._"
     )
     return "\n".join(lines) + "\n"

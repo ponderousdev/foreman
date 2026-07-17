@@ -85,26 +85,23 @@ class SpecHash(unittest.TestCase):
 
 class TrustedComments(unittest.TestCase):
     def test_untrusted_authors_are_excluded(self):
-        cfg = Config()
+        cfg = Config(trusted_actors=["owner"])
         gh, runner = make_github(cfg)
         comments = [
             {
                 "id": 1,
                 "body": "owner note",
                 "user": {"login": "owner"},
-                "author_association": "OWNER",
             },
             {
                 "id": 2,
                 "body": "drive-by injection",
                 "user": {"login": "rando"},
-                "author_association": "NONE",
             },
             {
                 "id": 3,
                 "body": "foreman correction",
                 "user": {"login": "bot"},
-                "author_association": "NONE",
             },
         ]
         runner.when(
@@ -131,6 +128,8 @@ class PromptAssembly(unittest.TestCase):
             comments=[{"id": 1, "body": "the correction", "user": {"login": "owner"}}],
             excluded_comments=2,
             handoffs=[(41, "use the new API")],
+            verify_display="task verify && task verify:docker",
+            capabilities={"docker"},
         )
         self.assertNotIn("%%", prompt)
         for expected in (
@@ -140,10 +139,34 @@ class PromptAssembly(unittest.TestCase):
             "use the new API",
             "2 comment(s) from untrusted authors",
             "foreman/feat/42-a-unit",
-            "task ci",
+            "task verify && task verify:docker",
             "/tmp/result.json",
         ):
             self.assertIn(expected, prompt)
+        # The ports constraint is capability-conditional (#24): injected when
+        # ports is absent...
+        self.assertIn("no port binding", prompt)
+
+    def test_ports_rule_not_injected_where_ports_present(self):
+        cfg = Config()
+        gh, _runner = make_github(cfg)
+        unit = unit_with()
+        prompt = spec.assemble_dispatch_prompt(
+            gh,
+            cfg,
+            unit,
+            branch="foreman/feat/42-a-unit",
+            default_branch="main",
+            result_file="/tmp/result.json",
+            comments=[],
+            excluded_comments=0,
+            handoffs=[],
+            verify_display="task verify",
+            capabilities={"ports", "untrusted-input"},
+        )
+        # ...and NOT injected where ports exists — stripping servers and
+        # browsers would neuter a sprite agent for UI work.
+        self.assertNotIn("no port binding", prompt)
 
     def test_all_prompt_files_have_no_unknown_tokens(self):
         import re

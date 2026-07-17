@@ -40,12 +40,63 @@ class FakeRunner:
         return [argv for argv, _ in self.calls if argv[: len(prefix)] == prefix]
 
 
-def make_github(cfg: Config | None = None) -> tuple[GitHub, FakeRunner]:
+def make_github(
+    cfg: Config | None = None, *, visibility: str = "PUBLIC"
+) -> tuple[GitHub, FakeRunner]:
     runner = FakeRunner()
-    runner.when(["repo", "view"], REPO_VIEW)
+    runner.when(["repo", "view"], dict(REPO_VIEW, visibility=visibility))
     runner.when(["api", "user", "--jq", ".login"], "bot\n")
     gh = GitHub(Gh(runner), cfg or Config())
     return gh, runner
+
+
+def stub_collaborators(runner: FakeRunner, logins: list[str], *, rc: int = 0) -> None:
+    runner.when(
+        [
+            "api",
+            "repos/owner/repo/collaborators?affiliation=all&per_page=100",
+            "--paginate",
+            "--slurp",
+        ],
+        [[{"login": login} for login in logins]] if rc == 0 else "",
+        rc=rc,
+    )
+
+
+def stub_label_events(runner: FakeRunner, number: int, events: list[dict]) -> None:
+    """events: [{label, actor, created_at}] — rendered as timeline `labeled`
+    entries."""
+    rendered = [
+        {
+            "event": "labeled",
+            "label": {"name": event["label"]},
+            "actor": {"login": event["actor"]},
+            "created_at": event["created_at"],
+        }
+        for event in events
+    ]
+    runner.when(
+        [
+            "api",
+            f"repos/owner/repo/issues/{number}/timeline?per_page=100",
+            "--paginate",
+            "--slurp",
+        ],
+        [rendered],
+    )
+
+
+def stub_content_edits(runner: FakeRunner, edits: list[dict]) -> None:
+    """edits: [{editor, edited_at}] — served for ANY content-edits GraphQL
+    call (the query rides argv[3], number in argv, so one stub per test)."""
+    nodes = [
+        {"editedAt": edit["edited_at"], "editor": {"login": edit["editor"]}}
+        for edit in edits
+    ]
+    runner.when(
+        ["api", "graphql"],
+        {"data": {"repository": {"issue": {"userContentEdits": {"nodes": nodes}}}}},
+    )
 
 
 def issue_json(
@@ -61,6 +112,7 @@ def issue_json(
     sub_issues: list[int] | None = None,
     parent: int | None = None,
     closed_by_prs: list[int] | None = None,
+    author: str = "owner",
 ) -> dict:
     return {
         "number": number,
@@ -69,6 +121,7 @@ def issue_json(
         "stateReason": state_reason,
         "body": body,
         "url": f"https://github.com/owner/repo/issues/{number}",
+        "author": {"login": author},
         "labels": [{"name": name} for name in labels or []],
         "milestone": None,
         "issueType": {"name": issue_type} if issue_type else None,

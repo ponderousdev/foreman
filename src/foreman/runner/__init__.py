@@ -247,13 +247,16 @@ class UnitLock:
 
 @dataclass(frozen=True)
 class Selection:
-    """What the selection layer hands the supervisor: the runner plus the
-    commit-handoff strategy paired with it (#21). Dispatch call sites use
-    both through their protocols and never learn which names were chosen —
-    adding the Sprite's bundle strategy changes this factory, not dispatch."""
+    """What the selection layer hands the supervisor: the runner, the
+    commit-handoff strategy paired with it (#21), and the capability-refusal
+    composer (#28). Dispatch call sites use all three through their
+    protocols/signatures and never learn which names were chosen — adding
+    the Sprite changes this factory, not dispatch; refusal messages can name
+    compatible runners because they are composed HERE, not in eligibility."""
 
     runner: Runner
     make_handoff: Callable[[Path, Handle | None], "CommitHandoff"]
+    refusal: Callable[[set[str]], str | None]
 
 
 def create(cfg: Config) -> Runner:
@@ -276,9 +279,11 @@ def create(cfg: Config) -> Runner:
 
 
 def select(cfg: Config) -> Selection:
-    """create() plus the paired commit handoff. v2.0: every supported runner
-    shares Foreman's clone, so the shared-worktree strategy is the pairing;
-    the sprite selection will pair the bundle strategy here in v2.1."""
+    """create() plus the paired commit handoff and refusal composer. v2.0:
+    every supported runner shares Foreman's clone, so the shared-worktree
+    strategy is the pairing; the sprite selection will pair the bundle
+    strategy here in v2.1."""
+    from foreman import capabilities as capabilities_mod
     from foreman.handoff import SharedWorktreeHandoff
 
     runner = create(cfg)
@@ -286,4 +291,7 @@ def select(cfg: Config) -> Selection:
     def make_handoff(workdir: Path, handle: Handle | None) -> "CommitHandoff":
         return SharedWorktreeHandoff(workdir)
 
-    return Selection(runner=runner, make_handoff=make_handoff)
+    def refusal(required: set[str]) -> str | None:
+        return capabilities_mod.refusal(required, runner.capabilities(), cfg.runner)
+
+    return Selection(runner=runner, make_handoff=make_handoff, refusal=refusal)

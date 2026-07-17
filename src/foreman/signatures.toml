@@ -24,3 +24,8 @@ action = "environment"
 name = "claude-usage-limit"
 pattern = 'usage limit reached|hit your (usage|rate) limit|limit will reset|out of extra usage'
 action = "quota_wait"
+
+[[signature]]
+name = "port-in-use"
+pattern = 'EADDRINUSE|address already in use|port \d+ is already in use'
+action = "environment"

@@ -70,6 +70,7 @@ class Bodies(unittest.TestCase):
             human_tasks=human_tasks or [],
             spec_hash_hex="abc123",
             base_sha="def456",
+            verify_display="task verify",
         )
 
     def test_marker_is_parseable(self):

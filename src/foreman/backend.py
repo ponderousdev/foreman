@@ -174,6 +174,7 @@ def run_backend(
     prompt_file: Path,
     timeout_min: int,
     resume_ref: str | None = None,
+    gate_cmds: list[list[str]] | None = None,
 ) -> BackendResult:
     session_file = unit_run_dir / "session"
     log_file = unit_run_dir / "agent.log"
@@ -205,6 +206,10 @@ def run_backend(
         env=env,
         cmd=tuple(argv),
         timeout_s=timeout_min * 60,
+        # The composed gate rides the spec: that is the defined transport for
+        # guest-executed gates (#29 → #30). Local ignores it — Foreman's own
+        # process runs the gate in the worktree after the agent exits.
+        gate_cmds=tuple(tuple(c) for c in (gate_cmds or [])),
     )
     handle = runner.spawn(spec)
     runner_mod.save_handle(cfg, root, handle)

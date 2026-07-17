@@ -106,11 +106,21 @@ def _context(read_only: bool) -> tuple[Config, Path, GitHub]:
     return cfg, root, gh
 
 
-def _print_plan(gh: GitHub, cfg: Config, target: Target) -> int:
+def _print_plan(
+    gh: GitHub, cfg: Config, target: Target, selection: runner_mod.Selection
+) -> int:
     remote_name = worktree.remote(cfg)
+    advertised = selection.runner.capabilities()
     print(f"Target: {target.label}")
     print(f"Inputs: {inputs_mod.describe_mode(target.mode, cfg)}")
     print(f"Base:   {remote_name}/{gh.default_branch()}")
+    print(
+        f"Runner: {cfg.runner} "
+        f"(capabilities: {', '.join(sorted(advertised)) or 'none'})"
+    )
+    if target.repo_trust is not None:
+        marker = "untrusted-input" if target.repo_trust.untrusted else "trusted"
+        print(f"Trust:  repo is {marker} — {target.repo_trust.reason}")
     print()
 
     cycle = detect_cycle(target)
@@ -119,7 +129,12 @@ def _print_plan(gh: GitHub, cfg: Config, target: Target) -> int:
         return 1
 
     fail_loud = False
-    ready, skipped = dispatch_mod.eligibility(gh, cfg, target)
+    refusal_message = _target_refusal(cfg, target, selection)
+    if refusal_message:
+        fail_loud = True
+        error(f"plan refused: {refusal_message}")
+        print()
+    ready, skipped = dispatch_mod.eligibility(gh, cfg, target, selection)
     by_number = {o.unit.number: o for o in skipped}
     print("Waves (dependency order):")
     for index, wave in enumerate(waves(target), 1):
@@ -198,10 +213,25 @@ def _concurrent_activity(gh: GitHub, target: Target) -> list[str]:
     return notices
 
 
+def _target_refusal(
+    cfg: Config, target: Target, selection: runner_mod.Selection
+) -> str | None:
+    """The repo-level hard-mismatch check (#28): declared
+    required_capabilities plus the D4 repo-trust injection, against what the
+    configured runner advertises."""
+    from foreman import trust as trust_mod
+
+    if target.repo_trust is None:
+        return None
+    required = trust_mod.required_for(cfg, target.repo_trust, None)
+    return selection.refusal(required)
+
+
 def cmd_plan(args: argparse.Namespace) -> int:
     cfg, _root, gh = _context(read_only=True)
+    selection = runner_mod.select(cfg)
     target = prepare_target(gh, cfg, milestone=args.milestone, issue=args.issue)
-    return _print_plan(gh, cfg, target)
+    return _print_plan(gh, cfg, target, selection)
 
 
 def cmd_dispatch(args: argparse.Namespace) -> int:
@@ -215,6 +245,10 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
             "refusing to dispatch: dependency cycle "
             + " -> ".join(f"#{n}" for n in cycle)
         )
+        return 1
+    refusal_message = _target_refusal(cfg, target, selection)
+    if refusal_message:
+        error(f"refusing to dispatch: {refusal_message}")
         return 1
     outcomes = dispatch_mod.run_dispatch(
         gh, cfg, root, selection, target, max_parallel=args.max_parallel

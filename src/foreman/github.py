@@ -48,6 +48,7 @@ ISSUE_FIELDS = ",".join(
         "labels",
         "milestone",
         "url",
+        "author",
         "issueType",
         "parent",
         "subIssues",
@@ -84,6 +85,18 @@ RESOLVE_THREAD_MUTATION = """
 mutation($threadId: ID!) {
   resolveReviewThread(input: { threadId: $threadId }) {
     thread { id isResolved }
+  }
+}
+"""
+
+CONTENT_EDITS_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      userContentEdits(first: 100) {
+        nodes { editedAt editor { login } }
+      }
+    }
   }
 }
 """
@@ -186,6 +199,83 @@ class GitHub:
         for page in out or []:
             comments.extend(page)
         return comments
+
+    def collaborator_logins(self) -> list[str]:
+        """Every account with repository access (affiliation=all: direct,
+        outside, and via org or team) — the D4 predicate's enumeration.
+        Raises on failure so callers fail closed."""
+        out = self.gh.json(
+            [
+                "api",
+                f"repos/{self.repo_slug()}/collaborators?affiliation=all&per_page=100",
+                "--paginate",
+                "--slurp",
+            ]
+        )
+        logins: list[str] = []
+        for page in out or []:
+            for collaborator in page or []:
+                login = (collaborator or {}).get("login")
+                if login:
+                    logins.append(login)
+        return logins
+
+    def issue_label_events(self, number: int) -> list[dict]:
+        """Chronological `labeled` events: {label, actor, created_at} — the
+        D13 arming-actor attribution source."""
+        out = self.gh.json(
+            [
+                "api",
+                f"repos/{self.repo_slug()}/issues/{number}/timeline?per_page=100",
+                "--paginate",
+                "--slurp",
+            ]
+        )
+        events: list[dict] = []
+        for page in out or []:
+            for event in page or []:
+                if (event or {}).get("event") != "labeled":
+                    continue
+                events.append(
+                    {
+                        "label": ((event.get("label") or {}).get("name")) or "",
+                        "actor": ((event.get("actor") or {}).get("login")) or "",
+                        "created_at": event.get("created_at") or "",
+                    }
+                )
+        return events
+
+    def issue_content_edits(self, number: int) -> list[dict]:
+        """Body-edit history: {editor, edited_at} — D13's post-arming-editor
+        classification source (GraphQL; REST does not expose edits)."""
+        out = self.gh.json(
+            [
+                "api",
+                "graphql",
+                "-f",
+                f"query={CONTENT_EDITS_QUERY}",
+                "-F",
+                f"owner={self.owner()}",
+                "-F",
+                f"name={self.repo()['name']}",
+                "-F",
+                f"number={number}",
+            ]
+        )
+        try:
+            nodes = out["data"]["repository"]["issue"]["userContentEdits"]["nodes"]
+        except (KeyError, TypeError):
+            warn(f"content edits: unexpected GraphQL shape for issue #{number}")
+            return []
+        edits: list[dict] = []
+        for node in nodes or []:
+            edits.append(
+                {
+                    "editor": ((node or {}).get("editor") or {}).get("login") or "",
+                    "edited_at": (node or {}).get("editedAt") or "",
+                }
+            )
+        return edits
 
     def milestones(self, state: str = "open") -> list[dict]:
         return (

@@ -105,7 +105,7 @@ class ConcludeClassifications(unittest.TestCase):
     ):
         cfg = Config()
         if verify_cmd:
-            cfg.verify_command = verify_cmd
+            cfg.verify = {"default": verify_cmd}
         ho = handoff or StubHandoff()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -114,7 +114,9 @@ class ConcludeClassifications(unittest.TestCase):
             run_dir = root / "run"
             run_dir.mkdir()
             selection = Selection(
-                runner=MockRunner(), make_handoff=lambda workdir, handle: ho
+                runner=MockRunner(),
+                make_handoff=lambda workdir, handle: ho,
+                refusal=lambda required: None,
             )
             return dispatch_mod._conclude(
                 None,  # type: ignore[arg-type]
@@ -177,7 +179,9 @@ class ConcludeClassifications(unittest.TestCase):
             run_dir.mkdir()
             self._completed_result_files(run_dir)
             selection = Selection(
-                runner=MockRunner(), make_handoff=lambda workdir, handle: ho
+                runner=MockRunner(),
+                make_handoff=lambda workdir, handle: ho,
+                refusal=lambda required: None,
             )
             outcome = dispatch_mod._conclude(
                 None,  # type: ignore[arg-type]
@@ -210,9 +214,11 @@ class ConcludeClassifications(unittest.TestCase):
             run_dir = root / "run"
             run_dir.mkdir()
             self._completed_result_files(run_dir)
-            cfg.verify_command = ["false"]
+            cfg.verify = {"default": ["false"]}
             selection = Selection(
-                runner=MockRunner(), make_handoff=lambda workdir, handle: ho
+                runner=MockRunner(),
+                make_handoff=lambda workdir, handle: ho,
+                refusal=lambda required: None,
             )
             outcome = dispatch_mod._conclude(
                 None,  # type: ignore[arg-type]
