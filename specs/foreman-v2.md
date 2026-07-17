@@ -4,12 +4,12 @@
 - **Owner:** Evan Harmon
 - **Date:** 2026-07-15
 - **Related:** [v2.0](https://github.com/ponderousdev/foreman/milestone/1) · [v2.1](https://github.com/ponderousdev/foreman/milestone/3) · [v2.2](https://github.com/ponderousdev/foreman/milestone/4) ·
-  ADR 0002 in `ponderousdev/harmon-init`
+  ADR 0002 in `evanharmon1/harmon-init`
   (`docs/decisions/0002-foreman-deterministic-supervisor.md`) ·
   supersedes the pre-extraction source document
 
 > **On v1 code citations.** Foreman v1 does not live in this repo yet, so every
-> `harmon-init/scripts/foreman/...` path below points into `ponderousdev/harmon-init`.
+> `harmon-init/scripts/foreman/...` path below points into `evanharmon1/harmon-init`.
 > #10 moves that source — and ADR 0002 — here, after which the qualifier drops and
 > the line numbers shift. Anchor on the named function; line numbers are a
 > convenience, not the reference.
