@@ -62,29 +62,34 @@ Added by this spec:
 
 One `Runner` protocol; `local`, `sprite`, and `docker` implement it. Selection is
 config. The seam must not leak: graph, GitHub, and eligibility code contain no
-`cfg.runner` branches, enforced by a leak test. The only meaningful divergences
-are *where* an agent executes and *how commits return to Foreman*.
+runner-*name* branches (`cfg.runner == ...`), enforced by a leak test —
+consuming advertised runner *properties* (`capabilities()`) is how those layers
+are meant to vary. The only meaningful divergences are *where* an agent
+executes and *how commits return to Foreman*.
 
 Runner names describe **where execution happens** (ADR 0002). Concurrency,
 isolation, and capability are properties *of* a runner, never names *for* one.
 
-### Capabilities are two-dimensional, and probed
+### Capabilities are per-environment, and computed
 
-Two orthogonal properties decide what a unit can do. Neither is a property of the
-runner *class* — both depend on the environment and how it is run, so
-`capabilities()` probes rather than declares.
+Three properties decide what a unit can do — and what it may be given. None is
+a property of the runner *class*: each is computed at runtime from the
+environment and how it is run, never hardcoded per runner. "Computed" covers
+three verbs — `docker` is probed, `ports` is derived, `untrusted-input` is set
+by the boundary — see [D7](#d7-capabilities-are-computed-per-environment).
 
 | Capability | Meaning |
 |---|---|
 | `docker` | A usable Docker daemon is reachable from inside the unit. |
 | `ports` | The unit may bind ports and run long-lived servers or a browser without colliding. |
+| `untrusted-input` | The unit may be given untrusted content: the boundary is expected to contain a fully compromised agent, and no write credential is reachable inside it. |
 
-| Environment | `docker` | `ports` |
-|---|---|---|
-| local, `max_parallel > 1` | yes — DinD | no — agents share one netns |
-| local, `max_parallel == 1` | yes | physically yes — **withheld in v2.0** ([D9](#d9-ports-at-local-concurrency-1-mechanism-now-flip-later)) |
-| sprite | no — [D5](#d5-sprites-do-not-run-docker) | yes — one microVM per unit |
-| docker (v2.2) | no — no socket for agents | yes — own netns per container |
+| Environment | `docker` | `ports` | `untrusted-input` |
+|---|---|---|---|
+| local, `max_parallel > 1` | yes — DinD | no — agents share one netns | no — co-location ([D4](#d4-local-is-trusted-input-only)) |
+| local, `max_parallel == 1` | yes | physically yes — **withheld in v2.0** ([D9](#d9-ports-at-local-concurrency-1-mechanism-now-flip-later)) | no — co-location ([D4](#d4-local-is-trusted-input-only)) |
+| sprite | no — [D5](#d5-sprites-do-not-run-docker) | yes — one microVM per unit | yes — the microVM is the boundary |
+| docker (v2.2) | no — no socket for agents | yes — own netns per container | no — [D12](#d12-dockerrunner-is-trusted-input-only) |
 
 **This table states what each environment *can* do; what a runner *advertises* is
 narrower and is what you implement.** v2.0's LocalRunner returns `{"docker"}` and
@@ -96,6 +101,13 @@ The `ports` axis exists because the constraint it models is *concurrency inside 
 shared network namespace*, not "local." A sprite is alone in its own VM; a lone
 local agent is alone in the container. Both can bind :5173. Three parallel local
 agents cannot.
+
+The `untrusted-input` axis is how [D4](#d4-local-is-trusted-input-only) is
+enforced without a runner-name branch: planning derives the repo's trust (the
+predicate in D4) and, for an untrusted repo, injects `untrusted-input` into
+`required_capabilities`. The ordinary hard-mismatch refusal does the rest —
+eligibility consumes advertised capabilities and never asks which runner it is
+talking to.
 
 ### The verify gate is composed, not selected
 
@@ -124,15 +136,32 @@ Two mechanisms, two jobs:
 
 A repo needing neither writes three lines and is done.
 
+Two rules keep the composition honest:
+
+- **Unknown capability names are config errors.** A `[verify]` key or a
+  `required_capabilities` entry naming no known capability (`port` for `ports`)
+  is refused at plan time — a typo must never become a silently skipped check.
+- **Composition is Foreman-owned and deterministic in every mode.** Foreman
+  computes the command list — baseline first, then additions in declaration
+  order — from the advertised capabilities. Runners differ only in *where* it
+  executes: under local, Foreman's own process runs it in the worktree; under
+  sprite, the composed list travels to the guest (on `UnitSpec`, or by `put`)
+  and the adapter executes it there.
+
+Plan-affecting configuration — `runner`, `trusted_actors`,
+`required_capabilities`, `[verify]` — is read from the default branch of
+Foreman's own clone, never from the branch being dispatched: an agent must not
+be able to edit its own trust or its own gate.
+
 **Where the gate executes is runner-conditional, and that is security-relevant.**
 Under local, Foreman's own process runs the branch's gate in the worktree — v1
 behavior (`run_verify()` at `harmon-init/scripts/foreman/dispatch.py:286`) — and
 the branch is agent-authored, so agent-authored commands execute inside Foreman's
 container. That is co-location again ([D1](#d1-the-trust-boundary-is-the-container-not-the-process-environment)),
 bounded by trusted input ([D4](#d4-local-is-trusted-input-only)) and the PAT's
-scoping, not by isolation. Under sprite the gate runs in the guest and Foreman
-never invokes it — there, "no agent-authored branch command on Foreman's box" is a
-real invariant rather than a restatement of intent.
+scoping, not by isolation. Under sprite the gate runs in the guest — composed
+by Foreman, never executed by it — and there, "no agent-authored branch command
+on Foreman's box" is a real invariant rather than a restatement of intent.
 
 The original #7/#29 rule ("never execute agent-authored branch commands on
 Foreman's trusted box") is therefore a **sprite-era invariant**. Writing it as
@@ -147,7 +176,7 @@ environment.** An env allowlist is defense in depth, not containment.
 |---|---|---|
 | Boundary | the bot devcontainer | one Firecracker microVM per unit |
 | Foreman / agent separation | none — same container, same HOME, same netns | full — separate machines |
-| Agent reachable token | the bot PAT (accepted, [D3](#d3-local-accepts-relaxed-separation)) | read-only only |
+| Agent-reachable secrets | everything in the devcontainer env-file: the bot PAT (accepted, [D3](#d3-local-accepts-relaxed-separation)), `CLAUDE_CODE_OAUTH_TOKEN`, the Telegram key — plus the Fly API token from v2.1 | the unit's read-only token, and nothing else |
 | Input trust | **trusted actors only** ([D4](#d4-local-is-trusted-input-only)) | untrusted content permitted |
 | Branch gate executes | in Foreman's container | in the guest VM |
 | Commit handoff | Foreman reads the shared worktree | `git bundle` → Foreman's clone |
@@ -159,6 +188,17 @@ local agent can push a branch, open a PR, and edit issues on those repos. It
 cannot merge, and it cannot rewrite a workflow to reach Actions secrets.
 
 That last control is load-bearing and must be **asserted**, not assumed (#15).
+The permission table itself lives in
+[`docs/architecture/branch-protection.md`](../docs/architecture/branch-protection.md);
+the summary above does not supersede it.
+
+No-workflow-edit has a consequence to surface early: **Foreman cannot push any
+branch whose diff touches `.github/workflows/`** — GitHub rejects the push
+outright. Workflow changes are permanently human-only under this trust model,
+and the shepherd cannot dispatch a fix for workflow-caused red CI. The commit
+handoff (#21) detects a workflow-touching diff *before* pushing and fails the
+unit with that classification, rather than letting the push die at the last
+step as a bare 403.
 
 ### Runner protocol
 
@@ -181,6 +221,15 @@ class Runner(Protocol):
 limits, and timeout. `Handle` is opaque, serialized under `.foreman/runs/`, and
 must be **liveness-checkable**: a bare PID is not a handle, because PIDs are
 reused. Use PID + process start-time.
+
+Liveness is not enough — **exit status must survive a Foreman restart**. Linux
+hands an exit status only to the parent; after a crash the agent is orphaned to
+PID 1 and a restarted Foreman cannot `wait()` it. LocalRunner therefore spawns
+the adapter through a wrapper that records the exit status under the unit's run
+dir (the wrapper is the process-group leader, so `kill()`-the-group is
+unchanged), and `wait()` supports a non-child mode: poll liveness, then read
+the recorded status. Dead process, no recorded status — that is an abnormal
+termination, reported as such, never guessed.
 
 `wait(timeout_s)` and `kill()` are not new features — they restore v1 behavior
 — in `harmon-init/scripts/foreman/backend.py`, `proc.wait(timeout=timeout_min * 60)`
@@ -207,7 +256,7 @@ a guest.
 |---|---|---|
 | **v2.0** | Waves 1, 2, 3, 4, 5, 7 | Extraction, security controls, the seam, LocalRunner, capabilities |
 | **v2.1** | Waves 8, 9 | SpriteRunner, untrusted-content dogfooding, public repo |
-| **v2.2** | Wave 6 | DockerRunner — per-unit local isolation |
+| **v2.2** | Wave 6 | DockerRunner — per-unit local isolation, trusted input only ([D12](#d12-dockerrunner-is-trusted-input-only)) |
 
 Rationale for the reorder: v2.0 is a coherent, shippable, useful tool. Public
 readiness moves to v2.1 because the claim "safe for public repositories" is
@@ -247,6 +296,11 @@ entirely different trust story.
 Building the bare-host path would defeat the protections that justify the tool.
 Do not build it and do not present it as an option.
 
+Enforced as a startup tripwire: the bot devcontainer bakes a marker (an env var
+in the image, e.g. `FOREMAN_DEVCONTAINER=bot`) and Foreman refuses to start
+without it. A guard against accident, not intent — trivially spoofable,
+deliberately cheap.
+
 ### D3: Local accepts relaxed separation
 
 Agents can reach the bot PAT. Accepted deliberately: local is the pragmatic,
@@ -261,6 +315,20 @@ remains available later. It is not v2.0 work.
 Follows from D1 and D3. Untrusted issue content requires a boundary local does
 not have. This must be **enforced at plan time**, not documented — nothing today
 stops `runner = local` against a public repo.
+
+**The predicate.** A repo is untrusted-input unless *everyone who can create or
+edit its issues* is a trusted actor. A **public** repo is always untrusted —
+the world can file issues. A **private** repo is untrusted unless every account
+with repo access (collaborators API, `affiliation=all`: direct, outside, and
+via org or team) appears in `trusted_actors`. If the access list cannot be
+enumerated, **fail closed** and refuse. Per-issue gating (#14) still validates
+author, arming actor, and editors regardless — this predicate is the belt over
+those braces.
+
+**The mechanism.** For an untrusted repo, planning injects `untrusted-input`
+into `required_capabilities`; local never advertises it, so the standard
+hard-mismatch refusal (#28) fires and names sprite as the compatible runner.
+D4 needs no runner-name branch in eligibility code.
 
 ### D5: Sprites do not run Docker
 
@@ -292,11 +360,14 @@ add a slim target to the *same* Dockerfile — never a separately maintained ima
 which would duplicate ~15 `# renovate:`-pinned versions and drift on the first
 bump.
 
-### D7: Capabilities are probed and two-dimensional
+### D7: Capabilities are computed per environment
 
-See [above](#capabilities-are-two-dimensional-and-probed). The original #28
-(`Local and Sprite advertise an empty set; Docker advertises docker`) is
-backwards on every axis under D5 and D6.
+See [above](#capabilities-are-per-environment-and-computed). "Computed" is the
+honest verb: `docker` is probed (is a daemon reachable?), `ports` is derived
+from `max_parallel`, and `untrusted-input` follows from the boundary by policy.
+What the principle forbids is hardcoding a set per runner *class*. The
+original #28 (`Local and Sprite advertise an empty set; Docker advertises
+docker`) is backwards on every axis under D5 and D6.
 
 ### D8: Sequencing is local → sprite → docker
 
@@ -414,6 +485,19 @@ point and a plain PEP 517 backend, **buildable from a git checkout**. The
 invocation changes from `PYTHONPATH=scripts python3 -m foreman` to `foreman`,
 which is a break the wrapper Taskfile (#12) owns.
 
+### D12: DockerRunner is trusted-input-only
+
+Untrusted content stays sprite-only in v2.2. DockerRunner's sibling agent
+containers run on the DinD daemon inside the privileged bot devcontainer, so a
+container escape lands exactly where Foreman and the write token live — a
+container boundary next to a root-equivalent daemon is not the VM boundary D4
+demands. What v2.2 buys is isolation *hygiene* for trusted work: per-unit
+containers remove local's reachable-write-token and shared-HOME residuals
+without a Fly bill. DockerRunner therefore does not advertise
+`untrusted-input`. Revisiting this requires real hardening — a separate host
+for the daemon, or a gVisor-class runtime — and a new decision, not a config
+flip.
+
 ## Requirements
 
 ### v2.0
@@ -423,21 +507,31 @@ which is a break the wrapper Taskfile (#12) owns.
 - [ ] Foreman installs into a **non-Python** consumer via `uvx` from a git tag
       ([D11](#d11-distribution-is-a-git-tag-uvx-invocation-not-a-package-index)),
       with the pin in the copier-owned wrapper Taskfile and a console entry point.
+- [ ] Consumers that already vendor Foreman migrate to the packaged dependency
+      by a documented, idempotent path (#38).
 - [ ] Foreman runs only in the bot devcontainer; no bare-host path exists.
 - [ ] The Runner protocol carries `UnitSpec` (incl. cmd + timeout), `kill`, and a
-      liveness-checkable `Handle`. A mock Runner satisfies it.
-- [ ] Graph, GitHub, and eligibility code contain no runner branches (leak test).
+      liveness-checkable `Handle` whose exit status is recoverable by a
+      restarted Foreman. A mock Runner satisfies it.
+- [ ] Graph, GitHub, and eligibility code contain no runner-name branches (leak
+      test); those layers consume advertised capabilities only.
 - [ ] LocalRunner: subprocess in the unit worktree, allowlisted env, exit-code
-      ground truth, preserve-on-failure, `capabilities() == {"docker"}`.
-- [ ] `capabilities()` is probed; the verify gate is composed from it;
-      `required_capabilities` mismatches are refused before dispatch.
+      ground truth (recorded, not parent-only), preserve-on-failure,
+      `capabilities() == {"docker"}`; `image` and `limits` are ignored.
+- [ ] `capabilities()` is computed per environment; the verify gate is composed
+      from it; `required_capabilities` mismatches — and unknown capability
+      names anywhere in config — are refused before dispatch.
 - [ ] Trusted-actor gating validates author, arming actor, and post-arming
       editors; the trusted input surface is defined; content is pinned against
       TOCTOU.
-- [ ] `runner = local` against a repo with untrusted contributors is refused at
-      plan time.
-- [ ] Preflight asserts login, ruleset-requires-PR, read-token cannot write, and
-      **write-token cannot edit workflows** — all non-destructively.
+- [ ] `runner = local` against an untrusted-input repo (public, or private with
+      access beyond `trusted_actors`; fail closed) is refused at plan time via
+      the `untrusted-input` capability.
+- [ ] Preflight asserts login, that `main`'s effective rules require PRs for
+      the write actor, read-token cannot write, and **write-token cannot edit
+      workflows** — every probe bounded to a scratch ref it cleans up. The
+      ruleset bypass-actor audit is a documented operator-tier check, not a bot
+      assertion.
 - [ ] Per-unit lock + liveness probe prevent double-dispatch after a crash.
 - [ ] The Foreman v2 architecture ADR is landed.
 
@@ -452,11 +546,20 @@ which is a break the wrapper Taskfile (#12) owns.
       contract is claimed: scoped read-only, no host-environment inheritance, not
       persisted into the image or a committed file, and asserted by preflight.
 - [ ] The devcontainer image is digest-pinned and versioned.
-- [ ] Foreman is dogfooded against untrusted content, then published.
+- [ ] The Fly API token lives in a dedicated agents-only Fly org with a spend
+      limit; the trust model records it as agent-reachable under local (D1).
+- [ ] A unit outlives its supervisor safely: a guest-side timeout stops a
+      Machine whose Foreman died; preserved Machines have a GC/TTL policy
+      (stopped Machines still bill for rootfs storage); unit logs are written
+      in-guest and fetched, with API streaming as best-effort.
+- [ ] Foreman is dogfooded against untrusted content — issues authored by an
+      account outside `trusted_actors`, under sprite, while still private —
+      then published.
 
 ### v2.2
 
-- [ ] DockerRunner: one sibling container per unit, no socket, no write token.
+- [ ] DockerRunner: one sibling container per unit, no socket, no write token,
+      trusted input only ([D12](#d12-dockerrunner-is-trusted-input-only)).
 
 ## Acceptance criteria (Given / When / Then)
 
@@ -476,26 +579,38 @@ which is a break the wrapper Taskfile (#12) owns.
 
 ### Scenario: local refuses untrusted input
 
-- **Given** a repo whose contributors are not all trusted actors
+- **Given** a repo that is public, or private with access beyond `trusted_actors`
 - **When** planning under `runner = local`
-- **Then** the plan refuses and names sprite as the compatible runner.
+- **Then** planning injects `untrusted-input` into the required capabilities,
+  the refusal names it as absent, and sprite is named as the compatible runner.
 
 ### Scenario: every preflight assertion is proven, not assumed
 
 Fine-grained token permissions cannot be introspected, so each control below is
-probed empirically. All four must pass before any dispatch.
+probed empirically — within a hard rule: probes only ever touch scratch refs
+they clean up, never `main`. For an API probe the call *is* the write, so
+"non-destructive" means *bounded*: an unexpected success is confined to a
+scratch ref, and preflight fails loudly on it. All four must pass before any
+dispatch.
 
 - **Given** the write token, the read token, and a ruleset requiring pull requests
 - **When** `foreman:preflight` runs
 - **Then** the write token's authenticated login matches `expected_login`
-- **And** the applicable ruleset is confirmed to require pull requests for the
-  write actor, and a bypass-capable write actor fails
-- **And** the read token is proven unable to write
+- **And** the effective rules for `main` (the rules-for-a-branch endpoint)
+  include a pull-request requirement that applies to the write actor
+- **And** the read token is proven unable to write (scratch ref only)
 - **And** the write token is proven unable to edit workflows — the control
-  [D3](#d3-local-accepts-relaxed-separation)'s relaxed separation leans on
-- **And** every probe is non-destructive: denial is the expected path, and an
-  unexpected success fails loudly *instead of* completing the write it was
-  testing for — a probe that succeeds must not be the thing that does damage.
+  [D3](#d3-local-accepts-relaxed-separation)'s relaxed separation leans on. The
+  probe's file content is inert YAML with no `on:` trigger, so even an
+  unexpected success cannot cause a workflow run
+- **And** no probe mutates anything beyond a scratch ref it cleans up; none
+  targets `main`.
+
+**Operator tier — documented, not bot-asserted:** whether any actor can
+*bypass* the ruleset cannot be read with the bot's permissions, and cannot be
+probed empirically without risking the very push to `main` it exists to
+prevent. The bypass-actor audit is an admin-credentialed, manual check with a
+recorded cadence (e.g. alongside PAT rotation). See #15.
 
 ### Scenario: a timed-out agent's process group is terminated
 
@@ -513,25 +628,32 @@ probed empirically. All four must pass before any dispatch.
 - **When** Foreman reruns
 - **Then** it re-derives state from GitHub and git, probes handle liveness
   (PID + start-time), and reattaches rather than redispatching.
+- **And** on completion the unit's exit status is read from the recorded status
+  file — a restarted Foreman cannot `wait()` a process it did not spawn, and a
+  dead process with no recorded status is reported as abnormal, never guessed.
 
 ## Open questions
 
-- **Secrets delivery to a Sprite.** There is no host, no `initializeCommand`, and
-  no `op` CLI in the bot profile. Fly secrets set by Foreman at Machine-create
-  time is the obvious answer; confirm it.
-- **Devcontainer image boot time on Fly.** Measure before touching #33. The
+Each is tracked; none is unowned.
+
+- **Secrets delivery to a Sprite** (#30). There is no host, no
+  `initializeCommand`, and no `op` CLI in the bot profile. Fly secrets set by
+  Foreman at Machine-create time is the obvious answer; confirm it. Weigh
+  per-unit GitHub App installation tokens (repo-scoped, ~1 h) against a static
+  read PAT — noting `timeouts.dispatch_min = 90` outlives a 1 h token.
+- **Devcontainer image boot time on Fly** (#33). Measure before optimizing. The
   build workflow reclaims ~13GB of runner disk, so the image is large.
-- **Runner test strategy.** Does CI boot a real Fly Machine, or is that a marked
-  manual tier?
-- **Does the bot PAT's selected-repo list need narrowing before v2.0 dispatches?**
-  It is the blast radius of D3.
+- **Runner test strategy** (#40). Does CI boot a real Fly Machine, or is that a
+  marked manual tier?
+- **Does the bot PAT's selected-repo list need narrowing before v2.0
+  dispatches?** (#13). It is the blast radius of D3.
 
 ## Notes
 
 **This document's lifecycle.** It currently does three jobs that
 [`specs/README.md`](README.md) layers apart, deliberately, while the design is
 still moving — splitting now would create three copies to drift. Once the design
-settles: D1–D10 become the architecture ADR that #19 already requires (immutable;
+settles: D1–D12 become the architecture ADR that #19 already requires (immutable;
 superseded, never edited), the architecture sections move to `docs/architecture/`
 (living; they describe what *is*), and this spec keeps only requirements and
 acceptance criteria — reaching `Status: Implemented` when v2.0 ships, and staying
@@ -566,6 +688,26 @@ docker-in-docker feature sets it), and privileged containers are escapable
 independent of Docker. Bounded by D4 (trusted input) and by the fact that on
 macOS and WSL2 the Docker host is already a VM, so an escape lands in
 LinuxKit/WSL2 rather than on the machine itself.
+
+**Accepted residual: allowlisted egress is still an exfiltration path.** A
+sprite's allowlist necessarily includes github.com and api.anthropic.com, so a
+prompt-injected agent can push what it holds to an attacker-controlled repo
+with attacker-supplied credentials. The asset is bounded by what the unit
+holds: a read token whose selected-repo list mixes no private repos into
+untrusted dispatches (#13), ideally minted per unit (#30). Egress control
+(#31) narrows the channel; it cannot close this one.
+
+**Vocabulary migration (decided with #16):** one task vocabulary across the
+ecosystem — `verify` = check + build + test, `ci` = verify + e2e + security —
+and the fast hook-gate role moves to `check` (today's fast `verify` is `check`
+in all but name, so hooks lose no speed). The template change lands in
+harmon-init as #16's counterpart issue; Foreman's own repo follows when its
+dogfood `.foreman.toml` lands. Without this, dogfooding would run a test-free
+in-unit gate.
+
+**Package versioning:** the milestone is "v2.0" but release-please starts
+wherever it is told. Decide the first tag deliberately (#11) — aligning at
+`v2.0.0` spares every future conversation from "milestone v2.0, tag v0.3.0."
 
 **Pattern worth keeping in view:** local's three compromises — a reachable write
 token, a shared HOME, and `~/.claude` contention — are all the same problem,
