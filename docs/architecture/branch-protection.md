@@ -303,6 +303,38 @@ only if everything stays green. A required check whose workflow does **not** run
 | Delete main                             | ❌       | `deletion` rule                                 |
 | Modify branch protection rules          | ❌       | Write collaborator role has no settings access  |
 
+## Protecting Version Tags
+
+Foreman is consumed by `uvx --from git+https://…@vX.Y.Z`
+([spec D11](../../specs/foreman-v2.md#d11-distribution-is-a-git-tag-uvx-invocation-not-a-package-index)),
+so a version tag is **executable distribution**: whoever can move one chooses
+the code every consumer runs next. A tag is a mutable ref, `contents: write`
+can force-move or delete it, and the bot PAT is agent-reachable under local
+(spec D3) — so version tags get their own ruleset
+([spec D14](../../specs/foreman-v2.md#d14-version-tags-are-immutable)),
+independent of Protect Main.
+
+An importable copy ships at
+`.github/Tag Protection Ruleset - Protect Version Tags.json`. Import it the
+same way as Protect Main (Settings → Rules → Rulesets → **New ruleset ▸ Import
+a ruleset**). **After importing, add the `ponderousdev-ci` GitHub App as a
+bypass actor in the UI** (bypass mode `always`) — release-please creates
+release tags as that App, and an App's actor id cannot be carried portably in
+the JSON. Keep `OrganizationAdmin` (`always`) for the manual `task release:*`
+path.
+
+What it enforces on `refs/tags/v*`:
+
+| Rule | Effect |
+| --- | --- |
+| `creation` | Only bypass actors — the CI App cutting releases, org admins running `task release:*` — can create version tags. The bot cannot. |
+| `update` | Nobody can move a version tag. This is the supply-chain rule: a moved tag would redirect every consumer's next `uvx` resolution. |
+| `deletion` | Nobody can delete one. |
+
+`foreman:preflight` (#15) probes this empirically: the write token must fail
+to create a scratch tag inside the protected `v*` namespace, and an unexpected
+success is deleted and fails preflight loudly.
+
 ## Applying This Ruleset to Other Repos
 
 This ruleset ships with every repo generated from harmon-init. To replicate manually:
