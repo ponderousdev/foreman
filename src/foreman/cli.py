@@ -19,6 +19,7 @@ from foreman import backend as backend_mod
 from foreman import dispatch as dispatch_mod
 from foreman import inputs as inputs_mod
 from foreman import report, spec, worktree
+from foreman import runner as runner_mod
 from foreman import shepherd as shepherd_mod
 from foreman import watch as watch_mod
 from foreman.config import Config
@@ -206,6 +207,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
 def cmd_dispatch(args: argparse.Namespace) -> int:
     cfg, root, gh = _context(read_only=False)
     backend_mod.assert_backend_version(cfg)
+    selection = runner_mod.select(cfg)
     target = prepare_target(gh, cfg, milestone=args.milestone, issue=args.issue)
     cycle = detect_cycle(target)
     if cycle:
@@ -215,7 +217,7 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         )
         return 1
     outcomes = dispatch_mod.run_dispatch(
-        gh, cfg, root, target, max_parallel=args.max_parallel
+        gh, cfg, root, selection, target, max_parallel=args.max_parallel
     )
     statuses = [
         report.UnitStatus(
@@ -238,7 +240,8 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
 def cmd_shepherd(_args: argparse.Namespace) -> int:
     cfg, root, gh = _context(read_only=False)
     backend_mod.assert_backend_version(cfg)
-    shep = shepherd_mod.run_shepherd(gh, cfg, root)
+    selection = runner_mod.select(cfg)
+    shep = shepherd_mod.run_shepherd(gh, cfg, root, selection)
     if shep.worked:
         rows = [
             [f"#{w.unit_number}", f"PR #{w.number}", w.state, w.detail[:70]]
@@ -355,11 +358,15 @@ def cmd_retry(args: argparse.Namespace) -> int:
             f"#{args.unit} still has an open PR ({open_prs[0]['url']}) — close it first"
         )
         return 1
+    selection = runner_mod.select(cfg)
     stale_wt = worktree.worktree_path(cfg, root, unit)
     if stale_wt.exists():
         info(f"removing preserved worktree {stale_wt}")
         worktree.remove(stale_wt)
-    outcome = dispatch_mod.dispatch_unit(gh, cfg, root, unit, mode=target.mode)
+        runner_mod.delete_handle(cfg, root, unit.number)
+    outcome = dispatch_mod.dispatch_unit(
+        gh, cfg, root, selection, unit, mode=target.mode
+    )
     print(
         report.summary_table(
             [
@@ -463,11 +470,15 @@ def cmd_vet(args: argparse.Namespace) -> int:
     prompt_file = run_dir / "prompt.md"
     write_text(prompt_file, prompt)
     adapter = backend_mod.adapter_path(cfg.backend)
+    selection = runner_mod.select(cfg)
     os.environ["FOREMAN_READONLY"] = "1"
     try:
         result = backend_mod.run_backend(
             cfg,
+            root,
+            selection.runner,
             adapter,
+            unit_number=0,  # vet is not a unit; 0 is reserved for it
             cwd=root,
             unit_run_dir=run_dir,
             prompt_file=prompt_file,
@@ -510,9 +521,11 @@ def _extract_draft_comments(findings: str) -> dict[int, str]:
 def cmd_watch(args: argparse.Namespace) -> int:
     cfg, root, _gh = _context(read_only=False)
     backend_mod.assert_backend_version(cfg)
+    selection = runner_mod.select(cfg)
     return watch_mod.run_watch(
         cfg,
         root,
+        selection,
         milestone=args.milestone,
         issue=args.issue,
         interval_s=watch_mod.parse_interval(args.interval),
@@ -532,12 +545,27 @@ _COMMANDS = {
 }
 
 
+def _assert_bot_devcontainer() -> None:
+    """D2 startup tripwire: Foreman runs only in the bot devcontainer, whose
+    profile sets FOREMAN_DEVCONTAINER=bot in containerEnv. A guard against
+    accident, not intent — trivially spoofable, deliberately cheap. There is
+    no bare-host mode and none may be added (D2)."""
+    if os.environ.get("FOREMAN_DEVCONTAINER") != "bot":
+        raise ForemanError(
+            "refusing to start: FOREMAN_DEVCONTAINER != 'bot'. Foreman runs "
+            "only inside the bot devcontainer (spec D2) — its HOME holds no "
+            "personal credentials and its tokens are scoped. There is no "
+            "bare-host mode."
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     if sys.version_info < (3, 11):
         print("foreman: Python >= 3.11 required (tomllib)", file=sys.stderr)
         return 2
     args = _parser().parse_args(argv)
     try:
+        _assert_bot_devcontainer()
         return _COMMANDS[args.command](args)
     except ForemanError as exc:
         error(str(exc))

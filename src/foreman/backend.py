@@ -12,39 +12,60 @@ Adapter contract:
          resume depends on this), later `COST_USD=<x>` when known.
   caps:  `capabilities` prints tokens, e.g. `resume cost`.
 
-Timeouts are enforced HERE (portable), not in the adapters.
+Execution goes through the Runner seam: this module builds the UnitSpec
+(including the TOTAL agent environment) and drives spawn → wait → kill;
+where the adapter actually runs is the runner's business. Timeouts are
+enforced HERE (portable), not in the adapters.
+
+The agent environment is an allowlist (#13): PATH/HOME/USER/LANG/TERM,
+CLAUDE_CODE_OAUTH_TOKEN, the READ-ONLY GitHub token (from
+FOREMAN_AGENT_GH_TOKEN, handed to the agent as GH_TOKEN), and explicit
+FOREMAN_* variables. Never the write token, never ANTHROPIC_API_KEY or
+ANTHROPIC_AUTH_TOKEN (resolving #13's open question: a strict allowlist
+already excludes them — this is where that is made true). Under local this
+is defense in depth, not containment (D1/D3): the write token remains
+reachable on the shared box, and no test may claim otherwise.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import signal
-import subprocess
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from foreman import runner as runner_mod
 from foreman import signatures as signatures_mod
 from foreman.config import Config
+from foreman.runner import Runner, UnitSpec, WaitTimeout
 from foreman.util import ForemanError, run, tail, utc_now_iso, write_text
 
 BACKENDS_DIR = Path(__file__).resolve().parent / "backends"
 
 RESULT_STATUSES = ("completed", "blocked")
 
+# Environment names copied verbatim from Foreman's environment when present.
+AGENT_ENV_BASE = ("PATH", "HOME", "USER", "LANG", "TERM")
+# The read-only token Foreman's operator provisions for agents; handed to
+# the unit as GH_TOKEN. Required before any dispatch (#13).
+AGENT_TOKEN_VAR = "FOREMAN_AGENT_GH_TOKEN"
+# Reaping window after kill(): the group is already dead or dying; this only
+# bounds how long we wait for the recorded status to become readable.
+KILL_REAP_S = 30
+
 
 @dataclass
 class BackendResult:
-    returncode: int
+    returncode: int | None
     timed_out: bool = False
+    abnormal: bool = False  # dead with no recorded status — never a real exit
     session_ref: str | None = None
     cost_usd: float | None = None
     quota_wait: bool = False
 
     @property
     def ok(self) -> bool:
-        return self.returncode == 0 and not self.timed_out
+        return self.returncode == 0 and not self.timed_out and not self.abnormal
 
 
 def adapter_path(name: str) -> Path:
@@ -62,14 +83,22 @@ def capabilities(adapter: Path) -> set[str]:
     return set(proc.stdout.split()) if proc.returncode == 0 else set()
 
 
+def backend_cli_version(cfg: Config) -> str:
+    """Best-effort agent-CLI version (recorded in run_started; asserted by
+    assert_backend_version when pinned)."""
+    if cfg.backend != "claude":
+        return ""
+    proc = run(["claude", "--version"], check=False)
+    if proc.returncode != 0 or not proc.stdout:
+        return ""
+    return proc.stdout.strip().split()[0]
+
+
 def assert_backend_version(cfg: Config) -> None:
     """Pin check: headless behavior drifts between agent-CLI releases."""
     if not cfg.backend_version or cfg.backend != "claude":
         return
-    proc = run(["claude", "--version"], check=False)
-    version = (
-        proc.stdout.strip().split()[0] if proc.returncode == 0 and proc.stdout else ""
-    )
+    version = backend_cli_version(cfg)
     if not version.startswith(cfg.backend_version):
         raise ForemanError(
             f"backend version mismatch: claude CLI is '{version or 'missing'}', "
@@ -83,10 +112,63 @@ def unit_dir(cfg: Config, root: Path, number: int) -> Path:
     return path
 
 
+def agent_env(cfg: Config) -> dict[str, str]:
+    """The TOTAL environment a unit receives (#13) — the runner passes it
+    verbatim, never merged with os.environ. See the module docstring."""
+    env: dict[str, str] = {}
+    for name in AGENT_ENV_BASE:
+        value = os.environ.get(name)
+        if value is not None:
+            env[name] = value
+    for name, value in os.environ.items():
+        if name.startswith("FOREMAN_") and name != AGENT_TOKEN_VAR:
+            env[name] = value
+    read_token = os.environ.get(AGENT_TOKEN_VAR, "")
+    if not read_token:
+        raise ForemanError(
+            f"{AGENT_TOKEN_VAR} is not set — agents receive a separate "
+            "read-only GitHub token, never Foreman's write token (#13). "
+            "Provision a fine-grained read-only PAT and export it as "
+            f"{AGENT_TOKEN_VAR} in the bot devcontainer env."
+        )
+    env["GH_TOKEN"] = read_token
+    oauth = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    if oauth:
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth
+    return env
+
+
+def _record_run_started(
+    cfg: Config,
+    unit_run_dir: Path,
+    handle: runner_mod.Handle,
+    spec: UnitSpec,
+    *,
+    resume_ref: str | None,
+) -> None:
+    """#22: run_started records runner, image digest, and CLI version."""
+    payload = {
+        "schema": 1,
+        "unit": spec.unit,
+        "runner": handle.runner,
+        "image": spec.image or None,
+        "image_digest": None,  # local boots no image; sprite records one (v2.1)
+        "backend": cfg.backend,
+        "backend_cli_version": backend_cli_version(cfg),
+        "resume_ref": resume_ref,
+        "timeout_s": spec.timeout_s,
+        "started_at": utc_now_iso(),
+    }
+    write_text(unit_run_dir / "run_started.json", json.dumps(payload, indent=2) + "\n")
+
+
 def run_backend(
     cfg: Config,
+    root: Path,
+    runner: Runner,
     adapter: Path,
     *,
+    unit_number: int,
     cwd: Path,
     unit_run_dir: Path,
     prompt_file: Path,
@@ -96,11 +178,10 @@ def run_backend(
     session_file = unit_run_dir / "session"
     log_file = unit_run_dir / "agent.log"
     result_file = unit_run_dir / "result.json"
-    stdout_file = unit_run_dir / "adapter-stdout.log"
     if result_file.exists():
         result_file.unlink()
 
-    env = os.environ.copy()
+    env = agent_env(cfg)
     env.update(
         {
             "FOREMAN_PROMPT_FILE": str(prompt_file),
@@ -117,48 +198,48 @@ def run_backend(
         raise ForemanError("billing=api but FOREMAN_ANTHROPIC_API_KEY is not set")
 
     argv = [str(adapter), "resume", resume_ref] if resume_ref else [str(adapter), "run"]
-    timed_out = False
-    with stdout_file.open("a", encoding="utf-8") as out_fh:
-        out_fh.write(f"\n--- {utc_now_iso()} {' '.join(argv)} ---\n")
-        out_fh.flush()
-        proc = subprocess.Popen(
-            argv,
-            cwd=str(cwd),
-            env=env,
-            stdout=out_fh,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        try:
-            proc.wait(timeout=timeout_min * 60)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            _kill_group(proc)
+    spec = UnitSpec(
+        unit=unit_number,
+        workdir=cwd,
+        run_dir=unit_run_dir,
+        env=env,
+        cmd=tuple(argv),
+        timeout_s=timeout_min * 60,
+    )
+    handle = runner.spawn(spec)
+    runner_mod.save_handle(cfg, root, handle)
+    _record_run_started(cfg, unit_run_dir, handle, spec, resume_ref=resume_ref)
 
-    result = BackendResult(returncode=proc.returncode, timed_out=timed_out)
-    _read_session_file(session_file, result)
-    log_tail = tail(log_file, 80) + "\n" + tail(stdout_file, 40)
+    timed_out = False
+    try:
+        status = runner.wait(handle, spec.timeout_s)
+    except WaitTimeout:
+        timed_out = True
+        runner.kill(handle)
+        status = runner.wait(handle, KILL_REAP_S)
+
+    return result_from_wait(unit_run_dir, status, timed_out=timed_out)
+
+
+def result_from_wait(
+    unit_run_dir: Path, status: runner_mod.ExitStatus, *, timed_out: bool
+) -> BackendResult:
+    """BackendResult from a wait() outcome — used by run_backend and by
+    reattachment, where a restarted Foreman adopts a unit it never spawned
+    and the recorded status is the only ground truth (#22)."""
+    result = BackendResult(
+        returncode=status.code, timed_out=timed_out, abnormal=status.abnormal
+    )
+    _read_session_file(unit_run_dir / "session", result)
+    log_tail = (
+        tail(unit_run_dir / "agent.log", 80)
+        + "\n"
+        + tail(unit_run_dir / "adapter-stdout.log", 40)
+    )
     sig = signatures_mod.match(log_tail, signatures_mod.load())
     if sig is not None and sig.action == "quota_wait":
         result.quota_wait = True
     return result
-
-
-def _kill_group(proc: subprocess.Popen) -> None:
-    try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            return
-        time.sleep(0.2)
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    proc.wait()
 
 
 def _read_session_file(session_file: Path, result: BackendResult) -> None:

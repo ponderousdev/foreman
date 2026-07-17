@@ -29,6 +29,7 @@ from foreman.config import Config
 from foreman.dispatch import RETRIGGER_SUBJECT
 from foreman.github import GitHub
 from foreman.graph import MARKER_RE
+from foreman.runner import Selection
 from foreman.util import info, warn, write_text
 
 MAX_AGENT_ACTIONS_PER_PR = 2  # per shepherd run; watch ticks give more rounds
@@ -127,6 +128,7 @@ def _resume_agent(
     gh: GitHub,
     cfg: Config,
     root: Path,
+    selection: Selection,
     work: PrWork,
     prompt_name: str,
     tokens: dict[str, str],
@@ -156,7 +158,10 @@ def _resume_agent(
         write_text(prompt_file, prompt)
     return backend_mod.run_backend(
         cfg,
+        root,
+        selection.runner,
         adapter,
+        unit_number=work.unit_number,
         cwd=wt_path,
         unit_run_dir=run_dir,
         prompt_file=prompt_file,
@@ -175,7 +180,9 @@ def _common_tokens(gh: GitHub, cfg: Config, work: PrWork) -> dict[str, str]:
     }
 
 
-def shepherd_pr(gh: GitHub, cfg: Config, root: Path, pr: dict, catalog) -> PrWork:
+def shepherd_pr(
+    gh: GitHub, cfg: Config, root: Path, selection: Selection, pr: dict, catalog
+) -> PrWork:
     status = gh.pr_status(pr["number"])
     work = PrWork(
         number=pr["number"],
@@ -209,7 +216,9 @@ def shepherd_pr(gh: GitHub, cfg: Config, root: Path, pr: dict, catalog) -> PrWor
             )
             if retries == 0:
                 worktree.empty_commit(wt_path, RETRIGGER_SUBJECT)
-                worktree.push(wt_path, remote_name, work.branch, first=False)
+                selection.make_handoff(wt_path, None).push(
+                    remote_name, work.branch, first=False
+                )
                 work.state, work.detail = (
                     "fixed",
                     f"environmental '{sig.name}': retried once (empty commit)",
@@ -224,17 +233,20 @@ def shepherd_pr(gh: GitHub, cfg: Config, root: Path, pr: dict, catalog) -> PrWor
         work.actions += 1
         tokens = _common_tokens(gh, cfg, work)
         tokens["FAILURE_EXCERPT"] = failure_text or json.dumps(failed[:3], indent=2)
-        result = _resume_agent(gh, cfg, root, work, "shepherd-ci-fix", tokens)
+        result = _resume_agent(
+            gh, cfg, root, selection, work, "shepherd-ci-fix", tokens
+        )
         work_dir = _ensure_worktree(
             cfg, root, work.unit_number, work.branch, remote_name
         )
-        if result.ok and not worktree.is_clean(work_dir):
+        fix_handoff = selection.make_handoff(work_dir, None)
+        if result.ok and not fix_handoff.is_clean():
             work.state, work.detail = (
                 "escalated",
                 "agent left uncommitted changes after CI fix",
             )
         elif result.ok:
-            worktree.push(work_dir, remote_name, work.branch, first=False)
+            fix_handoff.push(remote_name, work.branch, first=False)
             work.state, work.detail = "fixed", "agent pushed a CI fix"
         else:
             work.state, work.detail = (
@@ -255,7 +267,9 @@ def shepherd_pr(gh: GitHub, cfg: Config, root: Path, pr: dict, catalog) -> PrWor
         conflicts = worktree.merge_tree_conflicts(wt_path, base_ref)
         if not conflicts:
             if worktree.rebase_onto(wt_path, base_ref):
-                worktree.push(wt_path, remote_name, work.branch, first=False)
+                selection.make_handoff(wt_path, None).push(
+                    remote_name, work.branch, first=False
+                )
                 work.state, work.detail = (
                     "rebased",
                     "mechanical rebase onto fresh default branch",
@@ -269,13 +283,17 @@ def shepherd_pr(gh: GitHub, cfg: Config, root: Path, pr: dict, catalog) -> PrWor
         work.actions += 1
         tokens = _common_tokens(gh, cfg, work)
         tokens["CONFLICTS"] = "\n".join(f"- {c}" for c in conflicts)
-        result = _resume_agent(gh, cfg, root, work, "shepherd-rebase", tokens)
+        result = _resume_agent(
+            gh, cfg, root, selection, work, "shepherd-rebase", tokens
+        )
         if result.ok:
             ok, _tail = verify.run_verify(
                 cfg, wt_path, backend_mod.unit_dir(cfg, root, work.unit_number)
             )
             if ok:
-                worktree.push(wt_path, remote_name, work.branch, first=False)
+                selection.make_handoff(wt_path, None).push(
+                    remote_name, work.branch, first=False
+                )
                 work.state, work.detail = (
                     "rebased",
                     f"agent resolved {len(conflicts)} conflict(s), verify green",
@@ -300,19 +318,22 @@ def shepherd_pr(gh: GitHub, cfg: Config, root: Path, pr: dict, catalog) -> PrWor
             )
         tokens = _common_tokens(gh, cfg, work)
         tokens["THREADS"] = "\n".join(rendered)
-        result = _resume_agent(gh, cfg, root, work, "shepherd-adjudicate", tokens)
+        result = _resume_agent(
+            gh, cfg, root, selection, work, "shepherd-adjudicate", tokens
+        )
         wt_path = _ensure_worktree(
             cfg, root, work.unit_number, work.branch, remote_name
         )
+        adj_handoff = selection.make_handoff(wt_path, None)
         if result.ok:
-            if worktree.is_clean(wt_path) is False:
+            if adj_handoff.is_clean() is False:
                 work.state, work.detail = (
                     "escalated",
                     "agent left uncommitted adjudication changes",
                 )
                 return work
-            if worktree.commits_ahead(wt_path, f"{remote_name}/{work.branch}") > 0:
-                worktree.push(wt_path, remote_name, work.branch, first=False)
+            if adj_handoff.commits_ahead(f"{remote_name}/{work.branch}") > 0:
+                adj_handoff.push(remote_name, work.branch, first=False)
             remaining = [
                 t for t in gh.review_threads(work.number) if not t.get("isResolved")
             ]
@@ -355,7 +376,9 @@ def merge_order(gh: GitHub, ready: list[PrWork]) -> list[tuple[int, str]]:
     return [(n, by_unit[n].url) for n in ordered]
 
 
-def run_shepherd(gh: GitHub, cfg: Config, root: Path) -> ShepherdReport:
+def run_shepherd(
+    gh: GitHub, cfg: Config, root: Path, selection: Selection
+) -> ShepherdReport:
     out = ShepherdReport()
     catalog = signatures_mod.load()
     prs = open_foreman_prs(gh)
@@ -364,7 +387,7 @@ def run_shepherd(gh: GitHub, cfg: Config, root: Path) -> ShepherdReport:
         return out
     for pr in prs:
         try:
-            work = shepherd_pr(gh, cfg, root, pr, catalog)
+            work = shepherd_pr(gh, cfg, root, selection, pr, catalog)
         except Exception as exc:  # keep shepherding the rest
             warn(f"shepherd: PR #{pr['number']} failed: {exc}")
             work = PrWork(

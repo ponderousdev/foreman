@@ -19,6 +19,7 @@ from foreman import shepherd as shepherd_mod
 from foreman.config import Config
 from foreman.github import Gh, GitHub
 from foreman.graph import detect_cycle, prepare_target
+from foreman.runner import Selection
 from foreman.util import ForemanError, append_line, error, info, utc_now_iso, warn
 
 STOP_FILE = ".foreman-stop"
@@ -40,6 +41,7 @@ def parse_interval(text: str) -> int:
 def run_watch(
     cfg: Config,
     root: Path,
+    selection: Selection,
     *,
     milestone: str | None,
     issue: int | None,
@@ -79,8 +81,8 @@ def run_watch(
                 heartbeat("milestone complete — all units closed")
                 return 0
 
-            outcomes = dispatch_mod.run_dispatch(gh, cfg, root, target)
-            shep = shepherd_mod.run_shepherd(gh, cfg, root)
+            outcomes = dispatch_mod.run_dispatch(gh, cfg, root, selection, target)
+            shep = shepherd_mod.run_shepherd(gh, cfg, root, selection)
             tick_cost = sum(o.cost_usd or 0.0 for o in outcomes) + shep.cost_usd
             total_cost += tick_cost
 

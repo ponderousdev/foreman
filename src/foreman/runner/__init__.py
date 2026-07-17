@@ -25,14 +25,19 @@ built in v2.0 — do not add them speculatively.
 
 from __future__ import annotations
 
+import fcntl
 import json
-from collections.abc import Iterator
+import os
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from foreman.config import Config
 from foreman.util import ForemanError, utc_now_iso
+
+if TYPE_CHECKING:
+    from foreman.handoff import CommitHandoff
 
 HANDLE_SCHEMA = 1
 
@@ -206,7 +211,49 @@ def delete_handle(cfg: Config, root: Path, unit: int) -> None:
     handle_path(cfg, root, unit).unlink(missing_ok=True)
 
 
+# ── per-unit lock (.foreman/runs/<n>.lock) ───────────────────────────
+
+
+class UnitLock:
+    """flock-based per-unit dispatch lock. Held for the dispatch lifetime;
+    the kernel releases it if Foreman crashes, and the handle liveness probe
+    covers the orphaned-agent window — together they make double-dispatch
+    impossible, not just unlikely (#22)."""
+
+    def __init__(self, cfg: Config, root: Path, unit: int):
+        self.path = runs_dir(cfg, root) / f"{unit}.lock"
+        self._fd: int | None = None
+
+    def acquire(self) -> bool:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            return False
+        self._fd = fd
+        return True
+
+    def release(self) -> None:
+        if self._fd is not None:
+            fcntl.flock(self._fd, fcntl.LOCK_UN)
+            os.close(self._fd)
+            self._fd = None
+
+
 # ── registry ─────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class Selection:
+    """What the selection layer hands the supervisor: the runner plus the
+    commit-handoff strategy paired with it (#21). Dispatch call sites use
+    both through their protocols and never learn which names were chosen —
+    adding the Sprite's bundle strategy changes this factory, not dispatch."""
+
+    runner: Runner
+    make_handoff: Callable[[Path, Handle | None], "CommitHandoff"]
 
 
 def create(cfg: Config) -> Runner:
@@ -226,3 +273,17 @@ def create(cfg: Config) -> Runner:
             "runner 'docker' ships in v2.2 (DockerRunner); v2.0 supports: local"
         )
     raise ForemanError(f"unknown runner '{cfg.runner}' (known: local, sprite, docker)")
+
+
+def select(cfg: Config) -> Selection:
+    """create() plus the paired commit handoff. v2.0: every supported runner
+    shares Foreman's clone, so the shared-worktree strategy is the pairing;
+    the sprite selection will pair the bundle strategy here in v2.1."""
+    from foreman.handoff import SharedWorktreeHandoff
+
+    runner = create(cfg)
+
+    def make_handoff(workdir: Path, handle: Handle | None) -> "CommitHandoff":
+        return SharedWorktreeHandoff(workdir)
+
+    return Selection(runner=runner, make_handoff=make_handoff)
