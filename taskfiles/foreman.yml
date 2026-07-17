@@ -1,0 +1,61 @@
+# Foreman — deterministic supervisor for milestone-driven agent dispatch.
+# Included by the root Taskfile under the `foreman:` namespace. Foreman is now
+# an installed console script (D11), so these wrap `foreman <command>` rather
+# than `python3 -m foreman`. In THIS repo we run the local checkout via uv; a
+# consumer repo's copier-owned wrapper pins a tag and invokes through uvx
+# (see docs/architecture/foreman.md).
+#
+# Targeting: orchestration tasks take `-- --milestone <n|title>` or
+# `-- --issue <n>`, e.g. `task foreman:plan -- --milestone 1`.
+version: "3"
+
+vars:
+  # In-repo dogfood invocation: the local package via uv. Consumers instead
+  # pin `uvx --from git+https://github.com/ponderousdev/foreman@vX.Y.Z foreman`.
+  FOREMAN: uv run --locked foreman
+
+tasks:
+  plan:
+    desc: "Dry run: graph, waves, ready set, runner + capabilities, trust (no side effects)"
+    cmds:
+      - "{{.FOREMAN}} plan {{.CLI_ARGS}}"
+
+  preflight:
+    desc: "Assert the security controls empirically before any dispatch (#15)"
+    cmds:
+      - "{{.FOREMAN}} preflight {{.CLI_ARGS}}"
+
+  vet:
+    desc: "Read-only agent analysis of the target; drafts correction comments (--post publishes)"
+    cmds:
+      - "{{.FOREMAN}} vet {{.CLI_ARGS}}"
+
+  dispatch:
+    desc: "Dispatch ready units through the runner seam, verify, open PRs (idempotent)"
+    cmds:
+      - "{{.FOREMAN}} dispatch {{.CLI_ARGS}}"
+
+  shepherd:
+    desc: "Keep open foreman PRs healthy: repair CI, adjudicate reviews, rebase, report merge order"
+    cmds:
+      - "{{.FOREMAN}} shepherd {{.CLI_ARGS}}"
+
+  watch:
+    desc: "Loop plan→dispatch→shepherd with heartbeats until done (stop file: .foreman-stop)"
+    cmds:
+      - "{{.FOREMAN}} watch {{.CLI_ARGS}}"
+
+  status:
+    desc: "Read-only snapshot: unit table + consolidated human-action queue"
+    cmds:
+      - "{{.FOREMAN}} status {{.CLI_ARGS}}"
+
+  retry:
+    desc: "Re-dispatch a unit whose PR a human closed (usage: task foreman:retry -- --unit N)"
+    cmds:
+      - "{{.FOREMAN}} retry {{.CLI_ARGS}}"
+
+  cleanup:
+    desc: "Prune worktrees + foreman-created branches for closed units (in-flight untouched)"
+    cmds:
+      - "{{.FOREMAN}} cleanup {{.CLI_ARGS}}"

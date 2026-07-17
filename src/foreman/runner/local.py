@@ -63,7 +63,12 @@ ec=$?
 printf '%s' "$ec" >"$sf.tmp" && mv -f "$sf.tmp" "$sf"
 exit "$ec"
 """
-_READY_WAIT_S = 5
+# A live process that has not run `trap` yet is what we wait for; the marker
+# normally appears within milliseconds. The cap only guards against a wedged
+# interpreter, so it is generous — a shared-box scheduling stall must never
+# make spawn() return before the trap is installed (that would let a prompt
+# kill() misclassify a normal exit as abnormal).
+_READY_WAIT_S = 30
 
 
 def _proc_starttime(pid: int) -> str | None:

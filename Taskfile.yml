@@ -2,6 +2,10 @@
 # https://taskfile.dev
 version: "3"
 
+includes:
+  # Foreman's own supervisor commands (dogfood): task foreman:plan, etc.
+  foreman: ./taskfiles/foreman.yml
+
 output:
   group:
     begin: "::group::{{.TASK}}"

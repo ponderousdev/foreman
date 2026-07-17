@@ -67,6 +67,11 @@ def _parser() -> argparse.ArgumentParser:
         help="post the human-reviewed drafted comments from .foreman/vet/comments/",
     )
 
+    sub.add_parser(
+        "preflight",
+        help="empirically assert the security controls before any dispatch (#15)",
+    )
+
     p_dispatch = sub.add_parser(
         "dispatch", help="dispatch ready units → verify → open PRs"
     )
@@ -91,6 +96,11 @@ def _parser() -> argparse.ArgumentParser:
 
     p_retry = sub.add_parser("retry", help="re-dispatch a unit whose PR a human closed")
     p_retry.add_argument("--unit", type=int, required=True)
+
+    p_attach = sub.add_parser(
+        "attach", help="resume a preserved failed unit in place (runner-polymorphic)"
+    )
+    p_attach.add_argument("--unit", type=int, required=True)
 
     sub.add_parser(
         "cleanup", help="prune worktrees + foreman branches for closed units"
@@ -417,6 +427,57 @@ def cmd_retry(args: argparse.Namespace) -> int:
     return 0 if outcome.dispatched else 1
 
 
+def cmd_attach(args: argparse.Namespace) -> int:
+    """Local triage (#37): a dead subprocess cannot be re-entered, so local
+    'attach' is 'go to where the state is and resume'. The preserved
+    worktree and the Claude session under ~/.claude are what survive; this
+    prints the exact resume command rather than pretending to attach to a
+    process that is gone. Never appears to succeed while doing nothing."""
+    cfg, root, _gh = _context(read_only=True)
+    if cfg.runner != "local":
+        error(
+            f"attach under runner '{cfg.runner}' is not implemented in v2.0 "
+            "(docker triage is v2.2 #27, sprite triage is v2.1 #32)"
+        )
+        return 1
+    run_dir = backend_mod.unit_dir(cfg, root, args.unit)
+    wt_glob = list((root / cfg.worktrees_dir).glob(f"{args.unit}-*")) + list(
+        (root / cfg.worktrees_dir).glob(f"pr-{args.unit}")
+    )
+    session_ref = None
+    session_file = run_dir / "session"
+    if session_file.exists():
+        for line in session_file.read_text(encoding="utf-8").splitlines():
+            if line.startswith("SESSION_REF="):
+                session_ref = line.split("=", 1)[1].strip() or None
+    if not wt_glob:
+        error(
+            f"no preserved worktree for unit #{args.unit} under "
+            f"{root / cfg.worktrees_dir} — nothing to resume (was it cleaned "
+            "up, or never dispatched?)"
+        )
+        return 1
+    wt_path = wt_glob[0]
+    resume_state = run_dir / "resume-state.md"
+    print(f"Local triage for unit #{args.unit} (no live process to attach to):")
+    print(f"  worktree:     {wt_path}")
+    if resume_state.exists():
+        print(f"  resume state: {resume_state}")
+    print()
+    if session_ref:
+        print("  Resume the preserved Claude session in the worktree:")
+        print(f"    cd {wt_path} && claude --resume {session_ref}")
+    else:
+        print(
+            "  No captured session ref — start a fresh session in the "
+            "worktree and hand it the resume state:"
+        )
+        print(f"    cd {wt_path} && claude")
+        if resume_state.exists():
+            print(f"    # then paste the context from {resume_state}")
+    return 0
+
+
 def cmd_cleanup(_args: argparse.Namespace) -> int:
     cfg, root, gh = _context(read_only=False)
     remote_name = worktree.remote(cfg)
@@ -482,17 +543,30 @@ def cmd_vet(args: argparse.Namespace) -> int:
 
     backend_mod.assert_backend_version(cfg)
     target = prepare_target(gh, cfg, milestone=args.milestone, issue=args.issue)
+    # vet's input surface (#46): issue + sub-issue bodies and only
+    # trusted-authored comments — untrusted comments are excluded in code,
+    # exactly as the implementer's surface excludes them (#14). vet is
+    # read-only and drafts comments for HUMAN approval, but the same rule
+    # holds: world-writable text never enters an agent prompt un-fenced.
     bodies = []
     for number in sorted(target.units):
         unit = target.units[number]
-        comments, _excluded = spec.trusted_comments(gh, cfg, number)
+        comments, excluded = spec.trusted_comments(gh, cfg, number)
         bodies.append(f"# Unit #{number}: {unit.title}\n\n{unit.body}")
         for sub in unit.sub_issues:
             bodies.append(
                 f"## Sub-issue #{sub['number']}: {sub.get('title', '')}\n\n{sub.get('body') or ''}"
             )
         for comment in comments:
-            bodies.append(f"### Comment on #{number}\n\n{comment.get('body') or ''}")
+            author = (comment.get("user") or {}).get("login", "unknown")
+            bodies.append(
+                f"### Comment on #{number} by @{author}\n\n{comment.get('body') or ''}"
+            )
+        if excluded:
+            bodies.append(
+                f"_Note: {excluded} comment(s) from untrusted authors were "
+                f"withheld from this analysis of #{number}._"
+            )
     tokens = {
         "TARGET": target.label,
         "CONCURRENT": "\n".join(_concurrent_activity(gh, target)) or "(none detected)",
@@ -552,6 +626,27 @@ def _extract_draft_comments(findings: str) -> dict[int, str]:
     return drafted
 
 
+def cmd_preflight(_args: argparse.Namespace) -> int:
+    from foreman import preflight as preflight_mod
+
+    cfg, _root, gh = _context(read_only=True)
+    read_token = preflight_mod.read_token_from_env()
+    probes = preflight_mod.run_preflight(
+        slug=gh.repo_slug(),
+        default_branch=gh.default_branch(),
+        expected_login=cfg.expected_login,
+        write=preflight_mod.gh_with_token(None),
+        read=preflight_mod.gh_with_token(read_token),
+    )
+    print(preflight_mod.render(probes))
+    failed = [p for p in probes if not p.ok]
+    if failed:
+        error(f"preflight FAILED: {len(failed)} assertion(s) did not hold")
+        return 1
+    info("preflight: all assertions hold")
+    return 0
+
+
 def cmd_watch(args: argparse.Namespace) -> int:
     cfg, root, _gh = _context(read_only=False)
     backend_mod.assert_backend_version(cfg)
@@ -570,11 +665,13 @@ def cmd_watch(args: argparse.Namespace) -> int:
 _COMMANDS = {
     "plan": cmd_plan,
     "vet": cmd_vet,
+    "preflight": cmd_preflight,
     "dispatch": cmd_dispatch,
     "shepherd": cmd_shepherd,
     "watch": cmd_watch,
     "status": cmd_status,
     "retry": cmd_retry,
+    "attach": cmd_attach,
     "cleanup": cmd_cleanup,
 }
 

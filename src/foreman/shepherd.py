@@ -170,6 +170,21 @@ def _resume_agent(
     )
 
 
+def _thread_trusted(gh: GitHub, cfg: Config, thread: dict) -> bool:
+    """A review thread is trusted-authored only if EVERY commenter in it is
+    a trusted actor (or foreman itself). One untrusted voice taints the
+    thread — the shepherd must not read any of it into a prompt (#46)."""
+    me = gh.viewer()
+    comments = (thread.get("comments") or {}).get("nodes") or []
+    if not comments:
+        return False
+    for comment in comments:
+        author = (comment.get("author") or {}).get("login") or ""
+        if author != me and author not in cfg.trusted_actors:
+            return False
+    return True
+
+
 def _common_tokens(
     gh: GitHub, cfg: Config, selection: Selection, work: PrWork
 ) -> dict[str, str]:
@@ -311,6 +326,29 @@ def shepherd_pr(
 
     threads = [t for t in gh.review_threads(work.number) if not t.get("isResolved")]
     if threads:
+        # Input-surface enforcement (#46): free text enters a shepherd prompt
+        # only when trusted-authored. An untrusted PR-review comment (anyone
+        # can comment on a public-repo PR) is dispositioned by its trusted
+        # SIGNAL — thread exists, still unresolved — never by feeding its
+        # body to the agent. The presence of any untrusted-authored thread on
+        # a runner lacking untrusted-input escalates to a human rather than
+        # letting world-writable text reach the prompt.
+        untrusted_threads = [
+            thread for thread in threads if not _thread_trusted(gh, cfg, thread)
+        ]
+        if (
+            untrusted_threads
+            and "untrusted-input" not in selection.runner.capabilities()
+        ):
+            work.actions += 1
+            work.state, work.detail = (
+                "escalated",
+                f"{len(untrusted_threads)} review thread(s) from untrusted "
+                "authors — their text is not fed to an agent on a runner "
+                "without the untrusted-input boundary (#46); a human must "
+                "adjudicate",
+            )
+            return work
         work.actions += 1
         rendered = []
         for thread in threads[:20]:

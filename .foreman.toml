@@ -1,0 +1,51 @@
+# Foreman configuration for foreman's own repo (dogfood).
+#
+# Plan-affecting keys here (runner, trusted_actors, required_capabilities,
+# [verify]) are read from the DEFAULT BRANCH of Foreman's own clone, never
+# from a dispatched branch — an agent must not edit its own trust or gate.
+
+# v2.0 ships only the local runner. sprite (v2.1) is what makes untrusted
+# dogfooding safe; until then this repo dispatches only trusted-authored
+# issues (D4/D13), which the trust gate enforces.
+runner = "local"
+
+backend = "claude"
+require_approval = true
+inputs = "auto"
+expected_login = "evanharmon1-bot"
+
+# The accounts whose issue content and arming are trusted (D4/D13). Keep
+# this tight — it is the trust boundary for local dispatch. Renovate and
+# CodeRabbit author issues/PRs here; list the bots you actually trust to
+# arm and to author dispatchable content.
+trusted_actors = ["evanharmon1", "evanharmon1-bot"]
+
+# The composed verify gate (#29). Foreman's own `verify` is check + build +
+# test and needs no daemon; the docker-keyed addition (devcontainer smoke +
+# permission assert) runs where a daemon is present and is GitHub Actions'
+# job otherwise. No `ports` key: this repo has no port-binding e2e.
+[verify]
+default = ["task", "verify"]
+docker = ["task", "test:devcontainer:permissions"]
+
+# Hard requirements: none. The baseline gate runs without special
+# capabilities, so a capability-poor runner is never refused for this repo.
+required_capabilities = []
+
+# subscription (default): adapters inherit CLAUDE_CODE_OAUTH_TOKEN; USD
+# budgets are inert. api: adapters export FOREMAN_ANTHROPIC_API_KEY
+# process-locally and USD budgets bind.
+billing = "subscription"
+
+# Set FOREMAN_SANDBOXED=1 (env) inside the egress-limited bot devcontainer
+# to relax the agent permission mode; the committed default stays
+# conservative for any other host.
+sandboxed = false
+
+[budgets]
+dispatch_usd = 20.0
+shepherd_usd = 10.0
+
+[timeouts]
+dispatch_min = 90
+shepherd_min = 30
