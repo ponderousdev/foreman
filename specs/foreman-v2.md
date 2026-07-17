@@ -541,7 +541,8 @@ flip.
       exit code, and stops (not destroys) on failure.
 - [ ] `fetch`/`put`/`start`/`attach` land; Sprite commits arrive by `git bundle`
       and are pushed only by Foreman.
-- [ ] `capabilities() == {"ports"}`; guest-level egress control ships.
+- [ ] `capabilities() == {"ports", "untrusted-input"}`; guest-level egress
+      control ships.
 - [ ] Sprite credential delivery is defined and proven before the v2.1 trust
       contract is claimed: scoped read-only, no host-environment inheritance, not
       persisted into the image or a committed file, and asserted by preflight.
