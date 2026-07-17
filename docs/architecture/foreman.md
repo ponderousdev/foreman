@@ -212,10 +212,12 @@ USD budgets bind. Switching is a config flip plus one secret.
   or reopen issues, edit issue bodies/titles, touch human comments, or write
   fields/types/dependency edges — those operations do not exist in the
   module, and the test suite greps to keep them absent.
-- **Prompt-injection surface**: only trusted-association comments enter
-  prompts; review-bot findings and CI logs are framed as claims to
-  adjudicate, not instructions; agents run with conservative permission
-  modes outside the sandboxed bot devcontainer (`FOREMAN_SANDBOXED=1`
+- **Prompt-injection surface**: only trusted-actor comments (author in
+  `trusted_actors`, or foreman's own) enter prompts, and untrusted authorship
+  anywhere in the surface classifies the unit `untrusted-input` (D13);
+  review-bot findings and CI logs are framed as claims to adjudicate, not
+  instructions; agents run with conservative permission modes outside the
+  sandboxed bot devcontainer (`FOREMAN_SANDBOXED=1`
   relaxes inside it).
 
 ## Configuration (.foreman.toml)
