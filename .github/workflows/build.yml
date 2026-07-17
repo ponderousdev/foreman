@@ -38,6 +38,7 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           lint-tools: "true"
+          python-tools: "true"
       - name: Lint
         run: task check
       - run: task test:tasks
@@ -65,9 +66,29 @@ jobs:
       - name: Security scan
         run: task security
 
+  test:
+    # Tier 1 of docs/architecture/tests.md: hermetic pytest suite — fake gh
+    # transport, real subprocesses, no Docker daemon, no network.
+    # Runner switch: CI_RUNS_ON repo/org variable unset -> the rendered
+    # default; set it to a JSON runner spec to override without a commit.
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          python-tools: "true"
+      - name: Test
+        run: task test
+
   verify:
     if: always()
-    needs: [lint, security]
+    needs: [lint, security, test]
     # Runner switch: CI_RUNS_ON repo/org variable unset -> the rendered
     # default; set it to a JSON runner spec to override without a commit.
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
@@ -80,6 +101,7 @@ jobs:
           }
           check lint "${{ needs.lint.result }}"
           check security "${{ needs.security.result }}"
+          check test "${{ needs.test.result }}"
           if [ "$fail" -ne 0 ]; then
             echo "One or more required jobs failed."
             exit 1
