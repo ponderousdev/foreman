@@ -63,6 +63,9 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           gitleaks: "true"
+          # `task security` -> `security:audit` runs pip-audit over the uv
+          # lockfile, so the security job needs uv too (not just gitleaks).
+          python-tools: "true"
       - name: Security scan
         run: task security
 
