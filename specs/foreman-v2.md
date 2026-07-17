@@ -176,7 +176,7 @@ environment.** An env allowlist is defense in depth, not containment.
 |---|---|---|
 | Boundary | the bot devcontainer | one Firecracker microVM per unit |
 | Foreman / agent separation | none — same container, same HOME, same netns | full — separate machines |
-| Agent-reachable secrets | everything in the devcontainer env-file: the bot PAT (accepted, [D3](#d3-local-accepts-relaxed-separation)), `CLAUDE_CODE_OAUTH_TOKEN`, the Telegram key — plus the Fly API token from v2.1 | the unit's read-only token, and nothing else |
+| Agent-reachable secrets | everything in the devcontainer env-file: the bot PAT (accepted, [D3](#d3-local-accepts-relaxed-separation)), `CLAUDE_CODE_OAUTH_TOKEN`, the Telegram key — plus the Fly API token from v2.1 | the unit's read-only repo token and `CLAUDE_CODE_OAUTH_TOKEN`, set by Foreman at Machine-create time (#30) — nothing else |
 | Input trust | **trusted actors only** ([D4](#d4-local-is-trusted-input-only)) | untrusted content permitted |
 | Branch gate executes | in Foreman's container | in the guest VM |
 | Commit handoff | Foreman reads the shared worktree | `git bundle` → Foreman's clone |
@@ -226,9 +226,12 @@ Liveness is not enough — **exit status must survive a Foreman restart**. Linux
 hands an exit status only to the parent; after a crash the agent is orphaned to
 PID 1 and a restarted Foreman cannot `wait()` it. LocalRunner therefore spawns
 the adapter through a wrapper that records the exit status under the unit's run
-dir (the wrapper is the process-group leader, so `kill()`-the-group is
-unchanged), and `wait()` supports a non-child mode: poll liveness, then read
-the recorded status. Dead process, no recorded status — that is an abnormal
+dir — written to a temp file and **atomically renamed**; the value is the shell
+wait status, `128+N` for signal deaths — and `wait()` supports a non-child
+mode: poll liveness, then read the recorded status. The handle tracks the
+wrapper (the process-group leader, so `kill()`-the-group is unchanged), and the
+wrapper exits only after the rename — so dead-with-no-status cannot
+misclassify a normal exit. It means the wrapper itself was killed: an abnormal
 termination, reported as such, never guessed.
 
 `wait(timeout_s)` and `kill()` are not new features — they restore v1 behavior
@@ -329,6 +332,10 @@ those braces.
 into `required_capabilities`; local never advertises it, so the standard
 hard-mismatch refusal (#28) fires and names sprite as the compatible runner.
 D4 needs no runner-name branch in eligibility code.
+
+The predicate is evaluated at plan time and **re-evaluated at dispatch** —
+visibility and access can change in the window between them, and dispatch fails
+closed on drift, exactly as issue content is pinned against TOCTOU (#14).
 
 ### D5: Sprites do not run Docker
 
@@ -548,7 +555,10 @@ flip.
       persisted into the image or a committed file, and asserted by preflight.
 - [ ] The devcontainer image is digest-pinned and versioned.
 - [ ] The Fly API token lives in a dedicated agents-only Fly org with a spend
-      limit; the trust model records it as agent-reachable under local (D1).
+      limit, and is the narrowest shape that can manage agent Machines (an
+      app-scoped deploy token if that suffices; org-wide only as fallback). It
+      is supervisor-only — never delivered into any unit environment — and the
+      trust model records it as agent-reachable under local anyway (D1).
 - [ ] A unit outlives its supervisor safely: a guest-side timeout stops a
       Machine whose Foreman died; preserved Machines have a GC/TTL policy
       (stopped Machines still bill for rootfs storage); unit logs are written
