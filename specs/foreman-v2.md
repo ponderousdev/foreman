@@ -712,9 +712,9 @@ untrusted dispatches (#13), ideally minted per unit (#30). Egress control
 ecosystem — `verify` = check + build + test, `ci` = verify + e2e + security —
 and the fast hook-gate role moves to `check` (today's fast `verify` is `check`
 in all but name, so hooks lose no speed). The template change lands in
-harmon-init as #16's counterpart issue; Foreman's own repo follows when its
-dogfood `.foreman.toml` lands. Without this, dogfooding would run a test-free
-in-unit gate.
+harmon-init as #16's counterpart change there; Foreman's own repo follows when
+its dogfood `.foreman.toml` lands. Without this, dogfooding would run a
+test-free in-unit gate.
 
 **Package versioning:** the milestone is "v2.0" but release-please starts
 wherever it is told. Decide the first tag deliberately (#11) — aligning at
