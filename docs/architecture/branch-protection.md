@@ -303,6 +303,46 @@ only if everything stays green. A required check whose workflow does **not** run
 | Delete main                             | ❌       | `deletion` rule                                 |
 | Modify branch protection rules          | ❌       | Write collaborator role has no settings access  |
 
+## Protecting Version Tags
+
+Foreman is consumed by `uvx --from git+https://…@vX.Y.Z`
+([spec D11](../../specs/foreman-v2.md#d11-distribution-is-a-git-tag-uvx-invocation-not-a-package-index)),
+so a version tag is **executable distribution**: whoever can move one chooses
+the code every consumer runs next. A tag is a mutable ref, `contents: write`
+can force-move or delete it, and the bot PAT is agent-reachable under local
+(spec D3) — so version tags get their own ruleset
+([spec D14](../../specs/foreman-v2.md#d14-version-tags-are-immutable)),
+independent of Protect Main.
+
+**Two rulesets, because bypass is ruleset-wide.** A bypass actor bypasses
+_every_ rule in its ruleset — there is no per-rule bypass. A single combined
+ruleset would therefore let the release path's bypass actors move and delete
+tags too. The split puts the bypass where creation is, and nowhere near
+immutability:
+
+| Ruleset (importable JSON in `.github/`) | Rules on `refs/tags/v*` | Bypass actors |
+| --- | --- | --- |
+| **Version Tag Creation** | `creation` — nobody creates version tags | `OrganizationAdmin` (`always`, for `task release:*`) plus the `ponderousdev-ci` App — **add the App in the UI after import** (bypass mode `always`); release-please cuts release tags as that App, and an App's actor id cannot be carried portably in the JSON |
+| **Version Tag Immutability** | `update` + `deletion` — nobody moves or deletes one | **none — deliberately. Do not add any.** |
+
+Import both the same way as Protect Main (Settings → Rules → Rulesets → **New
+ruleset ▸ Import a ruleset**).
+
+With no bypass on immutability, moving or deleting a version tag requires a
+repo admin to first edit or disable that ruleset — a deliberate, audit-logged
+act. A bad release is handled by cutting a new patch version, never by moving
+the old tag.
+
+While importing, also create the **preflight probe tag** `v0.0.0-probe`
+(pointing at any commit — as a prerelease of the lowest version it sorts below
+every real release, and Renovate's `github-tags` datasource ignores
+prereleases). `foreman:preflight` (#15) probes all three controls empirically:
+the write token must fail to create a scratch `v*` tag, and must fail to move
+or delete `v0.0.0-probe`. An unexpected success fails preflight loudly with
+best-effort cleanup — and an unexpectedly _deleted_ probe tag cannot be
+recreated by the bot (creation is denied), so that failure names the operator
+step: recreate the tag.
+
 ## Applying This Ruleset to Other Repos
 
 This ruleset ships with every repo generated from harmon-init. To replicate manually:

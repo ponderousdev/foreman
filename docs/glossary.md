@@ -18,4 +18,6 @@ project-specific (domain) terms as the model firms up.
 | bot profile / dev profile | The two devcontainer profiles: `bot` (`.devcontainer/`, AI agents, no Tailscale) and `dev` (`.devcontainer/dev/`, human, with Tailscale). See [guides/devcontainers.md](guides/devcontainers.md). |
 | 1Password Environments | How devcontainer/local secrets are supplied — a virtual `.env` mounted over a pipe, never written to disk or git. |
 | bot vs operator | Two identities: the AI **bot** account (scoped, can't merge `main`) and the human **operator** (full access). See [architecture/security.md](architecture/security.md). |
+| Sprite | This project's word for one ephemeral Fly **Machine** (Firecracker microVM) per unit, booted from the pinned devcontainer image over the Fly Machines API (spec D5/D6, #30). Not Fly's separately launched "Sprites" product (sprites.dev), whose image, lifecycle, and billing semantics differ. |
+| `foreman:preflight` vs `foreman:vet` | `preflight` is the pre-dispatch security assertion gate (#15: login, ruleset, read-token, workflow-edit, tag probes). `vet` is v1's read-only agent analysis of target issues (renamed from v1's `preflight` during extraction, #10). |
 | TODO: term | TODO: project-specific definition |
