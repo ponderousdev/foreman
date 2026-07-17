@@ -1,5 +1,5 @@
 {
-  "name": "Protect Version Tags",
+  "name": "Version Tag Creation",
   "target": "tag",
   "source_type": "Repository",
   "source": "ponderousdev/foreman",
@@ -13,12 +13,6 @@
   "rules": [
     {
       "type": "creation"
-    },
-    {
-      "type": "update"
-    },
-    {
-      "type": "deletion"
     }
   ],
   "bypass_actors": [
