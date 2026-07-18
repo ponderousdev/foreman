@@ -1,34 +1,22 @@
 name: Setup toolchain
 description: >-
-  Install the shared toolchain (Node/pnpm, Task), project
-  dependencies, and — behind inputs — the lint + security CLIs. Single source of
+  Install the shared toolchain (Node, Python/uv, Task) and — behind inputs — the lint + security CLIs. Single source of
   truth for the CI jobs and the Claude automation workflows so local, CI, and
   agent runs all execute the same Taskfile targets. Callers must run
   actions/checkout first.
 
 inputs:
-  install-deps:
-    description: Install project dependencies () when present.
-    default: "true"
   lint-tools:
     description: >-
       Install shellcheck, shfmt, actionlint, yamllint, yq — required by
       `task check` / `task verify`.
     default: "false"
   gitleaks:
-    description: Install gitleaks — required by `task security`.
+    description: Install gitleaks — required by `task security:secrets`.
     default: "false"
-  python-tools:
-    description: >-
-      Install uv — required by the Python tasks (`lint:python`,
-      `typecheck:python`, `test:python`, `security:audit`).
+  snyk:
+    description: Install the pinned Snyk CLI for an explicitly enabled scan.
     default: "false"
-  cache:
-    description: >-
-      Enable the pnpm dependency cache. Turn OFF for credential-holding jobs —
-      the repo-wide Actions cache is writable from lower-trust PR runs, so a
-      job with push/deploy tokens takes the cold-install trade instead.
-    default: "true"
 
 runs:
   using: composite
@@ -37,6 +25,11 @@ runs:
       with:
         # renovate: datasource=node-version
         node-version: "24"
+    - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      with:
+        python-version: "3.13"
+    # uv provides uvx for pinned Semgrep CE.
+    - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
     - uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
       with:
         # renovate: datasource=github-releases depName=go-task/task extractVersion=^v(?<version>.+)$
@@ -77,21 +70,23 @@ runs:
           "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64"
         echo "${YQ_SHA256}  /tmp/yq" | sha256sum -c -
         sudo install -m 0755 /tmp/yq /usr/local/bin/yq
-        pip install yamllint
-    - name: Install uv
-      if: inputs.python-tools == 'true'
-      shell: bash
-      run: |
-        # renovate: datasource=pypi depName=uv
-        UV_VERSION=0.11.25
-        pip install "uv==${UV_VERSION}"
+        # renovate: datasource=pypi depName=yamllint
+        YAMLLINT_VERSION=1.38.0
+        python3 -m pip install "yamllint==${YAMLLINT_VERSION}"
     - name: Install gitleaks
       if: inputs.gitleaks == 'true'
       shell: bash
       run: |
         # renovate: datasource=github-releases depName=gitleaks/gitleaks extractVersion=^v?(?<version>.+)$
         GITLEAKS_VERSION=8.24.3
-        curl -sSL -o /tmp/gitleaks.tgz \
+        curl -fsSL --retry 3 -o /tmp/gitleaks.tgz \
           "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
         tar -xzf /tmp/gitleaks.tgz -C /tmp
         sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+    - name: Install Snyk CLI
+      if: inputs.snyk == 'true'
+      shell: bash
+      run: |
+        # renovate: datasource=npm depName=snyk
+        SNYK_VERSION=1.1305.2
+        npm install --global "snyk@${SNYK_VERSION}"

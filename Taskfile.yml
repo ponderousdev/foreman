@@ -46,30 +46,33 @@ tasks:
   ci:
     # Full local mirror of the CI pipeline — run before (or instead of) opening
     # a PR to catch everything CI would, on demand, without waiting on a PR run.
-    # Builds on `verify` and adds the heavier / environment-dependent checks
-    # (the devcontainer permission assert needs a Docker daemon, like CI has).
-    desc: Full CI mirror (verify → [test:devcontainer:permissions →] test → security)
+    # Builds on `verify` and adds the devcontainer permission assertion plus the
+    # heavier security checks.
+    desc: Full CI mirror (verify → test:devcontainer:permissions → security)
     cmds:
       - task: verify
       - task: test:devcontainer:permissions
-      - task: test
       - task: security
 
   verify:
-    # Fast local gate (target: well under a minute) — safe for editors, git
-    # hooks, and AI agents to run on every change without getting bogged down.
-    # Add a check here ONLY if it stays fast; heavier or environment-dependent
-    # checks (test, security, the devcontainer permission assert) live in `ci`.
-    desc: Fast local gate (check → validate → guards)
+    # The definition-of-done gate — everything that must pass before a change
+    # is done. Foreman v2 calls this the "check + build + test" tier; the desc
+    # below lists this repo's exact steps. For the fast inner loop use `check`;
+    # heavier security checks and the devcontainer permission assertion stay in `ci`.
+    desc: Definition-of-done gate (check → validate → guards → test)
     cmds:
       - task: check
       - task: validate
       - task: test:tasks
+      - task: test:release-title
       - task: test:hooks
+      - task: test
 
   # ── Quality Checks ────────────────────────────────────────────
   check:
-    desc: Run all linters + typecheckers (parallel)
+    # Fast local gate (target: well under a minute) — safe for editors, git
+    # hooks, and AI agents to run on every change without getting bogged down.
+    desc: Fast local gate — all linters + typecheckers (parallel)
     deps:
       - lint
       - typecheck
@@ -234,6 +237,11 @@ tasks:
     cmds:
       - ./scripts/test-tasks.sh
 
+  test:release-title:
+    desc: Unit-test the release-content title guard (require-release-title.sh)
+    cmds:
+      - ./scripts/test-release-title.sh
+
   test:devcontainer:root:
     desc: Smoke test the primary (AI bot) devcontainer via the devcontainers CLI
     cmds:
@@ -256,8 +264,9 @@ tasks:
 
   # ── Security ───────────────────────────────────────────────────
   security:
-    desc: Run all security checks (parallel)
+    desc: Run all free local security checks (Semgrep CE + gitleaks + dependency audit)
     deps:
+      - security:sast
       - security:secrets
       - security:audit
 
@@ -281,14 +290,24 @@ tasks:
       - ./scripts/audit-python.sh
 
   security:sast:
-    desc: "Static application security testing (Snyk) — optional/local, needs SNYK_TOKEN (not in CI or `task security`)"
+    desc: Static application security testing (Semgrep Community Edition)
     cmds:
-      - snyk code test --exclude=.worktrees --severity-threshold=high
+      - ./scripts/run-semgrep.sh {{.CLI_ARGS}}
 
   security:sca:
-    desc: "Software composition analysis (Snyk) — optional/local, needs SNYK_TOKEN (not in CI or `task security`)"
+    desc: Software composition analysis (free package-manager audit)
+    deps:
+      - security:audit
+
+  security:sast:snyk:
+    desc: "Optional Snyk Code second-opinion scan (manual/local or explicitly scheduled); needs SNYK_TOKEN"
     cmds:
-      - snyk test --severity-threshold=high --show-vulnerable-paths=all
+      - snyk code test --exclude=.worktrees,.foreman,.claude --severity-threshold=high {{.CLI_ARGS}}
+
+  security:sca:snyk:
+    desc: "Optional Snyk Open Source second-opinion scan (manual/local or explicitly scheduled); needs SNYK_TOKEN"
+    cmds:
+      - snyk test --all-projects --exclude=.worktrees,.foreman,.claude --severity-threshold=high --show-vulnerable-paths=all {{.CLI_ARGS}}
 
   # ── Secrets ────────────────────────────────────────────────────
   # Destination-only helpers: the secret value stays on stdin — never in argv,
@@ -341,8 +360,7 @@ tasks:
   setup:github:
     desc: >-
       Apply idempotent GitHub repo settings via gh (Dependabot alerts, private
-      vulnerability reporting, CodeQL
-      variable, bot collaborator)
+      vulnerability reporting, bot collaborator)
     vars:
       REPO: "ponderousdev/foreman"
     cmds:
@@ -356,7 +374,6 @@ tasks:
         else
           echo "Skipping private vulnerability reporting ({{.REPO}} is private; public-repo-only feature)."
         fi
-      - gh variable set FULL_SECURITY_SCAN --repo "{{.REPO}}" --body true
       - gh api "repos/{{.REPO}}/collaborators/evanharmon1-bot" --method PUT -f permission=push
 
   setup:github-issue-types:

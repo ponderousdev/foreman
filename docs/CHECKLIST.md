@@ -19,8 +19,11 @@ config, toolchain, devcontainer, and dev environment — against the items below
       `.claude/skills/`. Until then the `verify:skills*` drift checks skip
       cleanly (CI + pre-push). **Pin bumps are a two-step:** edit `ref` in
       `.skills-sync.yaml`, then run `task sync:skills` and commit the refreshed
-      `.claude/skills/` in the same PR — Renovate can bump the ref but can't do
-      the re-sync, so a ref-only commit fails the drift check.
+      `.claude/skills/` in the same PR. Renovate surfaces a new release in the
+      Dependency Dashboard; approve it there to open the pin PR, then run the
+      sync and push its output as a separate commit (do not amend Renovate's
+      commit). Renovate cannot do the re-sync, so a ref-only commit fails the
+      drift check.
 - [ ] Verify `foreman.code-workspace` opens the repo's folder in VS Code and has a unique VS Code Workspace color. Then add any other related repos (e.g. other org repos) to the `folders` list in the workspace file so you have quick access to those repos
 - [ ] Extend `.gitignore` for your stack — the template ships a base; add stack-specific entries via [gitignore.io](https://www.toptal.com/developers/gitignore)
 - [ ] macOS: add a Raycast quicklink/alias that opens the `foreman.code-workspace`
@@ -30,10 +33,15 @@ config, toolchain, devcontainer, and dev environment — against the items below
 
 - [ ] **Automated settings** — run `task setup:github` (idempotent, safe to
       re-run): enables **Dependabot alerts** and **private vulnerability
-      reporting**, sets the `FULL_SECURITY_SCAN` variable (CodeQL), and adds
+      reporting** when public, and adds
       the `evanharmon1-bot` machine account as a Write
-      collaborator. Do NOT add dependabot.yml — Renovate owns version updates.
-- [ ] Import the branch ruleset (see [architecture/branch-protection.md](architecture/branch-protection.md)) — do this once `build.yml` is on `main` so the required `verify`/`security` checks resolve. **Use the UI import:** Settings → Rules → Rulesets → **New ruleset ▸ Import a ruleset** → select `.github/Branch Protection Ruleset - Protect Main.json`. (Prefer the UI over `gh api … rulesets`: the API `POST` is not idempotent — re-running creates a duplicate ruleset — and currently rejects the `merge_queue` rule. To later change the ruleset, edit the existing one in the UI rather than re-importing.)
+      collaborator. Do not add `dependabot.yml`: Renovate owns routine
+      and vulnerability-remediation PRs; Dependabot owns advisory alerts.- [ ] **Bot PAT** — the agent's `GH_TOKEN`. If a fine-grained PAT already covers
+`ponderousdev`,
+      just add this repo to its **selected repositories**; a token is scoped to one
+      resource owner, so a **new owner needs a new PAT**. Both layers are required —
+      the collaborator grant above sets the ceiling, the PAT's repo list reaches it.
+      Procedure: [guides/bot-account.md](guides/bot-account.md).- [ ] Import the branch ruleset (see [architecture/branch-protection.md](architecture/branch-protection.md)) — do this once `build.yml` are on `main` so the required `verify`/`security` checks resolve. **Use the UI import:** Settings → Rules → Rulesets → **New ruleset ▸ Import a ruleset** → select `.github/Branch Protection Ruleset - Protect Main.json`. (Prefer the UI over `gh api … rulesets`: the API `POST` is not idempotent — re-running creates a duplicate ruleset — and currently rejects the `merge_queue` rule. To later change the ruleset, edit the existing one in the UI rather than re-importing.)
 
 - [ ] Install the [Renovate app](https://github.com/apps/renovate) on the repo
 - [ ] Install the [CodeRabbit app](https://github.com/apps/coderabbitai) on the repo (`.coderabbit.yaml` is pre-configured)
@@ -41,12 +49,22 @@ config, toolchain, devcontainer, and dev environment — against the items below
       with `claude setup-token`; the value must start **`sk-ant-oat01-`** (an OAuth
       token, billed to your Claude subscription), **not** `sk-ant-api03-` (a raw API
       key, billed at pay-as-you-go API rates). Then `gh secret set CLAUDE_CODE_OAUTH_TOKEN`
-- [ ] Snyk is **optional and local-only**: `task security:sast`/`security:sca` are
-      opt-in — they are NOT in CI or `task security`, so run them by hand with
-      `SNYK_TOKEN` in your local env / 1Password (no Actions secret needed). If the
-      **Snyk GitHub App** is installed it posts `code/snyk`/`security/snyk` PR checks,
-      which the branch ruleset does **not** require; remove the app (or this repo from
-      it) to drop them.
+- [ ] **SAST coverage** — this profile has no CodeQL workflow, so Semgrep CE runs
+      in `build.yml` for public and private repositories. Add CodeQL later if the
+      repo gains a supported application stack and is public (free) or has paid
+      GitHub Code Security (private/internal).
+- [ ] **Choose the Snyk posture** — the default is manual/local only via
+      `task security:sast:snyk` and `task security:sca:snyk`; it is not part of
+      `task security` or required PR CI. Free private-repository tests share the
+      Snyk Organization's monthly quota, including local CLI tests. Leave the
+      Snyk GitHub App off unless deliberately adopting its PR integration; its
+      checks are not required by the default branch ruleset.
+- [ ] **Optional scheduled Snyk** — leave this off for ordinary and free private
+      repos. For a selected important public repo, re-render with
+      `snyk_scan_schedule=weekly` (conservative) or `daily` (public or accepted
+      unlimited OSS), set the generated workflow's `SNYK_TOKEN` Actions secret,
+      and verify one manual run. Confirm Snyk classifies the public Git remote
+      correctly. The workflow is advisory and never a required PR check.
 - [ ] **Create** the CI GitHub App `ponderousdev-ci` by hand (one App per org;
       **Settings → Developer settings → GitHub Apps**), or reuse the org's existing one.
 - [ ] **Install** the App on this repo — **Install App → Only select repositories**

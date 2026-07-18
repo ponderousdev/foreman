@@ -38,10 +38,10 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           lint-tools: "true"
-          python-tools: "true"
       - name: Lint
         run: task check
       - run: task test:tasks
+      - run: task test:release-title
       - name: Skills drift check (vendored skills vs pinned harmon-devkit ref)
         run: task verify:skills
       - run: task test:hooks
@@ -63,11 +63,12 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           gitleaks: "true"
-          # `task security` -> `security:audit` runs pip-audit over the uv
-          # lockfile, so the security job needs uv too (not just gitleaks).
-          python-tools: "true"
-      - name: Security scan
-        run: task security
+      - name: Secrets scan
+        run: task security:secrets
+      - name: Dependency audit
+        run: task security:audit
+      - name: SAST (Semgrep Community Edition)
+        run: task security:sast
 
   test:
     # Tier 1 of docs/architecture/tests.md: hermetic pytest suite — fake gh
@@ -84,8 +85,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
-        with:
-          python-tools: "true"
       - name: Test
         run: task test
 

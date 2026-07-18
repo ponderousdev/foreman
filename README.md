@@ -197,13 +197,16 @@ the hood and syncs the venv automatically. New here? Start with
 
 | Command | What it does |
 |---|---|
-| `task verify` | Fast local gate: check + validate + guards |
-| `task check` | All linters + typecheck (ruff, mypy, …) in parallel |
-| `task test` | Run tests (see [docs/architecture/tests.md](docs/architecture/tests.md)) |
-| `task ci` | Full CI mirror (verify + test + security + devcontainer assert) |
+| `task check` | Fast gate: all linters + typecheck (ruff, mypy, …) in parallel |
+| `task verify` | Definition-of-done gate: check + validate + guards + tests |
+| `task ci` | Full CI mirror (verify + security + devcontainer assert) |
 | `task fix` | Auto-format, then lint |
-| `task security` | gitleaks + Python dependency audit |
+| `task test` | Run tests (see [docs/architecture/tests.md](docs/architecture/tests.md)) |
+| `task security` | Free local baseline: Semgrep CE + gitleaks + Python dependency audit |
+| `task security:sast` / `security:sca` | Semgrep CE / Python dependency audit |
+| `task security:sast:snyk` / `security:sca:snyk` | Optional Snyk second-opinion scans (manual or explicitly scheduled) |
 | `task foreman:plan` | Dry-run the supervisor: graph, waves, trust, capabilities |
+| `task release:patch` | Tag + GitHub release (also `:minor` / `:major`) |
 | `task status` | Project status dashboard (also `status:git`/`:gh`/`:code`/`:env`) |
 
 ## Testing
