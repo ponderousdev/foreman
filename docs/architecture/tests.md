@@ -10,6 +10,8 @@ runner acceptance criterion a named home.
 |---|---|---|
 | Lint / static analysis | ruff, mypy, shellcheck, yamllint, markdownlint, actionlint | `task check` |
 | Unit tests | pytest (hermetic; fake `gh` transport, no network) | `task test` |
+| Application security | Semgrep CE | `task security:sast` |
+| Optional second opinion | Snyk Code + Open Source, manual | `task security:sast:snyk` / `task security:sca:snyk` |
 | Secrets | gitleaks | `task security:secrets` |
 | Dependency audit | pip-audit over the exported uv.lock | `task security:audit` |
 

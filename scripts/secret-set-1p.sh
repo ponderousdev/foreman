@@ -42,6 +42,16 @@ command -v jq >/dev/null 2>&1 || fail "jq is required"
 # 1Password item JSON from the pipeline.
 exec 3<&0
 
+updated_item_file=""
+cleanup() {
+    [ -z "$updated_item_file" ] || rm -f "$updated_item_file"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+umask 077
+updated_item_file="$(mktemp "${TMPDIR:-/tmp}/secret-set-1p.XXXXXX")" ||
+    fail "could not create secure temporary file"
+
 op item get "$item" --vault "$vault" --format json --reveal |
     jq \
         --arg field "$field" \
@@ -71,7 +81,7 @@ op item get "$item" --vault "$vault" --format json --reveal |
         # field carrying a structured (object) value — plain STRING/CONCEALED
         # fields are scalars, so an object value marks a passkey/SSH-key/document
         # credential we must not touch.
-        | if (.category == "SSHKEY" or .category == "PASSKEY")
+        | if (.category == "SSH_KEY" or .category == "SSHKEY" or .category == "PASSKEY")
              or (([.fields[] | select((.value | type) == "object")] | length) > 0) then
             error("item holds a passkey or SSH key; refusing full-item edit (op would clobber it)")
           else
@@ -90,7 +100,7 @@ op item get "$item" --vault "$vault" --format json --reveal |
           else
             (.fields[] |= if field_matches then .value = $value else . end)
           end
-        ' |
-    op item edit "$item" --vault "$vault" >/dev/null
+        ' >"$updated_item_file"
+op item edit "$item" --vault "$vault" <"$updated_item_file" >/dev/null
 
 echo "Updated 1Password item '$item' field '$field'."
