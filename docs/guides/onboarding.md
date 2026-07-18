@@ -26,12 +26,14 @@ and Coder setup.
 
 Foreman is a uv-managed, stdlib-only Python package under `src/foreman/`
 (no runtime dependencies — the entire vendor surface is shelled out to `gh`,
-`git`, and `backends/*.sh`). Get productive:
+`git`, and `backends/*.sh`). Everything routes through the Taskfile; uv is the
+toolchain underneath, and `task` targets run it via `uv run --locked`, which
+syncs the venv on first use — no manual `uv sync` needed.
 
 ```bash
-uv sync                 # create the venv from uv.lock
-uv run foreman --help   # or: task foreman:plan -- --issue N
-uv run pytest -q        # the hermetic suite (fake gh transport, no network)
+task test                       # the hermetic suite (fake gh transport, no network)
+task check                      # ruff + mypy
+task foreman:plan -- --issue N  # drive the CLI (also dispatch/shepherd/status/…)
 ```
 
 Orient yourself around the seam and the loop:

@@ -163,9 +163,11 @@ task install     # Brewfile deps + lefthook git hooks
 task verify      # fast local gate — confirm everything passes
 ```
 
-Foreman itself is a uv-managed Python package: `uv sync && uv run foreman --help`.
-New here? Start with [docs/guides/onboarding.md](docs/guides/onboarding.md) and
-the post-generation [docs/CHECKLIST.md](docs/CHECKLIST.md).
+Foreman itself is a uv-managed Python package; commands route through the
+Taskfile (`task test`, `task check`, `task foreman:*`), which runs uv under
+the hood and syncs the venv automatically. New here? Start with
+[docs/guides/onboarding.md](docs/guides/onboarding.md) and the post-generation
+[docs/CHECKLIST.md](docs/CHECKLIST.md).
 
 ## Project structure
 

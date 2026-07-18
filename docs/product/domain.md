@@ -40,7 +40,8 @@ erDiagram
     UNIT }o--|| RUNNER : "executes on (config)"
     RUNNER ||--o{ CAPABILITY : advertises
     UNIT ||--o{ REQUIREMENT : "required_capabilities"
-    ARMING_ACTOR ||--o{ UNIT : arms
+    UNIT ||--o{ ARMING_EVENT : receives
+    ARMING_ACTOR ||--o{ ARMING_EVENT : creates
     PR ||--o{ REVIEW_THREAD : "shepherd adjudicates"
 ```
 
@@ -64,6 +65,7 @@ stateDiagram-v2
     dispatched --> pr_open : verified, PR opened
     pr_open --> ready_to_merge : green, adjudicated, mergeable (shepherd)
     ready_to_merge --> merged : human merges
+    blocked --> waiting : human answers → retry / re-arm
     failed --> waiting : foreman retry / attach
     merged --> [*]
 ```
