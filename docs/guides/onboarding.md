@@ -22,9 +22,33 @@ and Coder setup.
 - Releases are intentional via release-please: merge the rolling release PR to
   publish (`task release:*` stays as a manual override).
 
+## Working on Foreman itself
+
+Foreman is a uv-managed, stdlib-only Python package under `src/foreman/`
+(no runtime dependencies — the entire vendor surface is shelled out to `gh`,
+`git`, and `backends/*.sh`). Get productive:
+
+```bash
+uv sync                 # create the venv from uv.lock
+uv run foreman --help   # or: task foreman:plan -- --issue N
+uv run pytest -q        # the hermetic suite (fake gh transport, no network)
+```
+
+Orient yourself around the seam and the loop:
+
+- **The Runner seam** is `src/foreman/runner/` — `__init__.py` (the protocol,
+  handle store, per-unit lock, `select()`) and `local.py` (LocalRunner). It
+  must not leak: `tests/test_leak.py` forbids runner-name branches in policy
+  code. Read [ADR 0003](../decisions/0003-foreman-v2-runner-seam.md) (D1–D14)
+  before touching trust, capabilities, or the gate.
+- **The loop** is `dispatch.py` → `shepherd.py` → `watch.py`; `graph.py`
+  builds units/waves, `trust.py`/`capabilities.py`/`gate.py` gate them, and
+  `github.py` is the entire (write-contract-guarded) GitHub surface.
+- **The domain language** — unit, wave, arming, runner, capability, doneness —
+  is in [../product/domain.md](../product/domain.md); use those names.
+
 ## Where things are
 
-See [the docs map](../README.md) for all documentation and the
-[root README](../../README.md) for the project structure.
-
-TODO: add project-specific context a new contributor needs.
+See [the docs map](../README.md) for all documentation, the
+[root README](../../README.md) for usage + project structure, and
+[../architecture/foreman.md](../architecture/foreman.md) for the deep dive.

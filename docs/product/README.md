@@ -16,4 +16,6 @@ why a choice was made (→ [../decisions/](../decisions/)), or what to build nex
   lifecycles, business rules, the ubiquitous language. Highest-leverage AI doc —
   an agent's domain prior is empty, so this is what it can't infer from code.
 
-TODO: add personas, success metrics, or market context as the product takes shape.
+Personas and success signals live in [vision.md](vision.md); the deeper design
+rationale is in [../../DESIGN.md](../../DESIGN.md) and the
+[ADRs](../decisions/).
