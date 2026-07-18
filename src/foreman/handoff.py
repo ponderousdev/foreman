@@ -21,8 +21,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from foreman import worktree
-from foreman.util import run
+from foreman.gitops import UnitGit
+from foreman.runner import Runner
 
 
 @runtime_checkable
@@ -50,37 +50,27 @@ class CommitHandoff(Protocol):
 
 class SharedWorktreeHandoff:
     """v2.0 local strategy: the agent committed straight into a worktree of
-    Foreman's own clone."""
+    Foreman's own clone. The git operations route through the runner (#20,
+    via UnitGit) so no call assumes `git -C <local path>`."""
 
-    def __init__(self, workdir: Path):
+    def __init__(self, runner: Runner, workdir: Path):
         self.workdir = workdir
+        self._git = UnitGit(runner, workdir)
 
     def collect(self) -> None:
         return None  # shared worktree: the commits are already here
 
     def is_clean(self) -> bool:
-        return worktree.is_clean(self.workdir)
+        return self._git.is_clean()
 
     def commits_ahead(self, base_ref: str) -> int:
-        return worktree.commits_ahead(self.workdir, base_ref)
+        return self._git.commits_ahead(base_ref)
 
     def workflow_paths(self, base_ref: str) -> list[str]:
-        out = run(
-            [
-                "git",
-                "-C",
-                str(self.workdir),
-                "diff",
-                "--name-only",
-                f"{base_ref}...HEAD",
-                "--",
-                ".github/workflows/",
-            ]
-        ).stdout
-        return [line.strip() for line in out.splitlines() if line.strip()]
+        return self._git.workflow_paths(base_ref)
 
     def push(self, remote_name: str, branch: str, *, first: bool) -> None:
-        worktree.push(self.workdir, remote_name, branch, first=first)
+        self._git.push(remote_name, branch, first=first)
 
 
 WORKFLOW_HUMAN_ONLY = (

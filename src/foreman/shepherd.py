@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from foreman import backend as backend_mod
-from foreman import gate, spec, verify, worktree
+from foreman import gate, gitops, spec, verify, worktree
 from foreman import signatures as signatures_mod
 from foreman.config import Config
 from foreman.dispatch import RETRIGGER_SUBJECT
@@ -229,14 +229,13 @@ def shepherd_pr(
             wt_path = _ensure_worktree(
                 cfg, root, work.unit_number, work.branch, remote_name
             )
-            retries = worktree.count_retrigger_commits(
-                wt_path, f"{remote_name}/{gh.default_branch()}", RETRIGGER_SUBJECT
+            git = gitops.UnitGit(selection.runner, wt_path)
+            retries = git.count_retrigger_commits(
+                f"{remote_name}/{gh.default_branch()}", RETRIGGER_SUBJECT
             )
             if retries == 0:
-                worktree.empty_commit(wt_path, RETRIGGER_SUBJECT)
-                selection.make_handoff(wt_path, None).push(
-                    remote_name, work.branch, first=False
-                )
+                git.empty_commit(RETRIGGER_SUBJECT)
+                git.push(remote_name, work.branch, first=False)
                 work.state, work.detail = (
                     "fixed",
                     f"environmental '{sig.name}': retried once (empty commit)",
@@ -282,12 +281,11 @@ def shepherd_pr(
         )
         worktree.fetch(remote_name)
         base_ref = f"{remote_name}/{gh.default_branch()}"
-        conflicts = worktree.merge_tree_conflicts(wt_path, base_ref)
+        git = gitops.UnitGit(selection.runner, wt_path)
+        conflicts = git.merge_tree_conflicts(base_ref)
         if not conflicts:
-            if worktree.rebase_onto(wt_path, base_ref):
-                selection.make_handoff(wt_path, None).push(
-                    remote_name, work.branch, first=False
-                )
+            if git.rebase_onto(base_ref):
+                git.push(remote_name, work.branch, first=False)
                 work.state, work.detail = (
                     "rebased",
                     "mechanical rebase onto fresh default branch",
@@ -311,9 +309,7 @@ def shepherd_pr(
                 backend_mod.unit_dir(cfg, root, work.unit_number),
             )
             if ok:
-                selection.make_handoff(wt_path, None).push(
-                    remote_name, work.branch, first=False
-                )
+                git.push(remote_name, work.branch, first=False)
                 work.state, work.detail = (
                     "rebased",
                     f"agent resolved {len(conflicts)} conflict(s), verify green",

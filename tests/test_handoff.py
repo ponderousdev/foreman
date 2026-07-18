@@ -8,7 +8,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from foreman.config import Config
 from foreman.handoff import SharedWorktreeHandoff
+from foreman.runner.local import LocalRunner
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -34,7 +36,10 @@ class HandoffOnRealGit(unittest.TestCase):
         git(self.repo, "add", ".")
         git(self.repo, "commit", "-q", "-m", "init")
         git(self.repo, "checkout", "-q", "-b", "unit-branch")
-        self.ho = SharedWorktreeHandoff(self.repo)
+        # The handoff now routes git through the runner (#20); LocalRunner
+        # execs in the workdir, so this exercises UnitGit end-to-end.
+        runner = LocalRunner(Config(), docker_probe=lambda: False)
+        self.ho = SharedWorktreeHandoff(runner, self.repo)
 
     def test_clean_and_ahead_counting(self):
         self.assertTrue(self.ho.is_clean())
