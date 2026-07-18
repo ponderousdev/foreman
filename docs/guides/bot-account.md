@@ -114,6 +114,12 @@ Copy the value once — GitHub will not show it again.
 
 ### 4. Store the value
 
+Writing the token to 1Password requires an explicit request naming the exact
+item and `GH_TOKEN` field, followed by confirmation of that exact replacement
+before the write. This applies during initial setup and every rotation; this
+procedure alone is not authorization for an agent to write to the secret store.
+Never echo or paste the token into logs, chat, or shell history.
+
 Into **1Password**, then to the container via the 1Password Environment that
 backs the devcontainer's `--env-file`, as `GH_TOKEN` — see
 [devcontainers.md](devcontainers.md). Never into git, never into
@@ -157,9 +163,12 @@ Miss either and it fails in a way that looks like a permissions bug.
 ## Rotation
 
 Fine-grained PATs expire. When the date arrives — or on any suspicion of leak —
-generate a new token with the same settings, update the 1Password item, and
-rebuild the devcontainer so the env-file re-reads it. Nothing else references the
-value, which is the point of keeping it in exactly one place.
+generate a new token with the same settings, complete the explicit
+write-confirmation gate above, update the 1Password item, and rebuild the
+devcontainer so the env-file re-reads it. Verify the replacement works, then
+revoke the superseded PAT in GitHub and confirm it is no longer active. Nothing
+else references the value, which is the point of keeping it in exactly one
+place.
 
 A leaked bot PAT is bounded but not harmless: it can push branches and open PRs
 on the selected repos. It **cannot** merge `main`, edit workflows, or change repo

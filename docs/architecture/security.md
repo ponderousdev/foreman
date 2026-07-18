@@ -29,7 +29,7 @@ repositories and for profiles without a CodeQL workflow.
 | Axis | Catches | Default tool | Where it runs |
 |---|---|---|---|
 | **SAST** — flaws in *your own code* | injection, XSS, SSRF, path traversal, crypto/auth misuse | **Semgrep CE** | CI and `task security:sast`; this profile has no generated CodeQL workflow |
-| **SCA** — CVEs in *dependencies* | vulnerable third-party packages | **Dependabot alerts** + **`task security:audit`** (`pnpm audit` / `pip-audit`) | Dependabot continuous; audit in the CI `security` job + `task security` locally |
+| **SCA** — CVEs in *dependencies* | vulnerable third-party packages | **Dependabot alerts** + **`task security:audit`** (`pip-audit`) | Dependabot continuous; audit in the CI `security` job + `task security` locally |
 | **Secrets** — committed credentials | keys, tokens, certs, `.env` | **gitleaks** (`task security:secrets`) | pre-push git hook + CI `security` job |
 | **IaC** — insecure infrastructure | open security groups, public buckets, … | **checkov** (`task lint:terraform:security`) | CI `lint` job + `task check` locally (Terraform repos) |
 | **Freshness/remediation** — stale or vulnerable dependencies | a widening exposure window | **Renovate** (`minimumReleaseAge: 3 days`, Dependabot-alert remediation enabled) | continuous update and vulnerability-fix PRs |

@@ -18,7 +18,7 @@ run() {
     _c="$2"
     shift 2
     _rc=0
-    PR_TITLE="$_t" CHANGED_FILES="$_c" "$guard" "$@" >/dev/null 2>&1 || _rc=$?
+    PR_TITLE="$_t" PR_BODY="" CHANGED_FILES="$_c" "$guard" "$@" >/dev/null 2>&1 || _rc=$?
     echo "$_rc"
 }
 

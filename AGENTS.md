@@ -46,8 +46,7 @@ task security    # Semgrep CE + gitleaks + dependency audit
 `check` is deliberately kept fast (lint) so editors, git hooks, and
 AI agents can run it on every change without getting bogged down. `verify` is
 the definition-of-done gate — check + validate + test plus the quick
-Taskfile/hook guards (the Foreman v2 vocabulary: verify = check + build +
-test). `ci` is the full pipeline — everything CI runs (`verify` +
+Taskfile/hook guards. `ci` is the full pipeline — everything CI runs (`verify` +
 `security` + the devcontainer permission assert) — so you can reproduce a CI
 run locally on demand instead of waiting on a PR.
 

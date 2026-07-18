@@ -269,7 +269,7 @@ The required checks are the build gates (see
 
 | Check      | Purpose                                                                                          |
 | ---------- | ----------------------------------------------------------------------------------------------- |
-| `verify`   | Aggregate gate — rolls up `lint`, and `security` so one check reports overall pass/fail |
+| `verify`   | Aggregate gate — rolls up `lint`, `security`, and `test` so one check reports overall pass/fail |
 | `security` | gitleaks + dependency audit; Semgrep CE when this job owns the visibility/profile SAST route |
 
 Requiring the aggregate `verify` (rather than each leaf job) keeps the required-check
