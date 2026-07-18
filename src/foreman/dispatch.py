@@ -144,6 +144,27 @@ def eligibility(
     return ready, skipped
 
 
+def _trust_drift_refusal(
+    gh: GitHub, cfg: Config, selection: Selection, unit: Unit, mode: str | None
+) -> str | None:
+    """Re-derive the repo predicate and the unit's D13 classification against
+    live GitHub, and return a refusal string if the configured runner can no
+    longer satisfy the (possibly higher) requirement, or the arming/edit
+    attestation broke since plan time. None means trust still holds.
+
+    This is the TOCTOU guard for trust, mirroring the content freshness gate:
+    the plan-time classification on `unit` is advisory; the spawn-time answer
+    is authoritative and fails closed."""
+    repo = trust_mod.repo_trust(gh, cfg)
+    unit_trust = (
+        trust_mod.classify_unit(gh, cfg, unit, mode or "labels") if unit.open else None
+    )
+    if unit_trust is not None and unit_trust.refusals:
+        return "; ".join(unit_trust.refusals)
+    required = trust_mod.required_for(cfg, repo, unit_trust)
+    return selection.refusal(required)
+
+
 def _timeout_min(cfg: Config, unit: Unit) -> int:
     inp = unit.inputs
     return inp.timeout_min if inp and inp.timeout_min else cfg.dispatch_timeout_min
@@ -250,6 +271,14 @@ def _dispatch_locked(
             "skipped",
             detail=f"worktree already exists ({wt_path}) — run foreman retry or cleanup",
         )
+
+    # Re-evaluate trust at dispatch (#14 / D4): repo visibility, access, and
+    # post-arming edits can all change in the window between plan and spawn.
+    # Recompute the D4/D13 predicate against live GitHub and fail closed on
+    # any drift — never spend tokens on a unit whose trust regressed.
+    drift = _trust_drift_refusal(gh, cfg, selection, unit, mode)
+    if drift is not None:
+        return Outcome(unit, "refused", detail=f"trust re-check at dispatch: {drift}")
 
     existing = worktree.attempt_branches(cfg, remote_name, unit.number)
     branch = worktree.next_attempt_branch(worktree.branch_name(cfg, unit), existing)
