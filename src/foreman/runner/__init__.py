@@ -289,7 +289,7 @@ def select(cfg: Config) -> Selection:
     runner = create(cfg)
 
     def make_handoff(workdir: Path, handle: Handle | None) -> "CommitHandoff":
-        return SharedWorktreeHandoff(workdir)
+        return SharedWorktreeHandoff(runner, workdir)
 
     def refusal(required: set[str]) -> str | None:
         return capabilities_mod.refusal(required, runner.capabilities(), cfg.runner)

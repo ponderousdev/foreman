@@ -41,7 +41,9 @@ it points here.
   harmon-init 4.0.0
   ([#304](https://github.com/evanharmon1/harmon-init/pull/304)); the fast
   hook-gate role is `check`, so `verify` genuinely includes tests. `typecheck`
-  is a sibling of lint under `check`, never named "lint".
+  is a sibling of lint under `check`, never named "lint". Shipped defaults are
+  **generic** (no consumer's framework); stack-specific illustrations, clearly
+  marked as examples, live in [examples/](examples/README.md).
 - **`lint:*` and `check` are read-only gates** — they report and fail, never
   modify files. All auto-fixing lives in **`task format`**, **`task format:file
   -- <path>`**, and **`task fix`** (= format then lint). Pre-commit hooks run the

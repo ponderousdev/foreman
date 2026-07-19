@@ -8,14 +8,36 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from foreman import capabilities as capabilities_mod
 from foreman import dispatch as dispatch_mod
 from foreman import runner as runner_mod
 from foreman.backend import BackendResult
 from foreman.config import Config
-from foreman.graph import Unit
+from foreman.graph import Unit, _unit_from_issue
 from foreman.handoff import WORKFLOW_HUMAN_ONLY
+from foreman.inputs import UnitInputs
 from foreman.runner import Selection
+from tests.fakes import (
+    issue_json,
+    make_github,
+    stub_collaborators,
+    stub_content_edits,
+    stub_label_events,
+)
 from tests.mock_runner import MockRunner
+
+
+def local_selection() -> Selection:
+    """A local-runner Selection (advertises {'docker'}, no untrusted-input)
+    with the real capability refusal composer."""
+    runner = MockRunner(caps={"docker"})
+    return Selection(
+        runner=runner,
+        make_handoff=lambda w, h: None,
+        refusal=lambda required: capabilities_mod.refusal(
+            required, runner.capabilities(), "local"
+        ),
+    )
 
 
 def make_unit(number: int = 5) -> Unit:
@@ -73,6 +95,67 @@ class UnitLockExclusion(unittest.TestCase):
             self.assertTrue(second.acquire())
             second.release()
             other_unit.release()
+
+
+class TrustReEvaluatedAtDispatch(unittest.TestCase):
+    """#14: the D4/D13 predicate is re-derived against live GitHub at dispatch
+    and fails closed on drift — visibility/access/edits can change between plan
+    and spawn."""
+
+    def _unit(self, cfg: Config):
+        unit = _unit_from_issue(issue_json(7, author="owner"))
+        unit.inputs = UnitInputs(mode="labels", armed=True)
+        return unit
+
+    def test_repo_gone_public_since_plan_refuses_at_dispatch(self):
+        cfg = Config(trusted_actors=["owner"])
+        # Live re-check now sees a PUBLIC repo (untrusted) even though the plan
+        # may have classified it trusted.
+        gh, runner = make_github(cfg, visibility="PUBLIC")
+        stub_label_events(
+            runner,
+            7,
+            [{"label": "foreman:claude", "actor": "owner", "created_at": "t0"}],
+        )
+        stub_content_edits(runner, [])
+        drift = dispatch_mod._trust_drift_refusal(
+            gh, cfg, local_selection(), self._unit(cfg), "labels"
+        )
+        self.assertIsNotNone(drift)
+        self.assertIn("untrusted-input", drift)
+        self.assertIn("sprite", drift)  # names the compatible runner
+
+    def test_untrusted_post_arming_edit_since_plan_fails_closed(self):
+        cfg = Config(trusted_actors=["owner"])
+        gh, runner = make_github(cfg, visibility="PRIVATE")
+        stub_collaborators(runner, ["owner"])
+        stub_label_events(
+            runner,
+            7,
+            [{"label": "foreman:claude", "actor": "owner", "created_at": "t0"}],
+        )
+        # A drive-by edited the body AFTER arming — the attestation is broken.
+        stub_content_edits(runner, [{"editor": "drive-by", "edited_at": "t1"}])
+        drift = dispatch_mod._trust_drift_refusal(
+            gh, cfg, local_selection(), self._unit(cfg), "labels"
+        )
+        self.assertIsNotNone(drift)
+        self.assertIn("re-arm", drift)
+
+    def test_trust_still_holds_returns_none(self):
+        cfg = Config(trusted_actors=["owner"])
+        gh, runner = make_github(cfg, visibility="PRIVATE")
+        stub_collaborators(runner, ["owner"])
+        stub_label_events(
+            runner,
+            7,
+            [{"label": "foreman:claude", "actor": "owner", "created_at": "t0"}],
+        )
+        stub_content_edits(runner, [])
+        drift = dispatch_mod._trust_drift_refusal(
+            gh, cfg, local_selection(), self._unit(cfg), "labels"
+        )
+        self.assertIsNone(drift)
 
 
 class DispatchMeta(unittest.TestCase):

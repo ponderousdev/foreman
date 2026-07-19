@@ -103,63 +103,10 @@ def delete_branch(cfg: Config, remote_name: str, branch: str) -> None:
     run(["git", "push", remote_name, "--delete", branch], check=False)
 
 
-def is_clean(path: Path) -> bool:
-    out = run(["git", "-C", str(path), "status", "--porcelain"]).stdout.strip()
-    return not out
-
-
-def commits_ahead(path: Path, base_ref: str) -> int:
-    out = run(
-        ["git", "-C", str(path), "rev-list", "--count", f"{base_ref}..HEAD"]
-    ).stdout.strip()
-    return int(out or "0")
-
-
-def push(path: Path, remote_name: str, branch: str, *, first: bool) -> None:
-    args = ["git", "-C", str(path), "push"]
-    if first:
-        args += ["-u", remote_name, branch]
-    else:
-        args += ["--force-with-lease", remote_name, branch]
-    run(args)
-
-
-def merge_tree_conflicts(path: Path, base_ref: str) -> list[str]:
-    """Deterministic conflict enumeration (dry run; the tree is untouched)."""
-    head = run(["git", "-C", str(path), "rev-parse", "HEAD"]).stdout.strip()
-    proc = run(
-        [
-            "git",
-            "-C",
-            str(path),
-            "merge-tree",
-            "--write-tree",
-            "--name-only",
-            base_ref,
-            head,
-        ],
-        check=False,
-    )
-    if proc.returncode == 0:
-        return []
-    lines = [line for line in proc.stdout.splitlines()[1:] if line.strip()]
-    return lines or ["<unknown conflict>"]
-
-
-def rebase_onto(path: Path, base_ref: str) -> bool:
-    proc = run(["git", "-C", str(path), "rebase", base_ref], check=False)
-    if proc.returncode != 0:
-        run(["git", "-C", str(path), "rebase", "--abort"], check=False)
-        return False
-    return True
-
-
-def empty_commit(path: Path, message: str) -> None:
-    run(["git", "-C", str(path), "commit", "--allow-empty", "-m", message])
-
-
-def count_retrigger_commits(path: Path, base_ref: str, subject: str) -> int:
-    out = run(
-        ["git", "-C", str(path), "log", f"{base_ref}..HEAD", "--format=%s"], check=False
-    ).stdout
-    return sum(1 for line in out.splitlines() if line.strip() == subject)
+# Unit-boundary git operations (is_clean, commits_ahead, push,
+# merge_tree_conflicts, rebase_onto, empty_commit, count_retrigger_commits)
+# used to live here as `git -C <path>` calls. They moved to
+# foreman.gitops.UnitGit, which routes them through Runner.exec so a remote
+# runner slots in at the same call sites (#20). The functions below operate on
+# Foreman's OWN clone and remote (not a unit worktree), so they remain plain
+# local git.
