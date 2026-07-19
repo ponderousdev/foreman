@@ -41,16 +41,25 @@ class UnitGit:
     def _git(self, *args: str) -> ExecResult:
         return self._runner.exec(self._handle, ["git", *args])
 
+    def _checked_git(self, *args: str) -> ExecResult:
+        result = self._git(*args)
+        if result.returncode != 0:
+            detail = result.stderr or result.stdout
+            raise ForemanError(f"git {' '.join(args)} failed: {detail}")
+        return result
+
     def is_clean(self) -> bool:
-        return not self._git("status", "--porcelain").stdout.strip()
+        return not self._checked_git("status", "--porcelain").stdout.strip()
 
     def commits_ahead(self, base_ref: str) -> int:
-        out = self._git("rev-list", "--count", f"{base_ref}..HEAD").stdout.strip()
+        out = self._checked_git(
+            "rev-list", "--count", f"{base_ref}..HEAD"
+        ).stdout.strip()
         return int(out or "0")
 
     def workflow_paths(self, base_ref: str) -> list[str]:
         """Paths under .github/workflows/ touched by the unit's diff (#21)."""
-        out = self._git(
+        out = self._checked_git(
             "diff",
             "--name-only",
             f"{base_ref}...HEAD",
@@ -73,7 +82,7 @@ class UnitGit:
 
     def merge_tree_conflicts(self, base_ref: str) -> list[str]:
         """Deterministic conflict enumeration (dry run; the tree is untouched)."""
-        head = self._git("rev-parse", "HEAD").stdout.strip()
+        head = self._checked_git("rev-parse", "HEAD").stdout.strip()
         result = self._git("merge-tree", "--write-tree", "--name-only", base_ref, head)
         if result.returncode == 0:
             return []
@@ -92,5 +101,5 @@ class UnitGit:
             raise ForemanError(f"empty commit failed: {result.stderr or result.stdout}")
 
     def count_retrigger_commits(self, base_ref: str, subject: str) -> int:
-        out = self._git("log", f"{base_ref}..HEAD", "--format=%s").stdout
+        out = self._checked_git("log", f"{base_ref}..HEAD", "--format=%s").stdout
         return sum(1 for line in out.splitlines() if line.strip() == subject)

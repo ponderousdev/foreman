@@ -29,7 +29,7 @@ ports   = ["task", "e2e"]             # Playwright against a dev server
 ```
 
 The consumer's Taskfile supplies those targets, following the one vocabulary
-([conventions](../conventions.md#pipeline)):
+([conventions](../conventions.md#task-runner-taskfile)):
 
 ```yaml
 # Taskfile.yml (consumer) — EXAMPLE, illustrative only

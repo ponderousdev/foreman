@@ -9,6 +9,7 @@ from pathlib import Path
 
 from foreman.gitops import UnitGit
 from foreman.runner import ExecResult
+from foreman.util import ForemanError
 
 
 class RecordingRunner:
@@ -59,9 +60,22 @@ class RoutesThroughRunner(unittest.TestCase):
             [".github/workflows/ci.yml"],
         )
 
-    def test_push_raises_on_failure(self):
-        from foreman.util import ForemanError
+    def test_queries_raise_on_failure(self):
+        cases = [
+            ("status", lambda git: git.is_clean()),
+            ("rev-list", lambda git: git.commits_ahead("b")),
+            ("diff", lambda git: git.workflow_paths("b")),
+            ("rev-parse", lambda git: git.merge_tree_conflicts("b")),
+            ("log", lambda git: git.count_retrigger_commits("b", "retrigger")),
+        ]
 
+        for command, query in cases:
+            with self.subTest(command=command):
+                git = UnitGit(RecordingRunner(returncode=1), Path("/wt"))
+                with self.assertRaisesRegex(ForemanError, rf"git {command} .* failed"):
+                    query(git)
+
+    def test_push_raises_on_failure(self):
         git = UnitGit(RecordingRunner(returncode=1), Path("/wt"))
         with self.assertRaises(ForemanError):
             git.push("origin", "b", first=True)
