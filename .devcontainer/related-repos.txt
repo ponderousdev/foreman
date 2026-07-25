@@ -21,3 +21,12 @@
 # Examples — uncomment and edit:
 #   your-org/shared-libs
 #   your-org/api@main
+
+# Ponderous sibling repos (cloned via the authenticated gh CLI; owner/repo form
+# so the private repos clone with the gh token rather than a bare git URL).
+ponderousdev/omator
+ponderousdev/ponderous-infra
+ponderousdev/ponderous-site
+ponderousdev/lawnomator-site
+ponderousdev/ponderous-hub
+ponderousdev/ponderous-docs
