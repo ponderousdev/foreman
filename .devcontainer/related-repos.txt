@@ -30,3 +30,5 @@ ponderousdev/ponderous-site
 ponderousdev/lawnomator-site
 ponderousdev/ponderous-hub
 ponderousdev/ponderous-docs
+evanharmon1/harmon-init
+evanharmon1/harmon-devkit
