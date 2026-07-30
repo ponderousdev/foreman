@@ -22,7 +22,9 @@
       "../ponderous-site",
       "../lawnomator-site",
       "../ponderous-hub",
-      "../ponderous-docs"
+      "../ponderous-docs",
+      "../harmon-init",
+      "../harmon-devkit"
     ]
   },
   "sandbox": {
@@ -33,7 +35,9 @@
         "../ponderous-site",
         "../lawnomator-site",
         "../ponderous-hub",
-        "../ponderous-docs"
+        "../ponderous-docs",
+        "../harmon-init",
+        "../harmon-devkit"
       ]
     }
   }
