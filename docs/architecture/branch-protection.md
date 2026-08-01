@@ -123,6 +123,30 @@ Grant on demand, with a reason. You can edit a fine-grained PAT's permissions
 later without regenerating the token, so there is no cost to waiting until
 something is genuinely blocked.
 
+### Agent read-only PAT permissions (#13)
+
+The separate token dispatched agents receive as their `GH_TOKEN`
+(`FOREMAN_AGENT_GH_TOKEN` in the bot env-file). Fine-grained, same
+resource owner and selected-repo list discipline as the write PAT, with
+these **repository** permissions and nothing more:
+
+| Permission    | Level     | Purpose                                        |
+| ------------- | --------- | ---------------------------------------------- |
+| Contents      | Read-only | Read the repo the unit works on                |
+| Issues        | Read-only | Read the unit's issue, sub-issues, comments    |
+| Pull requests | Read-only | Read PR state and review threads (shepherd)    |
+| Actions       | Read-only | Read workflow-run logs (red-CI context)        |
+| Metadata      | Read-only | Mandatory — granted to every fine-grained PAT  |
+
+No organization permissions, and **no write level anywhere** — every
+foreman-side GitHub write goes through the supervisor's guarded mutation
+seam with the write PAT. When creating or editing this token, verify every
+permission dropdown reads _Read-only_: `preflight`'s read-token probe
+proves contents cannot write (ref creation), and the write contract keeps
+foreman's own writes guarded, but a mistakenly write-leveled Issues or
+Pull requests permission on this token is otherwise invisible until
+audited here.
+
 ## Ruleset Configuration
 
 This mirrors the importable

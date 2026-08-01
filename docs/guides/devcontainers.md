@@ -49,7 +49,8 @@ Variables per profile:
 
 | Variable | Bot | Dev | What it's for |
 |---|---|---|---|
-| `GH_TOKEN` | ✅ | ✅ | `gh` CLI / API |
+| `GH_TOKEN` | ✅ | ✅ | `gh` CLI / API (the bot's write PAT) |
+| `FOREMAN_AGENT_GH_TOKEN` | ✅ | — | read-only PAT handed to dispatched agents as their `GH_TOKEN` (#13); dispatch refuses without it |
 | `CLAUDE_CODE_OAUTH_TOKEN` | ✅ | ✅ | Claude Code |
 | `AGENT_DECK_TELEGRAM_KEY` | ✅ | ✅ | agent-deck bridge (optional) |
 | `TS_AUTHKEY` | — | ✅ | Tailscale (dev only) |

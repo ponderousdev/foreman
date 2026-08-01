@@ -369,7 +369,7 @@ even the in-org radius small:
 | `CI_APP_CLIENT_ID` (var) + `CI_APP_PRIVATE_KEY` (secret) | release-please, claude-*, project-automation | repo or org Actions variable + secret | rotate App key per policy |
 | `CLAUDE_CODE_OAUTH_TOKEN` | claude-* workflows | repo Actions secret | re-run `claude setup-token` |
 | `GH_TOKEN` (bot **write** PAT) | foreman's supervisor writes (push, PR, labels, comments); operator `gh`/git in the devcontainer; `uvx` fetches of private deps | 1Password Environment → devcontainer `--env-file` | manual; re-issue before expiry ([guides/bot-account.md](../guides/bot-account.md)) |
-| `FOREMAN_AGENT_GH_TOKEN` (bot **read-only** PAT) | handed to dispatched agents as their `GH_TOKEN` (#13); never holds write | 1Password Environment → devcontainer `--env-file` (bot profile only) | manual; rotate alongside the write PAT |
+| `FOREMAN_AGENT_GH_TOKEN` (bot **read-only** PAT) | handed to dispatched agents as their `GH_TOKEN` (#13); permission matrix in [branch-protection.md](branch-protection.md#agent-read-only-pat-permissions) — every level Read-only, verified at creation | 1Password Environment → devcontainer `--env-file` (bot profile only) | manual; rotate alongside the write PAT |
 | `SNYK_TOKEN` | optional Snyk CLI scans | local env / 1Password by default | manual |
 
 > **`CLAUDE_CODE_OAUTH_TOKEN` must be an OAuth token, not an API key.** Generate
@@ -428,7 +428,10 @@ provider accounts, and machines. The standard:
 - **Ruleset bypass-actor audit (operator tier — named by `foreman preflight`,
   #15)**: alongside every PAT rotation, with admin credentials, list each
   ruleset's bypass actors —
-  `gh api "repos/<owner>/<repo>/rulesets" --jq '.[].id'`, then per id
+  `gh api "repos/<owner>/<repo>/rulesets" --paginate --jq '.[].id'` (the
+  `--paginate` matters — a later page can hold the one ruleset whose bypass
+  list is wrong, and the endpoint also surfaces inherited org-level
+  rulesets), then per id
   `gh api "repos/<owner>/<repo>/rulesets/<id>" --jq '{name, bypass_actors}'` —
   and confirm no bypass actor is one Foreman's write token can act as (the
   bot user, its repository role, or an app the bot can drive). The tag
