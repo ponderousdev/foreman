@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -293,6 +294,12 @@ class ThreadDisposition:
     thread_id: str
     disposition: str  # applied | declined
     note: str
+    # For `applied`: the commit the note names, parsed here; the shepherd
+    # verifies it exists on the branch before authorizing the thread writes.
+    applied_sha: str | None = None
+
+
+_APPLIED_SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
 
 
 def read_adjudication(
@@ -336,7 +343,21 @@ def read_adjudication(
         if not isinstance(note, str) or not note.strip():
             errors.append(f"{where}.note must be a non-empty string")
             continue
-        out.append(ThreadDisposition(thread_id.strip(), disposition, note.strip()))
+        applied_sha = None
+        if disposition == "applied":
+            # An applied claim must name its commit (`applied in <sha>`) so
+            # the shepherd can prove the fix exists before resolving.
+            match = _APPLIED_SHA_RE.search(note)
+            if match is None:
+                errors.append(
+                    f"{where}.note must name the commit for an applied "
+                    "disposition (`applied in <short-sha>`)"
+                )
+                continue
+            applied_sha = match.group(0)
+        out.append(
+            ThreadDisposition(thread_id.strip(), disposition, note.strip(), applied_sha)
+        )
     if len({d.thread_id for d in out}) != len(out):
         errors.append(f"{ADJUDICATION_FILE}: duplicate thread_id entries")
     return (out, []) if not errors else (None, errors)

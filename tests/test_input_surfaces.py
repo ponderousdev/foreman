@@ -220,12 +220,12 @@ class AdjudicationWritePath(unittest.TestCase):
             "labels": [],
         }
 
-    def _drive(self, tmp: str, gh, cfg, sidecar) -> shepherd_mod.PrWork:
+    def _drive(self, tmp: str, gh, cfg, sidecar, runner=None) -> shepherd_mod.PrWork:
         """Run shepherd_pr through the adjudicate branch with the agent
         resume and worktree patched out; `sidecar` is what the fake agent
         writes (None to simulate an agent that wrote nothing)."""
         selection = Selection(
-            runner=MockRunner(caps={"untrusted-input"}),
+            runner=runner or MockRunner(caps={"untrusted-input"}),
             make_handoff=lambda w, h: _StubHandoff(),
             refusal=lambda req: None,
         )
@@ -254,6 +254,22 @@ class AdjudicationWritePath(unittest.TestCase):
             shepherd_mod._resume_agent = original_resume  # type: ignore[assignment]
             shepherd_mod._ensure_worktree = original_worktree  # type: ignore[assignment]
 
+    def _wire_writes(self, gh, threads_by_id):
+        """Replace the two guarded mutations with recorders; resolving marks
+        the thread resolved so the completeness re-check sees it."""
+        replies: list[tuple[int, str, str]] = []
+        resolves: list[str] = []
+        gh.reply_review_thread = (  # type: ignore[assignment]
+            lambda pr, tid, body: replies.append((pr, tid, body))
+        )
+
+        def resolve(pr, tid):
+            resolves.append(tid)
+            threads_by_id[tid]["isResolved"] = True
+
+        gh.resolve_review_thread = resolve  # type: ignore[assignment]
+        return replies, resolves
+
     def test_foreman_performs_the_recorded_writes(self):
         cfg = Config(trusted_actors=["reviewer"])
         gh, runner = make_github(cfg)
@@ -261,18 +277,7 @@ class AdjudicationWritePath(unittest.TestCase):
         stub_origin(runner, 5, "reviewer")
         the_thread = thread("reviewer")
         gh.review_threads = lambda number: [the_thread]  # type: ignore
-
-        replies: list[tuple[str, str]] = []
-        resolves: list[str] = []
-        gh.reply_review_thread = (  # type: ignore[assignment]
-            lambda tid, body: replies.append((tid, body))
-        )
-
-        def resolve(tid):
-            resolves.append(tid)
-            the_thread["isResolved"] = True
-
-        gh.resolve_review_thread = resolve  # type: ignore[assignment]
+        replies, resolves = self._wire_writes(gh, {the_thread["id"]: the_thread})
 
         sidecar = {
             "schema": 1,
@@ -287,23 +292,129 @@ class AdjudicationWritePath(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             work = self._drive(tmp, gh, cfg, sidecar)
         self.assertEqual(work.state, "adjudicated")
-        self.assertEqual(replies, [(the_thread["id"], "covered by the typecheck")])
+        self.assertEqual(replies, [(10, the_thread["id"], "covered by the typecheck")])
         self.assertEqual(resolves, [the_thread["id"]])
+
+    def test_applied_with_commit_on_branch_resolves(self):
+        cfg = Config(trusted_actors=["reviewer"])
+        gh, runner = make_github(cfg)
+        runner.when(["pr", "view", "10"], self._green_status())
+        stub_origin(runner, 5, "reviewer")
+        the_thread = thread("reviewer")
+        gh.review_threads = lambda number: [the_thread]  # type: ignore
+        replies, resolves = self._wire_writes(gh, {the_thread["id"]: the_thread})
+
+        sidecar = {
+            "schema": 1,
+            "dispositions": [
+                {
+                    "thread_id": the_thread["id"],
+                    "disposition": "applied",
+                    "note": "applied in abc1234",
+                }
+            ],
+        }
+        # Default MockRunner.exec returns rc 0 → cat-file + is-ancestor pass.
+        with tempfile.TemporaryDirectory() as tmp:
+            work = self._drive(tmp, gh, cfg, sidecar)
+        self.assertEqual(work.state, "adjudicated")
+        self.assertEqual(resolves, [the_thread["id"]])
+
+    def test_applied_commit_missing_from_branch_escalates(self):
+        from foreman.runner import ExecResult
+
+        cfg = Config(trusted_actors=["reviewer"])
+        gh, runner = make_github(cfg)
+        runner.when(["pr", "view", "10"], self._green_status())
+        stub_origin(runner, 5, "reviewer")
+        the_thread = thread("reviewer")
+        gh.review_threads = lambda number: [the_thread]  # type: ignore
+        replies, resolves = self._wire_writes(gh, {the_thread["id"]: the_thread})
+
+        mock = MockRunner(caps={"untrusted-input"})
+        mock.exec = (  # type: ignore[assignment]
+            lambda handle, cmd: ExecResult(returncode=1, stdout="", stderr="")
+        )
+        sidecar = {
+            "schema": 1,
+            "dispositions": [
+                {
+                    "thread_id": the_thread["id"],
+                    "disposition": "applied",
+                    "note": "applied in abc1234",
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            work = self._drive(tmp, gh, cfg, sidecar, runner=mock)
+        self.assertEqual(work.state, "escalated")
+        self.assertIn("not on the branch", work.detail)
+        self.assertEqual(replies, [])
+        self.assertEqual(resolves, [])
+
+    def test_duplicate_reply_is_not_reposted(self):
+        cfg = Config(trusted_actors=["reviewer"])
+        gh, runner = make_github(cfg)
+        runner.when(["pr", "view", "10"], self._green_status())
+        stub_origin(runner, 5, "reviewer")
+        the_thread = thread("reviewer")
+        # A previous tick already posted this exact note (author == viewer
+        # "bot") but died before resolving; the retry must not repost.
+        the_thread["comments"]["nodes"].append(
+            {"author": {"login": "bot"}, "body": "covered by the typecheck"}
+        )
+        gh.review_threads = lambda number: [the_thread]  # type: ignore
+        replies, resolves = self._wire_writes(gh, {the_thread["id"]: the_thread})
+
+        sidecar = {
+            "schema": 1,
+            "dispositions": [
+                {
+                    "thread_id": the_thread["id"],
+                    "disposition": "declined",
+                    "note": "covered by the typecheck",
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            work = self._drive(tmp, gh, cfg, sidecar)
+        self.assertEqual(work.state, "adjudicated")
+        self.assertEqual(replies, [])
+        self.assertEqual(resolves, [the_thread["id"]])
+
+    def test_unrendered_thread_id_escalates(self):
+        # 21 unresolved threads: only 20 are rendered into the prompt, and
+        # only those 20 may be dispositioned — an agent must not be able to
+        # steer foreman's write token at a thread it was never shown.
+        cfg = Config(trusted_actors=["reviewer"])
+        gh, runner = make_github(cfg)
+        runner.when(["pr", "view", "10"], self._green_status())
+        stub_origin(runner, 5, "reviewer")
+        threads = [thread(f"r{i}") for i in range(21)]
+        gh.review_threads = lambda number: list(threads)  # type: ignore
+        replies, resolves = self._wire_writes(gh, {t["id"]: t for t in threads})
+
+        sidecar = {
+            "schema": 1,
+            "dispositions": [
+                {"thread_id": threads[20]["id"], "disposition": "declined", "note": "n"}
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            work = self._drive(tmp, gh, cfg, sidecar)
+        self.assertEqual(work.state, "escalated")
+        self.assertIn("unknown thread id", work.detail)
+        self.assertEqual(replies, [])
+        self.assertEqual(resolves, [])
 
     def test_unknown_thread_id_escalates_without_writes(self):
         cfg = Config(trusted_actors=["reviewer"])
         gh, runner = make_github(cfg)
         runner.when(["pr", "view", "10"], self._green_status())
         stub_origin(runner, 5, "reviewer")
-        gh.review_threads = lambda number: [thread("reviewer")]  # type: ignore
-
-        writes: list[str] = []
-        gh.reply_review_thread = (  # type: ignore[assignment]
-            lambda tid, body: writes.append(tid)
-        )
-        gh.resolve_review_thread = (  # type: ignore[assignment]
-            lambda tid: writes.append(tid)
-        )
+        the_thread = thread("reviewer")
+        gh.review_threads = lambda number: [the_thread]  # type: ignore
+        replies, resolves = self._wire_writes(gh, {the_thread["id"]: the_thread})
 
         sidecar = {
             "schema": 1,
@@ -315,7 +426,8 @@ class AdjudicationWritePath(unittest.TestCase):
             work = self._drive(tmp, gh, cfg, sidecar)
         self.assertEqual(work.state, "escalated")
         self.assertIn("unknown thread id", work.detail)
-        self.assertEqual(writes, [])
+        self.assertEqual(replies, [])
+        self.assertEqual(resolves, [])
 
     def test_missing_sidecar_escalates(self):
         cfg = Config(trusted_actors=["reviewer"])

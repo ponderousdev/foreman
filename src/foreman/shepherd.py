@@ -178,10 +178,30 @@ def _origin_refusal(
     agent resumes on this PR's branch — CI fix, conflicted rebase, or
     adjudication — require the capabilities the origin unit's content
     requires. Consumed via selection.refusal (capabilities, never a runner
-    name), exactly like eligibility does for the original dispatch."""
+    name), exactly like eligibility does for the original dispatch.
+
+    Classification is re-derived from current GitHub + config state on
+    every tick, deliberately (ADR 0002: stored inputs, derived state — a
+    stored classification can lie after a crash; re-derived state cannot).
+    A later trusted_actors or visibility change is a reviewed, committed
+    human attestation — the same authority as a trusted re-arm under D13 —
+    so it legitimately reclassifies the origin; the unsafe direction
+    (trusted → untrusted drift) tightens automatically for the same
+    reason."""
     origin = trust_mod.classify_branch_origin(gh, cfg, unit_number)
     required = trust_mod.required_for(cfg, trust_mod.repo_trust(gh, cfg), origin)
     return selection.refusal(required)
+
+
+def _reply_already_posted(thread: dict, note: str, viewer: str) -> bool:
+    """True when foreman already posted this exact note on the thread — the
+    reply half of reply-then-resolve is retried by later ticks, and a
+    duplicate note would read as spam."""
+    for comment in (thread.get("comments") or {}).get("nodes") or []:
+        author = (comment.get("author") or {}).get("login") or ""
+        if author == viewer and (comment.get("body") or "").strip() == note:
+            return True
+    return False
 
 
 def _thread_trusted(gh: GitHub, cfg: Config, thread: dict) -> bool:
@@ -390,8 +410,12 @@ def shepherd_pr(
             )
             return work
         work.actions += 1
+        # Only the rendered slice may be dispositioned: the disposition
+        # allowlist below is built from these same threads, so an agent
+        # cannot steer foreman's write token at a thread it was never shown.
+        rendered_threads = threads[:20]
         rendered = []
-        for thread in threads[:20]:
+        for thread in rendered_threads:
             comments = (thread.get("comments") or {}).get("nodes") or []
             first = comments[0] if comments else {}
             author = (first.get("author") or {}).get("login", "reviewer")
@@ -432,9 +456,9 @@ def shepherd_pr(
                     "adjudication sidecar invalid — " + "; ".join(disp_errors),
                 )
                 return work
-            known_ids = {t.get("id") for t in threads}
+            by_id = {t.get("id"): t for t in rendered_threads}
             unknown = sorted(
-                d.thread_id for d in dispositions if d.thread_id not in known_ids
+                d.thread_id for d in dispositions if d.thread_id not in by_id
             )
             if unknown:
                 work.state, work.detail = (
@@ -442,9 +466,33 @@ def shepherd_pr(
                     "adjudication named unknown thread id(s): " + ", ".join(unknown),
                 )
                 return work
+            # An `applied` claim must name a commit that actually exists on
+            # the branch — a resolved thread with no fix behind it would read
+            # as adjudicated while the defect remains.
+            git = gitops.UnitGit(selection.runner, wt_path)
+            unproven = sorted(
+                d.thread_id
+                for d in dispositions
+                if d.applied_sha and not git.commit_on_branch(d.applied_sha)
+            )
+            if unproven:
+                work.state, work.detail = (
+                    "escalated",
+                    "applied disposition(s) name a commit not on the branch: "
+                    + ", ".join(unproven),
+                )
+                return work
+            me = gh.viewer()
             for disposition in dispositions:
-                gh.reply_review_thread(disposition.thread_id, disposition.note)
-                gh.resolve_review_thread(disposition.thread_id)
+                # Reply-then-resolve is two mutations; if resolve failed last
+                # round, don't post the identical note again on retry.
+                if not _reply_already_posted(
+                    by_id[disposition.thread_id], disposition.note, me
+                ):
+                    gh.reply_review_thread(
+                        work.number, disposition.thread_id, disposition.note
+                    )
+                gh.resolve_review_thread(work.number, disposition.thread_id)
             remaining = [
                 t for t in gh.review_threads(work.number) if not t.get("isResolved")
             ]

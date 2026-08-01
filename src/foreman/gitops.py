@@ -80,6 +80,13 @@ class UnitGit:
                 f"git push failed for {branch}: {result.stderr or result.stdout}"
             )
 
+    def commit_on_branch(self, sha: str) -> bool:
+        """True when `sha` resolves to a commit that is an ancestor of the
+        worktree's HEAD — the proof behind an `applied in <sha>` claim."""
+        if self._git("cat-file", "-e", f"{sha}^{{commit}}").returncode != 0:
+            return False
+        return self._git("merge-base", "--is-ancestor", sha, "HEAD").returncode == 0
+
     def merge_tree_conflicts(self, base_ref: str) -> list[str]:
         """Deterministic conflict enumeration (dry run; the tree is untouched)."""
         head = self._checked_git("rev-parse", "HEAD").stdout.strip()

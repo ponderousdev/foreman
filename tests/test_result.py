@@ -105,7 +105,11 @@ class Adjudication(unittest.TestCase):
             {
                 "schema": 1,
                 "dispositions": [
-                    {"thread_id": "t-1", "disposition": "applied", "note": "in abc123"},
+                    {
+                        "thread_id": "t-1",
+                        "disposition": "applied",
+                        "note": "applied in abc1234",
+                    },
                     {"thread_id": "t-2", "disposition": "declined", "note": "wrong"},
                 ],
             }
@@ -149,6 +153,50 @@ class Adjudication(unittest.TestCase):
         dispositions, errors = backend_mod.read_adjudication(self.run_dir)
         self.assertIsNone(dispositions)
         self.assertTrue(any("duplicate" in e for e in errors))
+
+    def test_applied_parses_the_named_commit(self):
+        self.write(
+            {
+                "schema": 1,
+                "dispositions": [
+                    {
+                        "thread_id": "t-1",
+                        "disposition": "applied",
+                        "note": "applied in abc1234",
+                    }
+                ],
+            }
+        )
+        dispositions, errors = backend_mod.read_adjudication(self.run_dir)
+        self.assertEqual(errors, [])
+        self.assertEqual(dispositions[0].applied_sha, "abc1234")
+
+    def test_applied_without_a_commit_fails(self):
+        # "done" would let a fixless resolution slip through — an applied
+        # note must name its commit so the shepherd can prove it exists.
+        self.write(
+            {
+                "schema": 1,
+                "dispositions": [
+                    {"thread_id": "t-1", "disposition": "applied", "note": "done"}
+                ],
+            }
+        )
+        dispositions, errors = backend_mod.read_adjudication(self.run_dir)
+        self.assertIsNone(dispositions)
+        self.assertTrue(any("must name the commit" in e for e in errors))
+        # Declined dispositions carry reasoning, not a sha — unaffected.
+        self.write(
+            {
+                "schema": 1,
+                "dispositions": [
+                    {"thread_id": "t-1", "disposition": "declined", "note": "done"}
+                ],
+            }
+        )
+        dispositions, errors = backend_mod.read_adjudication(self.run_dir)
+        self.assertEqual(errors, [])
+        self.assertIsNone(dispositions[0].applied_sha)
 
 
 if __name__ == "__main__":
