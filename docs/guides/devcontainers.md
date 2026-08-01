@@ -84,9 +84,11 @@ repo** (one template serves every repo). To stand this repo up in Coder:
    the Coder `git-clone` + `devcontainers-cli` modules.
 2. Create a workspace from it and set the parameters:
    - **repo** → `https://github.com/ponderousdev/foreman`
-   - secrets → `GH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `AGENT_DECK_TELEGRAM_KEY`
-     (+ `TS_AUTHKEY` if you want Tailscale). Coder passes these into the
-     workspace's host environment, where `init-env.sh` picks them up.
+   - secrets → `GH_TOKEN`, `FOREMAN_AGENT_GH_TOKEN` (the read-only agent
+     PAT — dispatch refuses without it, #13), `CLAUDE_CODE_OAUTH_TOKEN`,
+     `AGENT_DECK_TELEGRAM_KEY` (+ `TS_AUTHKEY` if you want Tailscale). Coder
+     passes these into the workspace's host environment, where `init-env.sh`
+     picks them up.
 3. The build pulls `ghcr.io/ponderousdev/foreman-devcontainer` from GHCR as a cache. If that
    package is private, give the Coder builder a read token (or make the package
    public); a cache miss only makes the first build slower.

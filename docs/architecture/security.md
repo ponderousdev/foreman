@@ -12,8 +12,10 @@ current — it is the reference for "where do secrets live and who can do what".
 - **Secrets via 1Password.** Local env comes from **1Password Environments**
   (a virtual `.env` mounted over a UNIX pipe — never written to disk or git) or
   `op run`/`op inject`; CI reads from GitHub Actions secrets.
-  Devcontainer secrets are `GH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`,
-  `AGENT_DECK_TELEGRAM_KEY` (+ `TS_AUTHKEY`, dev profile only) — see
+  Devcontainer secrets are `GH_TOKEN` (foreman's write PAT),
+  `FOREMAN_AGENT_GH_TOKEN` (the read-only agent PAT, bot profile only),
+  `CLAUDE_CODE_OAUTH_TOKEN`, `AGENT_DECK_TELEGRAM_KEY` (+ `TS_AUTHKEY`,
+  dev profile only) — see
   [../guides/devcontainers.md](../guides/devcontainers.md).
   TODO: list the 1Password vault/items this project uses.
 - **Auditable changes.** `main` is protected; changes land via reviewed PRs
@@ -156,8 +158,10 @@ it.** The step-by-step for creating one is
 - **Tailscale and on-demand secret fetch** — the bot profile installs no
   1Password CLI, so there is **no path to pull arbitrary secrets on demand**, and
   no Tailscale, so no tailnet reach. Note what this does *not* say: the container
-  is not secret-free. It holds whatever the env-file carries — today `GH_TOKEN`,
-  `CLAUDE_CODE_OAUTH_TOKEN`, `AGENT_DECK_TELEGRAM_KEY`. That set is a **property
+  is not secret-free. It holds whatever the env-file carries — today `GH_TOKEN`
+  (the write PAT), `FOREMAN_AGENT_GH_TOKEN` (the read-only PAT agents receive
+  as their `GH_TOKEN`, #13), `CLAUDE_CODE_OAUTH_TOKEN`,
+  `AGENT_DECK_TELEGRAM_KEY`. That set is a **property
   of the 1Password Environment behind the env-file**, i.e. a convention you
   maintain, not a guarantee the profile enforces. Put a production credential in
   that Environment and it lands in the container, next to the agent.
@@ -364,7 +368,8 @@ even the in-org radius small:
 |---|---|---|---|
 | `CI_APP_CLIENT_ID` (var) + `CI_APP_PRIVATE_KEY` (secret) | release-please, claude-*, project-automation | repo or org Actions variable + secret | rotate App key per policy |
 | `CLAUDE_CODE_OAUTH_TOKEN` | claude-* workflows | repo Actions secret | re-run `claude setup-token` |
-| `GH_TOKEN` (bot PAT) | devcontainer agent `gh`/git operations; `uvx` fetches of private deps | 1Password Environment → devcontainer `--env-file` | manual; re-issue before expiry ([guides/bot-account.md](../guides/bot-account.md)) |
+| `GH_TOKEN` (bot **write** PAT) | foreman's supervisor writes (push, PR, labels, comments); operator `gh`/git in the devcontainer; `uvx` fetches of private deps | 1Password Environment → devcontainer `--env-file` | manual; re-issue before expiry ([guides/bot-account.md](../guides/bot-account.md)) |
+| `FOREMAN_AGENT_GH_TOKEN` (bot **read-only** PAT) | handed to dispatched agents as their `GH_TOKEN` (#13); never holds write | 1Password Environment → devcontainer `--env-file` (bot profile only) | manual; rotate alongside the write PAT |
 | `SNYK_TOKEN` | optional Snyk CLI scans | local env / 1Password by default | manual |
 
 > **`CLAUDE_CODE_OAUTH_TOKEN` must be an OAuth token, not an API key.** Generate
