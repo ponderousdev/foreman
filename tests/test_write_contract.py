@@ -34,7 +34,8 @@ def _mutations(gh):
             "post_vet_correction",
             lambda: gh.post_vet_correction(1, "b", human_approved=True),
         ),
-        ("resolve_review_thread", lambda: gh.resolve_review_thread("T_x")),
+        ("resolve_review_thread", lambda: gh.resolve_review_thread(1, "T_x")),
+        ("reply_review_thread", lambda: gh.reply_review_thread(1, "T_x", "b")),
     ]
 
 
@@ -82,6 +83,20 @@ class GuardedChannels(unittest.TestCase):
         )
         with self.assertRaises(ForemanError):
             gh.edit_own_pr_body(9, "new body")
+
+    def test_thread_mutations_reject_foreign_prs(self):
+        # A foreign PR can carry the foreman label and a forged unit marker;
+        # foreman's identity must never mutate its review threads.
+        gh, runner = make_github()
+        runner.when(
+            ["pr", "view", "9"],
+            {"number": 9, "author": {"login": "human"}, "labels": [], "body": ""},
+        )
+        with self.assertRaises(ForemanError):
+            gh.resolve_review_thread(9, "T_x")
+        with self.assertRaises(ForemanError):
+            gh.reply_review_thread(9, "T_x", "note")
+        self.assertFalse(runner.called_with_prefix(["api", "graphql"]))
 
     def test_label_namespace_is_enforced(self):
         gh, runner = make_github()

@@ -89,6 +89,16 @@ mutation($threadId: ID!) {
 }
 """
 
+REPLY_THREAD_MUTATION = """
+mutation($threadId: ID!, $body: String!) {
+  addPullRequestReviewThreadReply(
+    input: { pullRequestReviewThreadId: $threadId, body: $body }
+  ) {
+    comment { id }
+  }
+}
+"""
+
 CONTENT_EDITS_QUERY = """
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
@@ -542,8 +552,14 @@ class GitHub:
             input_text=body,
         )
 
-    def resolve_review_thread(self, thread_id: str) -> None:
+    def resolve_review_thread(self, pr_number: int, thread_id: str) -> None:
+        """The caller passes the PR the thread belongs to so the own-PR
+        guard applies — foreman's identity must never mutate threads on a
+        PR it did not author (a foreign PR can carry the foreman label and
+        a forged unit marker). Thread↔PR pairing is the shepherd's job: it
+        accepts only ids read from this PR's own review threads."""
         self._assert_writable("resolve dispositioned review thread")
+        self._own_pr_guard(pr_number, "resolve review thread")
         self.gh.json(
             [
                 "api",
@@ -552,5 +568,25 @@ class GitHub:
                 f"query={RESOLVE_THREAD_MUTATION}",
                 "-F",
                 f"threadId={thread_id}",
+            ]
+        )
+
+    def reply_review_thread(self, pr_number: int, thread_id: str, body: str) -> None:
+        """Post the agent's recorded disposition note as the thread reply.
+        Agents hold a read-only token (#13), so foreman performs this write
+        from the adjudication sidecar — the agent only records (#46). Same
+        own-PR guard rationale as resolve_review_thread."""
+        self._assert_writable("reply to dispositioned review thread")
+        self._own_pr_guard(pr_number, "reply to review thread")
+        self.gh.json(
+            [
+                "api",
+                "graphql",
+                "-f",
+                f"query={REPLY_THREAD_MUTATION}",
+                "-F",
+                f"threadId={thread_id}",
+                "-f",
+                f"body={body}",
             ]
         )

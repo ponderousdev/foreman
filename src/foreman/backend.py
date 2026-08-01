@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -280,6 +281,86 @@ def _read_session_file(session_file: Path, result: BackendResult) -> None:
                 result.cost_usd = float(line.split("=", 1)[1])
             except ValueError:
                 pass
+
+
+# ── adjudication sidecar (#46) ───────────────────────────────────────
+
+ADJUDICATION_FILE = "adjudication.json"
+DISPOSITIONS = ("applied", "declined")
+
+
+@dataclass
+class ThreadDisposition:
+    thread_id: str
+    disposition: str  # applied | declined
+    note: str
+    # For `applied`: the commit the note names, parsed here; the shepherd
+    # verifies it exists on the branch before authorizing the thread writes.
+    applied_sha: str | None = None
+
+
+_APPLIED_SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
+
+
+def read_adjudication(
+    unit_run_dir: Path,
+) -> tuple[list[ThreadDisposition] | None, list[str]]:
+    """Validate the adjudication sidecar. The agent only RECORDS
+    dispositions here — its token is read-only (#13), so foreman posts each
+    note as the thread reply and resolves the thread, keeping every GitHub
+    write behind the guarded mutation seam (#46)."""
+    path = unit_run_dir / ADJUDICATION_FILE
+    if not path.exists():
+        return None, ["agent exited without writing the adjudication sidecar"]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return None, [f"{ADJUDICATION_FILE} is not valid JSON: {exc}"]
+    if not isinstance(data, dict):
+        return None, [f"{ADJUDICATION_FILE} must be a JSON object"]
+    errors: list[str] = []
+    if data.get("schema") != 1:
+        errors.append(f"{ADJUDICATION_FILE}: schema must be 1")
+    raw = data.get("dispositions")
+    if not isinstance(raw, list) or not raw:
+        errors.append(f"{ADJUDICATION_FILE}: dispositions must be a non-empty list")
+        return None, errors
+    out: list[ThreadDisposition] = []
+    for index, entry in enumerate(raw):
+        where = f"{ADJUDICATION_FILE}: dispositions[{index}]"
+        if not isinstance(entry, dict):
+            errors.append(f"{where} must be an object")
+            continue
+        thread_id = entry.get("thread_id")
+        disposition = entry.get("disposition")
+        note = entry.get("note")
+        if not isinstance(thread_id, str) or not thread_id.strip():
+            errors.append(f"{where}.thread_id must be a non-empty string")
+            continue
+        if disposition not in DISPOSITIONS:
+            errors.append(f"{where}.disposition must be one of {DISPOSITIONS}")
+            continue
+        if not isinstance(note, str) or not note.strip():
+            errors.append(f"{where}.note must be a non-empty string")
+            continue
+        applied_sha = None
+        if disposition == "applied":
+            # An applied claim must name its commit (`applied in <sha>`) so
+            # the shepherd can prove the fix exists before resolving.
+            match = _APPLIED_SHA_RE.search(note)
+            if match is None:
+                errors.append(
+                    f"{where}.note must name the commit for an applied "
+                    "disposition (`applied in <short-sha>`)"
+                )
+                continue
+            applied_sha = match.group(0)
+        out.append(
+            ThreadDisposition(thread_id.strip(), disposition, note.strip(), applied_sha)
+        )
+    if len({d.thread_id for d in out}) != len(out):
+        errors.append(f"{ADJUDICATION_FILE}: duplicate thread_id entries")
+    return (out, []) if not errors else (None, errors)
 
 
 # ── result contract ──────────────────────────────────────────────────

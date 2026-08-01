@@ -198,3 +198,35 @@ def _classify_edits(gh: GitHub, cfg: Config, number: int, out: UnitTrust) -> Non
                 "broken; fail closed until a trusted actor re-arms the "
                 "edited content (D13)"
             )
+
+
+def classify_branch_origin(gh: GitHub, cfg: Config, unit_number: int) -> UnitTrust:
+    """D13 classification of the unit behind an existing branch, for fix
+    dispatches on that branch (#46). A fix unit inherits its branch's
+    classification: red-CI log text, conflict lists, and the branch's own
+    tree derive from content the origin unit's authors and editors control,
+    so a fix agent needs the same untrusted-input boundary the original
+    dispatch did. Classifies the same surface as classify_unit — author,
+    edits, sub-issue authors and edits — without re-attributing arming
+    (arming authorizes dispatch; it does not classify content)."""
+    out = UnitTrust()
+
+    def classify(login: str | None, what: str) -> None:
+        if not _is_trusted(gh, cfg, login):
+            out.untrusted_input = True
+            out.contributors.append(f"{what} @{login or 'unknown'}")
+
+    issue = gh.issue(unit_number)
+    classify((issue.get("author") or {}).get("login"), f"author of #{unit_number}")
+    _classify_edits(gh, cfg, unit_number, out)
+    for ref in issue.get("subIssues") or []:
+        sub_number = ref.get("number")
+        if not isinstance(sub_number, int):
+            continue
+        sub = gh.issue(sub_number)
+        classify(
+            (sub.get("author") or {}).get("login"),
+            f"author of sub-issue #{sub_number}",
+        )
+        _classify_edits(gh, cfg, sub_number, out)
+    return out
