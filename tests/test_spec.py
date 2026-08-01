@@ -183,6 +183,7 @@ class PromptAssembly(unittest.TestCase):
             "FAILURE_EXCERPT",
             "CONFLICTS",
             "THREADS",
+            "ADJUDICATION_FILE",
             "TARGET",
             "CONCURRENT",
             "UNITS",

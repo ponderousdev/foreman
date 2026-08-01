@@ -89,6 +89,16 @@ mutation($threadId: ID!) {
 }
 """
 
+REPLY_THREAD_MUTATION = """
+mutation($threadId: ID!, $body: String!) {
+  addPullRequestReviewThreadReply(
+    input: { pullRequestReviewThreadId: $threadId, body: $body }
+  ) {
+    comment { id }
+  }
+}
+"""
+
 CONTENT_EDITS_QUERY = """
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
@@ -552,5 +562,23 @@ class GitHub:
                 f"query={RESOLVE_THREAD_MUTATION}",
                 "-F",
                 f"threadId={thread_id}",
+            ]
+        )
+
+    def reply_review_thread(self, thread_id: str, body: str) -> None:
+        """Post the agent's recorded disposition note as the thread reply.
+        Agents hold a read-only token (#13), so foreman performs this write
+        from the adjudication sidecar — the agent only records (#46)."""
+        self._assert_writable("reply to dispositioned review thread")
+        self.gh.json(
+            [
+                "api",
+                "graphql",
+                "-f",
+                f"query={REPLY_THREAD_MUTATION}",
+                "-F",
+                f"threadId={thread_id}",
+                "-f",
+                f"body={body}",
             ]
         )

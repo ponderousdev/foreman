@@ -35,6 +35,7 @@ def _mutations(gh):
             lambda: gh.post_vet_correction(1, "b", human_approved=True),
         ),
         ("resolve_review_thread", lambda: gh.resolve_review_thread("T_x")),
+        ("reply_review_thread", lambda: gh.reply_review_thread("T_x", "b")),
     ]
 
 

@@ -84,5 +84,72 @@ class ResultContract(unittest.TestCase):
         self.assertTrue(any("schema" in e for e in errors))
 
 
+class Adjudication(unittest.TestCase):
+    """The adjudication sidecar (#46): the agent records dispositions; the
+    validated record is what authorizes foreman's own thread writes."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.run_dir = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def write(self, data) -> None:
+        (self.run_dir / backend_mod.ADJUDICATION_FILE).write_text(
+            json.dumps(data), encoding="utf-8"
+        )
+
+    def test_valid_dispositions(self):
+        self.write(
+            {
+                "schema": 1,
+                "dispositions": [
+                    {"thread_id": "t-1", "disposition": "applied", "note": "in abc123"},
+                    {"thread_id": "t-2", "disposition": "declined", "note": "wrong"},
+                ],
+            }
+        )
+        dispositions, errors = backend_mod.read_adjudication(self.run_dir)
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            [(d.thread_id, d.disposition) for d in dispositions],
+            [("t-1", "applied"), ("t-2", "declined")],
+        )
+
+    def test_missing_file_is_an_error(self):
+        dispositions, errors = backend_mod.read_adjudication(self.run_dir)
+        self.assertIsNone(dispositions)
+        self.assertTrue(errors)
+
+    def test_empty_list_is_an_error(self):
+        self.write({"schema": 1, "dispositions": []})
+        dispositions, errors = backend_mod.read_adjudication(self.run_dir)
+        self.assertIsNone(dispositions)
+        self.assertTrue(any("non-empty" in e for e in errors))
+
+    def test_unknown_disposition_and_empty_note_fail(self):
+        self.write(
+            {
+                "schema": 1,
+                "dispositions": [
+                    {"thread_id": "t-1", "disposition": "maybe", "note": "x"},
+                    {"thread_id": "t-2", "disposition": "applied", "note": "  "},
+                ],
+            }
+        )
+        dispositions, errors = backend_mod.read_adjudication(self.run_dir)
+        self.assertIsNone(dispositions)
+        self.assertTrue(any("disposition must be one of" in e for e in errors))
+        self.assertTrue(any("note must be a non-empty" in e for e in errors))
+
+    def test_duplicate_thread_ids_fail(self):
+        entry = {"thread_id": "t-1", "disposition": "declined", "note": "n"}
+        self.write({"schema": 1, "dispositions": [entry, dict(entry)]})
+        dispositions, errors = backend_mod.read_adjudication(self.run_dir)
+        self.assertIsNone(dispositions)
+        self.assertTrue(any("duplicate" in e for e in errors))
+
+
 if __name__ == "__main__":
     unittest.main()

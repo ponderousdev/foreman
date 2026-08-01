@@ -25,6 +25,7 @@ from pathlib import Path
 from foreman import backend as backend_mod
 from foreman import gate, gitops, spec, verify, worktree
 from foreman import signatures as signatures_mod
+from foreman import trust as trust_mod
 from foreman.config import Config
 from foreman.dispatch import RETRIGGER_SUBJECT
 from foreman.github import GitHub
@@ -170,6 +171,19 @@ def _resume_agent(
     )
 
 
+def _origin_refusal(
+    gh: GitHub, cfg: Config, selection: Selection, unit_number: int
+) -> str | None:
+    """#46/D13: a fix unit inherits its branch's classification. Before any
+    agent resumes on this PR's branch — CI fix, conflicted rebase, or
+    adjudication — require the capabilities the origin unit's content
+    requires. Consumed via selection.refusal (capabilities, never a runner
+    name), exactly like eligibility does for the original dispatch."""
+    origin = trust_mod.classify_branch_origin(gh, cfg, unit_number)
+    required = trust_mod.required_for(cfg, trust_mod.repo_trust(gh, cfg), origin)
+    return selection.refusal(required)
+
+
 def _thread_trusted(gh: GitHub, cfg: Config, thread: dict) -> bool:
     """A review thread is trusted-authored only if EVERY commenter in it is
     a trusted actor (or foreman itself). One untrusted voice taints the
@@ -246,7 +260,17 @@ def shepherd_pr(
                     f"environmental '{sig.name}' persisted after retry — needs a human"
                 )
             return work
-        # Mechanical (or novel) failure → one bounded agent fix.
+        # Mechanical (or novel) failure → one bounded agent fix. The log
+        # text of building an untrusted-origin branch is untrusted content
+        # (#46): the fix agent inherits the origin unit's classification.
+        refusal = _origin_refusal(gh, cfg, selection, work.unit_number)
+        if refusal:
+            work.state, work.detail = (
+                "escalated",
+                "red CI on an untrusted-origin branch — its log text and "
+                f"tree are not fed to an agent here (#46): {refusal}",
+            )
+            return work
         work.actions += 1
         tokens = _common_tokens(gh, cfg, selection, work)
         tokens["FAILURE_EXCERPT"] = failure_text or json.dumps(failed[:3], indent=2)
@@ -296,6 +320,16 @@ def shepherd_pr(
                     "mechanical rebase unexpectedly failed",
                 )
             return work
+        # A conflicted rebase resumes an agent on the branch's tree — the
+        # same #46 inheritance rule as the CI fix applies.
+        refusal = _origin_refusal(gh, cfg, selection, work.unit_number)
+        if refusal:
+            work.state, work.detail = (
+                "escalated",
+                "conflicted rebase on an untrusted-origin branch — an agent "
+                f"is not resumed on its tree here (#46): {refusal}",
+            )
+            return work
         work.actions += 1
         tokens = _common_tokens(gh, cfg, selection, work)
         tokens["CONFLICTS"] = "\n".join(f"- {c}" for c in conflicts)
@@ -322,6 +356,16 @@ def shepherd_pr(
 
     threads = [t for t in gh.review_threads(work.number) if not t.get("isResolved")]
     if threads:
+        # Adjudication resumes an agent on the branch's tree — the #46
+        # inheritance rule first, before any thread content is considered.
+        refusal = _origin_refusal(gh, cfg, selection, work.unit_number)
+        if refusal:
+            work.state, work.detail = (
+                "escalated",
+                "unresolved threads on an untrusted-origin branch — an agent "
+                f"is not resumed on its tree here (#46): {refusal}",
+            )
+            return work
         # Input-surface enforcement (#46): free text enters a shepherd prompt
         # only when trusted-authored. An untrusted PR-review comment (anyone
         # can comment on a public-repo PR) is dispositioned by its trusted
@@ -357,6 +401,10 @@ def shepherd_pr(
             )
         tokens = _common_tokens(gh, cfg, selection, work)
         tokens["THREADS"] = "\n".join(rendered)
+        run_dir = backend_mod.unit_dir(cfg, root, work.unit_number)
+        adjudication_file = run_dir / backend_mod.ADJUDICATION_FILE
+        adjudication_file.unlink(missing_ok=True)  # a fresh signal only
+        tokens["ADJUDICATION_FILE"] = str(adjudication_file)
         result = _resume_agent(
             gh, cfg, root, selection, work, "shepherd-adjudicate", tokens
         )
@@ -373,6 +421,30 @@ def shepherd_pr(
                 return work
             if adj_handoff.commits_ahead(f"{remote_name}/{work.branch}") > 0:
                 adj_handoff.push(remote_name, work.branch, first=False)
+            # The agent only RECORDS dispositions (its token is read-only,
+            # #13); foreman posts each note and resolves the thread through
+            # the guarded mutation seam. Thread ids are agent-controlled
+            # input — only ids from the threads we rendered are accepted.
+            dispositions, disp_errors = backend_mod.read_adjudication(run_dir)
+            if dispositions is None:
+                work.state, work.detail = (
+                    "escalated",
+                    "adjudication sidecar invalid — " + "; ".join(disp_errors),
+                )
+                return work
+            known_ids = {t.get("id") for t in threads}
+            unknown = sorted(
+                d.thread_id for d in dispositions if d.thread_id not in known_ids
+            )
+            if unknown:
+                work.state, work.detail = (
+                    "escalated",
+                    "adjudication named unknown thread id(s): " + ", ".join(unknown),
+                )
+                return work
+            for disposition in dispositions:
+                gh.reply_review_thread(disposition.thread_id, disposition.note)
+                gh.resolve_review_thread(disposition.thread_id)
             remaining = [
                 t for t in gh.review_threads(work.number) if not t.get("isResolved")
             ]
