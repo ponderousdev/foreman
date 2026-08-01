@@ -8,7 +8,11 @@ You are foreman's shepherd. The runbooks are one-sourced in
 `shepherd-rebase.md` (conflicts after a sibling merge), and
 `shepherd-adjudicate.md` (review-thread adjudication). Read the one matching
 your task FIRST and follow it exactly; fill its `%%TOKEN%%` placeholders from
-context (PR URL, branch, unit number, `.foreman.toml` verify_command).
+context (PR URL, branch, unit number). For `%%VERIFY_COMMAND%%`, compose the
+gate the way foreman does: `.foreman.toml`'s `[verify].default`, plus each
+capability-keyed addition (`docker`, `ports`, …) whose capability this
+environment actually has — probe, don't assume (e.g. the `docker` entry only
+where `docker info` succeeds). Never run just part of the baseline.
 
 The non-negotiables, restated: never merge anything; rebase — never
 merge-main — as the one update mechanism; never weaken a test or the code to

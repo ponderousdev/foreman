@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # claude.sh — Foreman backend adapter for Claude Code (headless print mode).
 #
-# Contract (see scripts/foreman/backend.py):
+# Contract (see src/foreman/backend.py):
 #   claude.sh run                  dispatch with $FOREMAN_PROMPT_FILE
 #   claude.sh resume <session-id>  resume a prior session with a new prompt
 #   claude.sh capabilities         print capability tokens ("resume cost")

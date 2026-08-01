@@ -11,7 +11,10 @@ is extracted to the standalone `ponderousdev/foreman` package, distributed
 as a pinned `uvx` git-tag invocation (D11). "Shipped by the template to
 every generated repo" below describes v1; harmon-init now retains only a
 thin wrapper integration, and `scripts/foreman/` is no longer
-template-shipped source.
+template-shipped source. History was preserved via `git filter-repo`
+subdirectory extraction (paths rewritten `scripts/foreman/` →
+`src/foreman/`), merged with `--allow-unrelated-histories` as a merge
+commit (PR #48), so `git log --follow` crosses the move.
 
 ## Context
 

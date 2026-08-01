@@ -111,7 +111,9 @@ config, toolchain, devcontainer, and dev environment — against the items below
 - [ ] Devcontainer secrets: create a **1Password environment** that mounts
       `.devcontainer/devcontainer.env` (and `.devcontainer/dev/devcontainer.env`)
       with `GH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `AGENT_DECK_TELEGRAM_KEY`
-      (+ `TS_AUTHKEY` for the dev profile). `init-env.sh` enforces the per-profile
+      (+ `TS_AUTHKEY` for the dev profile; + `FOREMAN_AGENT_GH_TOKEN` — the
+      read-only agent PAT, #13 — for the bot profile, required before any
+      dispatch). `init-env.sh` enforces the per-profile
       allow-list; on Coder the values come from workspace parameters. See
       [guides/devcontainers.md](guides/devcontainers.md)
 
