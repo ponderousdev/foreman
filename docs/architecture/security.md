@@ -420,6 +420,20 @@ provider accounts, and machines. The standard:
 - **Cadence**: long-lived provider tokens carry a 1-year TTL; set a calendar
   reminder ~1 week before expiry. Expired-token symptom: the CI jobs using
   the credential fail with authentication errors.
+- **Ruleset bypass-actor audit (operator tier — named by `foreman preflight`,
+  #15)**: alongside every PAT rotation, with admin credentials, list each
+  ruleset's bypass actors —
+  `gh api "repos/<owner>/<repo>/rulesets" --jq '.[].id'`, then per id
+  `gh api "repos/<owner>/<repo>/rulesets/<id>" --jq '{name, bypass_actors}'` —
+  and confirm no bypass actor is one Foreman's write token can act as (the
+  bot user, its repository role, or an app the bot can drive). The tag
+  rulesets' split is load-bearing: the update/delete ruleset must keep an
+  **empty** bypass list, because bypass is ruleset-wide (see
+  [branch-protection.md](branch-protection.md)). The bot tier cannot assert
+  this empirically — reading bypass actors needs admin-ish permissions the
+  PAT deliberately lacks, and probing it means attempting the exact push the
+  rule exists to prevent — which is why it is an operator check. Record the
+  audit date next to the rotation reminder.
 - **Rotate create → verify → revoke, never delete-first**: create the
   replacement, update 1Password and the Actions secret, prove it works (a
   trivial PR whose checks exercise the credential), then revoke the old one.
