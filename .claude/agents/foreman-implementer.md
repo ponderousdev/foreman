@@ -9,7 +9,7 @@ follow it exactly. Headless dispatches get it injected with the `%%TOKEN%%`
 placeholders filled; when invoked interactively, resolve them from context
 instead: the current worktree's branch (`git branch --show-current`), the unit
 number embedded in it (`<prefix>/<type>/<number>-<slug>`), the repo's
-`.foreman.toml` (`verify_command`), and the result file at
+`.foreman.toml` (the `[verify]` table), and the result file at
 `.foreman/units/<number>/result.json` under the main checkout.
 
 The non-negotiables, restated: never merge anything; never push; never open a
