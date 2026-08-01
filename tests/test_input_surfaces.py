@@ -292,7 +292,11 @@ class AdjudicationWritePath(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             work = self._drive(tmp, gh, cfg, sidecar)
         self.assertEqual(work.state, "adjudicated")
-        self.assertEqual(replies, [(10, the_thread["id"], "covered by the typecheck")])
+        marker = shepherd_mod._disposition_marker(the_thread["id"])
+        self.assertEqual(
+            replies,
+            [(10, the_thread["id"], "covered by the typecheck\n\n" + marker)],
+        )
         self.assertEqual(resolves, [the_thread["id"]])
 
     def test_applied_with_commit_on_branch_resolves(self):
@@ -359,9 +363,15 @@ class AdjudicationWritePath(unittest.TestCase):
         stub_origin(runner, 5, "reviewer")
         the_thread = thread("reviewer")
         # A previous tick already posted this exact note (author == viewer
-        # "bot") but died before resolving; the retry must not repost.
+        # "bot") but died before resolving; the retry must not repost. The
+        # note is worded DIFFERENTLY here — dedupe keys on the marker, not
+        # the text, because a re-run agent rewords its notes.
         the_thread["comments"]["nodes"].append(
-            {"author": {"login": "bot"}, "body": "covered by the typecheck"}
+            {
+                "author": {"login": "bot"},
+                "body": "the typecheck already covers this\n\n"
+                + shepherd_mod._disposition_marker(the_thread["id"]),
+            }
         )
         gh.review_threads = lambda number: [the_thread]  # type: ignore
         replies, resolves = self._wire_writes(gh, {the_thread["id"]: the_thread})

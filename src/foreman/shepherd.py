@@ -193,13 +193,23 @@ def _origin_refusal(
     return selection.refusal(required)
 
 
-def _reply_already_posted(thread: dict, note: str, viewer: str) -> bool:
-    """True when foreman already posted this exact note on the thread — the
-    reply half of reply-then-resolve is retried by later ticks, and a
-    duplicate note would read as spam."""
+def _disposition_marker(thread_id: str) -> str:
+    """Invisible-in-render marker appended to every disposition reply (the
+    upsert_status_comment pattern). Dedupe keys on it, not on note text: a
+    retry tick re-runs the agent, which may word the note differently."""
+    return f"<!-- foreman:disposition:{thread_id} -->"
+
+
+def _disposition_reply_posted(thread: dict, thread_id: str, viewer: str) -> bool:
+    """True when foreman already posted a disposition reply on this thread —
+    the reply half of reply-then-resolve is retried by later ticks, and a
+    duplicate reply would read as spam. Best-effort: the thread query
+    fetches the first 50 comments, which fails toward one duplicate note,
+    never toward a missed resolution."""
+    marker = _disposition_marker(thread_id)
     for comment in (thread.get("comments") or {}).get("nodes") or []:
         author = (comment.get("author") or {}).get("login") or ""
-        if author == viewer and (comment.get("body") or "").strip() == note:
+        if author == viewer and marker in (comment.get("body") or ""):
             return True
     return False
 
@@ -486,11 +496,15 @@ def shepherd_pr(
             for disposition in dispositions:
                 # Reply-then-resolve is two mutations; if resolve failed last
                 # round, don't post the identical note again on retry.
-                if not _reply_already_posted(
-                    by_id[disposition.thread_id], disposition.note, me
+                if not _disposition_reply_posted(
+                    by_id[disposition.thread_id], disposition.thread_id, me
                 ):
                     gh.reply_review_thread(
-                        work.number, disposition.thread_id, disposition.note
+                        work.number,
+                        disposition.thread_id,
+                        disposition.note
+                        + "\n\n"
+                        + _disposition_marker(disposition.thread_id),
                     )
                 gh.resolve_review_thread(work.number, disposition.thread_id)
             remaining = [
