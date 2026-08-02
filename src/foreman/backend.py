@@ -221,6 +221,11 @@ def run_backend(
         # process runs the gate in the worktree after the agent exits.
         gate_cmds=tuple(tuple(c) for c in (gate_cmds or [])),
     )
+    # Snapshot the session file BEFORE the spawn (#54): the file persists
+    # across resumes, and a run that dies before emitting its own COST_USD
+    # must not be billed the previous invocation's last cost line.
+    session_offset = session_file.stat().st_size if session_file.exists() else 0
+
     handle = runner.spawn(spec)
     runner_mod.save_handle(cfg, root, handle)
     _record_run_started(cfg, unit_run_dir, handle, spec, resume_ref=resume_ref)
@@ -233,7 +238,9 @@ def run_backend(
         runner.kill(handle)
         status = runner.wait(handle, KILL_REAP_S)
 
-    return result_from_wait(unit_run_dir, status, timed_out=timed_out)
+    return result_from_wait(
+        unit_run_dir, status, timed_out=timed_out, session_offset=session_offset
+    )
 
 
 def remaining_timeout_s(unit_run_dir: Path, full_timeout_s: int) -> int:
@@ -253,15 +260,23 @@ def remaining_timeout_s(unit_run_dir: Path, full_timeout_s: int) -> int:
 
 
 def result_from_wait(
-    unit_run_dir: Path, status: runner_mod.ExitStatus, *, timed_out: bool
+    unit_run_dir: Path,
+    status: runner_mod.ExitStatus,
+    *,
+    timed_out: bool,
+    session_offset: int = 0,
 ) -> BackendResult:
     """BackendResult from a wait() outcome — used by run_backend and by
     reattachment, where a restarted Foreman adopts a unit it never spawned
-    and the recorded status is the only ground truth (#22)."""
+    and the recorded status is the only ground truth (#22). `session_offset`
+    is the session file's size before this run spawned: COST_USD lines are
+    parsed only past it, so a run that died before emitting cost is never
+    billed a previous invocation's line (#54). SESSION_REF still resolves
+    from the whole file — resuming depends on the earliest recorded ref."""
     result = BackendResult(
         returncode=status.code, timed_out=timed_out, abnormal=status.abnormal
     )
-    _read_session_file(unit_run_dir / "session", result)
+    _read_session_file(unit_run_dir / "session", result, cost_offset=session_offset)
     log_tail = (
         tail(unit_run_dir / "agent.log", 80)
         + "\n"
@@ -273,13 +288,17 @@ def result_from_wait(
     return result
 
 
-def _read_session_file(session_file: Path, result: BackendResult) -> None:
+def _read_session_file(
+    session_file: Path, result: BackendResult, *, cost_offset: int = 0
+) -> None:
     if not session_file.exists():
         return
-    for line in session_file.read_text(encoding="utf-8").splitlines():
+    text = session_file.read_text(encoding="utf-8")
+    for line in text.splitlines():
         if line.startswith("SESSION_REF=") and not result.session_ref:
             result.session_ref = line.split("=", 1)[1].strip() or None
-        elif line.startswith("COST_USD="):
+    for line in text[cost_offset:].splitlines():
+        if line.startswith("COST_USD="):
             try:
                 result.cost_usd = float(line.split("=", 1)[1])
             except ValueError:

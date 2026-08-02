@@ -92,6 +92,9 @@ class TimeoutAndKill(SpecCase):
         lr.kill(handle)
 
     def test_kill_terminates_the_group_and_records_signal_death(self):
+        # No readiness poll needed (#54): spawn() returns only after the
+        # wrapper has STARTED the command — an immediate kill() always
+        # finds a child to signal and always yields a recorded 128+N.
         lr = runner()
         handle = lr.spawn(self.spec("sleep", "30"))
         with self.assertRaises(WaitTimeout):

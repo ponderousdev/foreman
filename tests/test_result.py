@@ -84,6 +84,31 @@ class ResultContract(unittest.TestCase):
         self.assertTrue(any("schema" in e for e in errors))
 
 
+class SessionCost(unittest.TestCase):
+    def test_stale_cost_not_rebilled_past_offset(self):
+        # #54: the session file persists across resumes; a run that died
+        # before emitting its own COST_USD must not be billed the previous
+        # invocation's line. SESSION_REF still resolves from the whole file.
+        from foreman.runner import ExitStatus
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            content = "SESSION_REF=abc\nCOST_USD=5.00\n"
+            (run_dir / "session").write_text(content, encoding="utf-8")
+            stale = backend_mod.result_from_wait(
+                run_dir,
+                ExitStatus(code=124),
+                timed_out=True,
+                session_offset=len(content),
+            )
+            self.assertIsNone(stale.cost_usd)
+            self.assertEqual(stale.session_ref, "abc")
+            fresh = backend_mod.result_from_wait(
+                run_dir, ExitStatus(code=0), timed_out=False
+            )
+            self.assertEqual(fresh.cost_usd, 5.0)
+
+
 class Adjudication(unittest.TestCase):
     """The adjudication sidecar (#46): the agent records dispositions; the
     validated record is what authorizes foreman's own thread writes."""
