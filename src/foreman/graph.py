@@ -277,23 +277,30 @@ def dependency_satisfied(
 
 
 def prepare_target(
-    gh: GitHub, cfg: Config, *, milestone: str | None = None, issue: int | None = None
+    gh: GitHub,
+    cfg: Config,
+    *,
+    milestone: str | None = None,
+    issue: int | None = None,
+    classify_closed: bool = False,
 ) -> Target:
     """Load the target, resolve human inputs, and classify trust (D4/D13)
     for every unit. Classification injects untrusted-input into a unit's
     required capabilities; eligibility consumes the resulting set without
-    ever asking which runner is configured."""
+    ever asking which runner is configured.
+
+    `classify_closed` is for consumers that RENDER closed units (vet, #46):
+    anything that can enter a prompt must carry its D13 classification.
+    Dispatch/plan/status skip closed units, and classifying them anyway
+    would let one old ≥100-edit closed issue fail-close the whole target
+    while adding an attestation cost nothing consumes."""
     target = load_target(gh, cfg, milestone=milestone, issue=issue)
     target.mode = inputs_mod.detect_mode(gh, cfg)
     target.repo_trust = trust_mod.repo_trust(gh, cfg)
     for unit in target.units.values():
         unit.inputs = inputs_mod.resolve(gh, cfg, gh.issue(unit.number), target.mode)
-        # Classify EVERY unit, open or closed: dispatch consumes only open
-        # units, but vet renders closed ones into its prompt too (#46) —
-        # anything that can enter a prompt must carry its D13 classification,
-        # or a closed issue authored/edited by a once-untrusted actor slips
-        # through the per-unit refusal.
-        unit.trust = trust_mod.classify_unit(gh, cfg, unit, target.mode)
+        if unit.open or classify_closed:
+            unit.trust = trust_mod.classify_unit(gh, cfg, unit, target.mode)
         unit.required_capabilities = trust_mod.required_for(
             cfg, target.repo_trust, unit.trust
         )

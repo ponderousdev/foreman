@@ -226,6 +226,22 @@ class AuthorshipClassifies(unittest.TestCase):
         self.assertTrue(result.untrusted_input)
         self.assertTrue(any("renamed by untrusted actor" in r for r in result.refusals))
 
+    def test_same_second_untrusted_rename_fails_closed(self):
+        # Timeline timestamps have second granularity: a rename in the SAME
+        # second as arming is order-unknowable and must break the
+        # attestation, not slip through as pre-arming.
+        result = self.classify_with_rename(
+            rename_actor="outsider", renamed_at="2026-07-17T01:00:00Z"
+        )
+        self.assertTrue(any("renamed by untrusted" in r for r in result.refusals))
+
+    def test_same_second_untrusted_edit_fails_closed(self):
+        result = self.classify(
+            author="owner",
+            edits=[{"editor": "outsider", "edited_at": "2026-07-17T01:00:00Z"}],
+        )
+        self.assertTrue(any("re-arm" in r for r in result.refusals))
+
     def test_trusted_post_arming_edit_keeps_the_attestation(self):
         result = self.classify(
             author="owner",

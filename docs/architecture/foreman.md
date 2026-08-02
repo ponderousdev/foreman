@@ -138,8 +138,9 @@ task foreman:cleanup   # prune worktrees/branches for closed units
    the full log path and is classified by `signatures.toml` before any
    resume, so an environmental failure is never handed back as a code bug.
 7. **Freshness gate** — immediately before pushing: the issue is still open,
-   still armed, dependencies still satisfied, the spec hash (titles, bodies
-   - trusted comments) unchanged since dispatch, and no PR appeared meanwhile.
+   still armed, dependencies still satisfied, the spec hash (titles,
+   bodies, and trusted comments) unchanged since dispatch, and no PR
+   appeared meanwhile.
    Drift means no push and a flagged unit.
 8. **PR** — non-draft (review bots skip drafts), machine-readable marker,
    `Closes #N` (or `Refs` when human tasks remain), test evidence, Handoff,
@@ -227,8 +228,10 @@ USD budgets bind. Switching is a config flip plus one secret.
 
 Every LLM-consuming role has a defined input surface, enforced in code —
 what may enter a prompt, what decisions may consume, and what is excluded.
-Dispatch/continue decisions consume **deterministic signals only**, never
-free text.
+Dispatch/continue decisions consume **deterministic signals only** — the
+single exception being the bounded `signatures.toml` parse of CI log text
+described below the table; free text never reaches a decision any other
+way.
 
 | Role | Enters the prompt | Excluded in code | Enforced at |
 | --- | --- | --- | --- |

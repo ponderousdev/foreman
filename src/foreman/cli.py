@@ -542,7 +542,9 @@ def cmd_vet(args: argparse.Namespace) -> int:
         return 0
 
     backend_mod.assert_backend_version(cfg)
-    target = prepare_target(gh, cfg, milestone=args.milestone, issue=args.issue)
+    target = prepare_target(
+        gh, cfg, milestone=args.milestone, issue=args.issue, classify_closed=True
+    )
     selection = runner_mod.select(cfg)
     # vet's input surface (#46): issue + sub-issue titles/bodies and only
     # trusted-authored comments — untrusted comments are excluded in code,

@@ -155,7 +155,6 @@ class GitHub:
         self._identity_ok = False
         self._cache: dict[str, Any] = {}
         self._issue_cache: dict[int, dict] = {}
-        self._timeline_cache: dict[int, list[dict]] = {}
 
     # ── facts ────────────────────────────────────────────────────────
 
@@ -232,22 +231,23 @@ class GitHub:
         return logins
 
     def _issue_timeline(self, number: int) -> list[dict]:
-        """Raw timeline events, fetched once per issue per run (cached):
-        the shared source for label attribution and rename attribution."""
-        if number not in self._timeline_cache:
-            out = self.gh.json(
-                [
-                    "api",
-                    f"repos/{self.repo_slug()}/issues/{number}/timeline?per_page=100",
-                    "--paginate",
-                    "--slurp",
-                ]
-            )
-            events: list[dict] = []
-            for page in out or []:
-                events.extend(event for event in page or [] if event)
-            self._timeline_cache[number] = events
-        return self._timeline_cache[number]
+        """Raw timeline events — deliberately UNCACHED: arming and rename
+        attribution are TOCTOU re-checked pre-spawn and pre-push, and watch
+        ticks re-derive; a cached timeline would let an event landing after
+        planning slip past those gates. Fresh every call, like every other
+        trust input."""
+        out = self.gh.json(
+            [
+                "api",
+                f"repos/{self.repo_slug()}/issues/{number}/timeline?per_page=100",
+                "--paginate",
+                "--slurp",
+            ]
+        )
+        events: list[dict] = []
+        for page in out or []:
+            events.extend(event for event in page or [] if event)
+        return events
 
     def issue_label_events(self, number: int) -> list[dict]:
         """Chronological `labeled` events: {label, actor, created_at} — the

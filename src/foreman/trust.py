@@ -193,7 +193,10 @@ def _classify_edits(gh: GitHub, cfg: Config, number: int, out: UnitTrust) -> Non
             continue  # a trusted edit refreshes the pin (new attestation)
         out.untrusted_input = True
         out.contributors.append(f"editor of #{number} @{editor or 'unknown'}")
-        if out.arming_at and edited_at > out.arming_at:
+        # >= not >: timeline/edit timestamps have second granularity, so an
+        # untrusted change in the SAME second as arming is order-unknowable —
+        # fail closed and treat it as post-arming.
+        if out.arming_at and edited_at >= out.arming_at:
             out.refusals.append(
                 f"#{number}: body edited by untrusted actor "
                 f"@{editor or 'unknown'} after arming — the attestation is "
@@ -215,7 +218,8 @@ def _classify_renames(gh: GitHub, cfg: Config, number: int, out: UnitTrust) -> N
             continue  # a trusted rename refreshes the pin (new attestation)
         out.untrusted_input = True
         out.contributors.append(f"renamer of #{number} @{actor or 'unknown'}")
-        if out.arming_at and renamed_at > out.arming_at:
+        # >= not >: same-second rename is order-unknowable — fail closed.
+        if out.arming_at and renamed_at >= out.arming_at:
             out.refusals.append(
                 f"#{number}: renamed by untrusted actor "
                 f"@{actor or 'unknown'} after arming — the attestation is "
