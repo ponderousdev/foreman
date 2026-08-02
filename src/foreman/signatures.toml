@@ -29,3 +29,12 @@ action = "quota_wait"
 name = "port-in-use"
 pattern = 'EADDRINUSE|address already in use|port \d+ is already in use'
 action = "environment"
+
+# Docker-keyed gate additions run only where the unit's environment
+# advertises `docker` (#29); GitHub Actions stays the authority for them
+# elsewhere. When THAT run dies because the runner's daemon is absent or
+# broken, it is infrastructure, not code — retry once, then the human queue.
+[[signature]]
+name = "docker-daemon-unavailable"
+pattern = 'Cannot connect to the Docker daemon|Is the docker daemon running|permission denied while trying to connect to the Docker daemon socket|docker: command not found'
+action = "environment"
