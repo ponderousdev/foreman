@@ -41,7 +41,10 @@ class ConfigLoading(unittest.TestCase):
         self.assertEqual(cfg.billing, "subscription")
         self.assertEqual(cfg.required_capabilities, [])
         self.assertIn("docker", cfg.verify)
-        self.assertEqual(cfg.trusted_actors, ["evanharmon1", "evanharmon1-bot"])
+        self.assertEqual(
+            cfg.trusted_actors,
+            ["evanharmon1", "evanharmon1-bot", "AdmiralFraggle", "admiralfraggle-bot"],
+        )
         self.assertEqual(cfg.runner, "local")
         self.assertTrue(cfg.require_approval)
         self.assertEqual(cfg.max_parallel, 3)
