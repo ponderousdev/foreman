@@ -80,3 +80,17 @@ class LoadTarget(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SubIssueShapes(unittest.TestCase):
+    def test_connection_object_and_list_both_normalize(self):
+        # gh >= 2.7x returns a connection object; older returned a list.
+        from foreman.util import sub_issue_refs
+
+        ref = {"number": 43}
+        self.assertEqual(sub_issue_refs({"subIssues": [ref]}), [ref])
+        self.assertEqual(
+            sub_issue_refs({"subIssues": {"nodes": [ref], "totalCount": 1}}), [ref]
+        )
+        self.assertEqual(sub_issue_refs({"subIssues": None}), [])
+        self.assertEqual(sub_issue_refs({}), [])

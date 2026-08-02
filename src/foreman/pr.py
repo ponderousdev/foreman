@@ -13,7 +13,7 @@ from foreman.config import Config
 from foreman.github import GitHub
 from foreman.graph import Unit, dependency_satisfied
 from foreman.spec import spec_hash, trusted_comments
-from foreman.util import warn
+from foreman.util import sub_issue_refs, warn
 
 TITLE_RE = re.compile(
     r"^(?P<type>[a-z]+)(?:\((?P<scope>[^)]+)\))?(?P<bang>!)?: (?P<subject>.+)$"
@@ -62,7 +62,7 @@ def freshness_check(
         milestone=unit.milestone,
         parent=unit.parent,
         sub_issues=[
-            gh.issue(sub["number"], fresh=True) for sub in issue.get("subIssues") or []
+            gh.issue(sub["number"], fresh=True) for sub in sub_issue_refs(issue)
         ],
     )
     if spec_hash(check_unit, comments) != recorded_hash:

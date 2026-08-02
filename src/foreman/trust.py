@@ -30,7 +30,7 @@ from foreman import inputs as inputs_mod
 from foreman.capabilities import UNTRUSTED_INPUT
 from foreman.config import Config
 from foreman.github import GitHub
-from foreman.util import ForemanError
+from foreman.util import ForemanError, sub_issue_refs
 
 if TYPE_CHECKING:
     from foreman.graph import Unit
@@ -248,7 +248,7 @@ def classify_branch_origin(gh: GitHub, cfg: Config, unit_number: int) -> UnitTru
     classify((issue.get("author") or {}).get("login"), f"author of #{unit_number}")
     _classify_edits(gh, cfg, unit_number, out)
     _classify_renames(gh, cfg, unit_number, out)
-    for ref in issue.get("subIssues") or []:
+    for ref in sub_issue_refs(issue):
         sub_number = ref.get("number")
         if not isinstance(sub_number, int):
             continue
