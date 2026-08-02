@@ -6,6 +6,51 @@ import unittest
 
 from foreman import signatures as signatures_mod
 from foreman.shepherd import classify_checks
+from foreman.util import ForemanError
+from tests.fakes import make_github
+
+
+class ReviewThreadReads(unittest.TestCase):
+    """#54: unread threads must never read as resolved — that path ends in
+    ready-to-merge."""
+
+    def _resp(self, total, nodes):
+        return {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {"totalCount": total, "nodes": nodes}
+                    }
+                }
+            }
+        }
+
+    def test_more_threads_than_fetched_fails_closed(self):
+        gh, runner = make_github()
+        runner.when(
+            ["api", "graphql"], self._resp(101, [{"id": "t1", "isResolved": False}])
+        )
+        with self.assertRaises(ForemanError):
+            gh.review_threads(9)
+
+    def test_unreadable_response_fails_closed(self):
+        gh, runner = make_github()
+        runner.when(["api", "graphql"], {"data": None})
+        with self.assertRaises(ForemanError):
+            gh.review_threads(9)
+
+    def test_partial_metadata_fails_closed(self):
+        # nodes: null / totalCount: null is not an empty complete page.
+        gh, runner = make_github()
+        runner.when(["api", "graphql"], self._resp(None, None))
+        with self.assertRaises(ForemanError):
+            gh.review_threads(9)
+
+    def test_complete_page_is_returned(self):
+        gh, runner = make_github()
+        nodes = [{"id": "t1", "isResolved": True}]
+        runner.when(["api", "graphql"], self._resp(1, nodes))
+        self.assertEqual(gh.review_threads(9), nodes)
 
 
 class ClassifyChecks(unittest.TestCase):

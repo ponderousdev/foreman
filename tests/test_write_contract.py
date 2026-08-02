@@ -107,6 +107,16 @@ class GuardedChannels(unittest.TestCase):
         with self.assertRaises(ForemanError):
             gh.label_own_pr(9, add=["priority:high"])
 
+    def test_label_namespace_is_enforced_on_removal(self):
+        # #54: stripping a human's label is as out-of-contract as adding one.
+        gh, runner = make_github()
+        runner.when(
+            ["pr", "view", "9"],
+            {"number": 9, "author": {"login": "bot"}, "labels": [], "body": ""},
+        )
+        with self.assertRaises(ForemanError):
+            gh.label_own_pr(9, remove=["priority:high"])
+
     def test_status_comment_edits_only_own_marked_comment(self):
         gh, runner = make_github()
         comments = [

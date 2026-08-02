@@ -46,6 +46,7 @@ class PrWork:
     state: str = "healthy"  # healthy | fixed | rebased | adjudicated | waiting | escalated | settling | ready
     detail: str = ""
     actions: int = 0
+    cost_usd: float = 0.0
 
 
 @dataclass
@@ -251,7 +252,14 @@ def _common_tokens(
 
 
 def shepherd_pr(
-    gh: GitHub, cfg: Config, root: Path, selection: Selection, pr: dict, catalog
+    gh: GitHub,
+    cfg: Config,
+    root: Path,
+    selection: Selection,
+    pr: dict,
+    catalog,
+    *,
+    sink: dict[int, PrWork] | None = None,
 ) -> PrWork:
     status = gh.pr_status(pr["number"])
     work = PrWork(
@@ -261,6 +269,11 @@ def shepherd_pr(
         url=status["url"],
         title=status["title"],
     )
+    if sink is not None:
+        # Registered before any agent resume (#54): if post-processing
+        # raises after a billable result, the caller's handler recovers
+        # THIS object — accumulated cost is never replaced with a $0 stub.
+        sink[work.number] = work
     remote_name = worktree.remote(cfg)
     checks_state, failed = classify_checks(status.get("statusCheckRollup"))
 
@@ -315,6 +328,7 @@ def shepherd_pr(
         result = _resume_agent(
             gh, cfg, root, selection, work, "shepherd-ci-fix", tokens
         )
+        work.cost_usd += result.cost_usd or 0.0
         work_dir = _ensure_worktree(
             cfg, root, work.unit_number, work.branch, remote_name
         )
@@ -374,6 +388,7 @@ def shepherd_pr(
         result = _resume_agent(
             gh, cfg, root, selection, work, "shepherd-rebase", tokens
         )
+        work.cost_usd += result.cost_usd or 0.0
         if result.ok:
             ok, _tail, _failed = verify.run_gate(
                 gate.compose(cfg, selection.runner.capabilities()),
@@ -450,6 +465,7 @@ def shepherd_pr(
         result = _resume_agent(
             gh, cfg, root, selection, work, "shepherd-adjudicate", tokens
         )
+        work.cost_usd += result.cost_usd or 0.0
         wt_path = _ensure_worktree(
             cfg, root, work.unit_number, work.branch, remote_name
         )
@@ -567,20 +583,25 @@ def run_shepherd(
         info("shepherd: no open foreman PRs")
         return out
     for pr in prs:
+        sink: dict[int, PrWork] = {}
         try:
-            work = shepherd_pr(gh, cfg, root, selection, pr, catalog)
+            work = shepherd_pr(gh, cfg, root, selection, pr, catalog, sink=sink)
         except Exception as exc:  # keep shepherding the rest
             warn(f"shepherd: PR #{pr['number']} failed: {exc}")
-            work = PrWork(
+            # Recover the in-flight PrWork (#54): a raise after an agent
+            # resume must not zero out the cost the resume already spent.
+            work = sink.get(pr["number"]) or PrWork(
                 number=pr["number"],
                 unit_number=pr["_unit"],
                 branch=pr.get("headRefName", ""),
                 url=pr.get("url", ""),
                 title=pr.get("title", ""),
-                state="escalated",
-                detail=str(exc),
             )
+            work.state, work.detail = "escalated", str(exc)
         out.worked.append(work)
+        # #54: shepherd spend was never accumulated — ShepherdReport.cost_usd
+        # stayed 0 and watch's --budget-usd systematically undercounted.
+        out.cost_usd += work.cost_usd
         if work.state == "escalated":
             out.environmental[work.unit_number] = work.detail
         if work.state == "waiting":
