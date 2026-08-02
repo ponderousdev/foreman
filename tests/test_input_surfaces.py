@@ -266,7 +266,9 @@ class AdjudicationWritePath(unittest.TestCase):
             "labels": [],
         }
 
-    def _drive(self, tmp: str, gh, cfg, sidecar, runner=None) -> shepherd_mod.PrWork:
+    def _drive(
+        self, tmp: str, gh, cfg, sidecar, runner=None, sink=None
+    ) -> shepherd_mod.PrWork:
         """Run shepherd_pr through the adjudicate branch with the agent
         resume and worktree patched out; `sidecar` is what the fake agent
         writes (None to simulate an agent that wrote nothing)."""
@@ -294,7 +296,7 @@ class AdjudicationWritePath(unittest.TestCase):
         )
         try:
             return shepherd_mod.shepherd_pr(
-                gh, cfg, root, selection, {"number": 10, "_unit": 5}, []
+                gh, cfg, root, selection, {"number": 10, "_unit": 5}, [], sink=sink
             )
         finally:
             shepherd_mod._resume_agent = original_resume  # type: ignore[assignment]
@@ -485,6 +487,37 @@ class AdjudicationWritePath(unittest.TestCase):
         self.assertIn("unknown thread id", work.detail)
         self.assertEqual(replies, [])
         self.assertEqual(resolves, [])
+
+    def test_cost_survives_post_processing_failure(self):
+        # #54: a raise after a billable resume must not zero the cost —
+        # run_shepherd recovers the registered PrWork from the sink.
+        cfg = Config(trusted_actors=["reviewer"])
+        gh, runner = make_github(cfg)
+        runner.when(["pr", "view", "10"], self._green_status())
+        stub_origin(runner, 5, "reviewer")
+        the_thread = thread("reviewer")
+        gh.review_threads = lambda number: [the_thread]  # type: ignore
+        gh.reply_review_thread = lambda pr, tid, body: None  # type: ignore
+
+        def boom(pr, tid):
+            raise RuntimeError("resolve exploded")
+
+        gh.resolve_review_thread = boom  # type: ignore[assignment]
+        sink: dict[int, shepherd_mod.PrWork] = {}
+        sidecar = {
+            "schema": 1,
+            "dispositions": [
+                {
+                    "thread_id": the_thread["id"],
+                    "disposition": "declined",
+                    "note": "covered by the typecheck",
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(RuntimeError):
+                self._drive(tmp, gh, cfg, sidecar, sink=sink)
+        self.assertEqual(sink[10].cost_usd, 1.25)
 
     def test_missing_sidecar_escalates(self):
         cfg = Config(trusted_actors=["reviewer"])

@@ -412,16 +412,23 @@ class GitHub:
         )
         try:
             connection = out["data"]["repository"]["pullRequest"]["reviewThreads"]
-            nodes = connection["nodes"]
-        except (KeyError, TypeError) as exc:
+            nodes = connection.get("nodes")
+            total = connection.get("totalCount")
+        except (KeyError, TypeError, AttributeError) as exc:
             # Fail closed (#54): an unreadable response must never read as
             # "no unresolved threads" — that path ends in ready-to-merge.
             raise ForemanError(
                 f"review threads: unreadable GraphQL response for PR "
                 f"#{number} — failing closed"
             ) from exc
-        total = connection.get("totalCount")
-        if isinstance(total, int) and nodes is not None and total > len(nodes):
+        if not isinstance(nodes, list) or not isinstance(total, int):
+            # Partial metadata (null nodes, missing totalCount) is not an
+            # empty complete page — it is evidence we cannot attest (#54).
+            raise ForemanError(
+                f"review threads: partial GraphQL response for PR #{number} "
+                "(nodes/totalCount unreadable) — failing closed"
+            )
+        if total > len(nodes):
             # The connection caps at 100; more threads than fetched means
             # unresolved threads we cannot see. Fail closed rather than
             # let disposition completeness pass on partial evidence (#54).
@@ -429,7 +436,7 @@ class GitHub:
                 f"review threads: PR #{number} has {total} threads but only "
                 f"{len(nodes)} were fetched — failing closed"
             )
-        return nodes or []
+        return nodes
 
     def branch_exists_remote(self, branch: str) -> bool:
         return self.gh.ok(["api", f"repos/{self.repo_slug()}/branches/{branch}"])

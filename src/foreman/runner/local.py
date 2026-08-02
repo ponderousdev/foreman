@@ -51,26 +51,35 @@ _POLL_S = 0.1
 EXEC_TIMEOUT_S = 300
 
 # $0 is a label for ps; $1 is the status-file path; the rest is the adapter
-# argv. See the module docstring for why the trap is a handler, not an ignore.
-# The ready marker closes a race spawn() waits out: a group-TERM delivered
-# before `trap` executes would kill the wrapper recordless, so "spawned" is
-# defined as trap-installed — after that, kill() always yields a recorded
-# 128+N, and dead-with-no-status keeps meaning something went genuinely
-# wrong, not that the caller was quick.
+# argv. "Spawned" is defined as COMMAND STARTED (#54): the command is
+# backgrounded, the TERM trap forwards to it, and only then does the ready
+# marker appear — so a kill() immediately after spawn() can never land in a
+# window where the wrapper absorbs the signal before the command exists
+# (the old ignore-trap design let the command start after the TERM had
+# already passed, run to the grace SIGKILL, and die recordless). The wait
+# loop distinguishes "wait interrupted by our trap" from "child died with
+# 128+N": if the child is still alive, wait again; if gone, that status is
+# real.
 _WRAPPER = """\
 sf="$1"; shift
-trap ':' TERM
+"$@" &
+child=$!
+trap 'kill -TERM "$child" 2>/dev/null' TERM
 : >"$sf.ready"
-"$@"
-ec=$?
+while :; do
+  wait "$child"
+  ec=$?
+  [ "$ec" -le 128 ] && break
+  kill -0 "$child" 2>/dev/null || break
+done
 printf '%s' "$ec" >"$sf.tmp" && mv -f "$sf.tmp" "$sf"
 exit "$ec"
 """
-# A live process that has not run `trap` yet is what we wait for; the marker
-# normally appears within milliseconds. The cap only guards against a wedged
-# interpreter, so it is generous — a shared-box scheduling stall must never
-# make spawn() return before the trap is installed (that would let a prompt
-# kill() misclassify a normal exit as abnormal).
+# A live wrapper that has not started its command yet is what we wait for;
+# the marker normally appears within milliseconds. The cap only guards
+# against a wedged interpreter, so it is generous — a shared-box scheduling
+# stall must never make spawn() return before the command exists (that
+# would let a prompt kill() misclassify a normal exit as abnormal).
 _READY_WAIT_S = 30
 
 

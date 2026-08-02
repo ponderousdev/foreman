@@ -92,23 +92,11 @@ class TimeoutAndKill(SpecCase):
         lr.kill(handle)
 
     def test_kill_terminates_the_group_and_records_signal_death(self):
+        # No readiness poll needed (#54): spawn() returns only after the
+        # wrapper has STARTED the command — an immediate kill() always
+        # finds a child to signal and always yields a recorded 128+N.
         lr = runner()
         handle = lr.spawn(self.spec("sleep", "30"))
-        # Readiness poll (#54): a kill landing before the wrapper installs
-        # its trap records no status and reads as abnormal — the flake this
-        # test used to have. The wrapper has started its command once it
-        # has a child.
-        deadline = time.monotonic() + 5.0
-        children = Path(
-            f"/proc/{handle.payload['pid']}/task/{handle.payload['pid']}/children"
-        )
-        while time.monotonic() < deadline:
-            try:
-                if children.read_text().strip():
-                    break
-            except OSError:
-                break  # wrapper already exited; proceed to assert
-            time.sleep(0.01)
         with self.assertRaises(WaitTimeout):
             lr.wait(handle, timeout_s=0)
         lr.kill(handle)

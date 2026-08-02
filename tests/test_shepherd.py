@@ -39,6 +39,13 @@ class ReviewThreadReads(unittest.TestCase):
         with self.assertRaises(ForemanError):
             gh.review_threads(9)
 
+    def test_partial_metadata_fails_closed(self):
+        # nodes: null / totalCount: null is not an empty complete page.
+        gh, runner = make_github()
+        runner.when(["api", "graphql"], self._resp(None, None))
+        with self.assertRaises(ForemanError):
+            gh.review_threads(9)
+
     def test_complete_page_is_returned(self):
         gh, runner = make_github()
         nodes = [{"id": "t1", "isResolved": True}]
