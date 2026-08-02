@@ -94,3 +94,13 @@ def tail(path: Path, lines: int = 40) -> str:
         return ""
     content = path.read_text(encoding="utf-8", errors="replace").splitlines()
     return "\n".join(content[-lines:])
+
+
+def sub_issue_refs(issue: dict) -> list[dict]:
+    """gh's `subIssues` JSON shape varies by version: a bare list of issue
+    refs, or a connection object {nodes: [...], totalCount: N}. Normalize
+    to the list — iterating the dict yields string keys and crashes."""
+    subs = issue.get("subIssues") or []
+    if isinstance(subs, dict):
+        subs = subs.get("nodes") or []
+    return [sub for sub in subs if isinstance(sub, dict)]

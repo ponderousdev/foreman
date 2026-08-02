@@ -20,7 +20,7 @@ from foreman import inputs as inputs_mod
 from foreman import trust as trust_mod
 from foreman.config import Config
 from foreman.github import GitHub
-from foreman.util import ForemanError
+from foreman.util import ForemanError, sub_issue_refs
 
 DEPENDS_ON_RE = re.compile(
     r"^depends-on:\s*(?P<refs>#\d+(?:\s*,\s*#\d+)*)\s*$", re.I | re.M
@@ -114,7 +114,7 @@ def load_target(
     if issue:
         root = gh.issue(issue)
         issues[root["number"]] = root
-        for sub in root.get("subIssues") or []:
+        for sub in sub_issue_refs(root):
             issues[sub["number"]] = gh.issue(sub["number"])
         label = f"issue #{issue}"
         ms_title = None
@@ -139,7 +139,7 @@ def load_target(
     for unit in units.values():
         data = issues[unit.number]
         subs = []
-        for ref in data.get("subIssues") or []:
+        for ref in sub_issue_refs(data):
             sub_number = ref["number"]
             subs.append(issues.get(sub_number) or gh.issue(sub_number))
         unit.sub_issues = sorted(subs, key=lambda entry: entry["number"])
