@@ -72,6 +72,7 @@ query($owner: String!, $name: String!, $number: Int!) {
           isOutdated
           path
           comments(first: 50) {
+            totalCount
             nodes { author { login } body url }
           }
         }

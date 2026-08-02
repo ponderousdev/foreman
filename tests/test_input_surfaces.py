@@ -83,6 +83,15 @@ class ThreadTrust(unittest.TestCase):
         empty = {"id": "t", "comments": {"nodes": []}}
         self.assertFalse(shepherd_mod._thread_trusted(gh, cfg, empty))
 
+    def test_unfetched_comments_fail_closed(self):
+        # comments(first: 50): a 51st commenter is invisible to the trust
+        # check, so a fuller-than-fetched thread cannot be attested — taint.
+        cfg = Config(trusted_actors=["reviewer"])
+        gh, _r = make_github(cfg)
+        big = thread("reviewer")
+        big["comments"]["totalCount"] = 51
+        self.assertFalse(shepherd_mod._thread_trusted(gh, cfg, big))
+
 
 class UntrustedThreadEscalates(unittest.TestCase):
     """A local runner (no untrusted-input) must never read a world-writable

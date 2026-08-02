@@ -217,10 +217,18 @@ def _disposition_reply_posted(thread: dict, thread_id: str, viewer: str) -> bool
 def _thread_trusted(gh: GitHub, cfg: Config, thread: dict) -> bool:
     """A review thread is trusted-authored only if EVERY commenter in it is
     a trusted actor (or foreman itself). One untrusted voice taints the
-    thread — the shepherd must not read any of it into a prompt (#46)."""
+    thread — the shepherd must not read any of it into a prompt (#46).
+
+    The query fetches the first 50 comments; if the thread holds more,
+    "every commenter" cannot be attested from one page — fail closed
+    (same rule as the ≥100-edit content-edit reader)."""
     me = gh.viewer()
-    comments = (thread.get("comments") or {}).get("nodes") or []
+    connection = thread.get("comments") or {}
+    comments = connection.get("nodes") or []
     if not comments:
+        return False
+    total = connection.get("totalCount")
+    if isinstance(total, int) and total > len(comments):
         return False
     for comment in comments:
         author = (comment.get("author") or {}).get("login") or ""
