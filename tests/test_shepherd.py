@@ -58,6 +58,19 @@ class SignatureCatalog(unittest.TestCase):
         )
         self.assertEqual(sig.action, "environment")
 
+    def test_docker_daemon_signature(self):
+        # The #29 pickup: a docker-keyed check that only Actions ran, dying
+        # on daemon absence, is classified environmental before any LLM
+        # sees it — never handed to an agent as a code bug.
+        sig = signatures_mod.match(
+            "docker: Cannot connect to the Docker daemon at "
+            "unix:///var/run/docker.sock. Is the docker daemon running?",
+            self.catalog,
+        )
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig.name, "docker-daemon-unavailable")
+        self.assertEqual(sig.action, "environment")
+
     def test_quota_wait_signature(self):
         sig = signatures_mod.match(
             "You have hit your usage limit. Limit will reset at 3pm", self.catalog
