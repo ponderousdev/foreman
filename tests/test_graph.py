@@ -94,3 +94,15 @@ class SubIssueShapes(unittest.TestCase):
         )
         self.assertEqual(sub_issue_refs({"subIssues": None}), [])
         self.assertEqual(sub_issue_refs({}), [])
+
+
+class RelationShapes(unittest.TestCase):
+    def test_relational_fields_normalize_both_shapes(self):
+        from foreman.util import relation_refs
+
+        ref = {"number": 9}
+        self.assertEqual(relation_refs({"blockedBy": [ref]}, "blockedBy"), [ref])
+        self.assertEqual(
+            relation_refs({"blockedBy": {"nodes": [ref]}}, "blockedBy"), [ref]
+        )
+        self.assertEqual(relation_refs({}, "closedByPullRequestsReferences"), [])
