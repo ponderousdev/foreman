@@ -23,7 +23,7 @@ import json
 from typing import Any, Callable
 
 from foreman.config import Config
-from foreman.util import ForemanError, run, warn
+from foreman.util import ForemanError, run
 
 Runner = Callable[[list[str], str | None], tuple[int, str, str]]
 
@@ -66,6 +66,7 @@ query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       reviewThreads(first: 100) {
+        totalCount
         nodes {
           id
           isResolved
@@ -410,10 +411,25 @@ class GitHub:
             ]
         )
         try:
-            return out["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
-        except (KeyError, TypeError):
-            warn(f"review threads: unexpected GraphQL shape for PR #{number}")
-            return []
+            connection = out["data"]["repository"]["pullRequest"]["reviewThreads"]
+            nodes = connection["nodes"]
+        except (KeyError, TypeError) as exc:
+            # Fail closed (#54): an unreadable response must never read as
+            # "no unresolved threads" — that path ends in ready-to-merge.
+            raise ForemanError(
+                f"review threads: unreadable GraphQL response for PR "
+                f"#{number} — failing closed"
+            ) from exc
+        total = connection.get("totalCount")
+        if isinstance(total, int) and nodes is not None and total > len(nodes):
+            # The connection caps at 100; more threads than fetched means
+            # unresolved threads we cannot see. Fail closed rather than
+            # let disposition completeness pass on partial evidence (#54).
+            raise ForemanError(
+                f"review threads: PR #{number} has {total} threads but only "
+                f"{len(nodes)} were fetched — failing closed"
+            )
+        return nodes or []
 
     def branch_exists_remote(self, branch: str) -> bool:
         return self.gh.ok(["api", f"repos/{self.repo_slug()}/branches/{branch}"])
@@ -505,7 +521,9 @@ class GitHub:
     ) -> None:
         self._assert_writable("label own PR")
         self._own_pr_guard(number, "label")
-        for name in add or []:
+        # Namespace guard covers REMOVALS too (#54): stripping a human's
+        # label from a PR is as much an out-of-contract write as adding one.
+        for name in [*(add or []), *(remove or [])]:
             if name not in FOREMAN_LABELS:
                 raise ForemanError(
                     f"write contract: label '{name}' outside the foreman namespace"

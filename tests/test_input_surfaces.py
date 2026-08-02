@@ -284,7 +284,7 @@ class AdjudicationWritePath(unittest.TestCase):
                 Path(tokens["ADJUDICATION_FILE"]).write_text(
                     json.dumps(sidecar), encoding="utf-8"
                 )
-            return backend_mod.BackendResult(returncode=0)
+            return backend_mod.BackendResult(returncode=0, cost_usd=1.25)
 
         original_resume = shepherd_mod._resume_agent
         original_worktree = shepherd_mod._ensure_worktree
@@ -344,6 +344,7 @@ class AdjudicationWritePath(unittest.TestCase):
             [(10, the_thread["id"], "covered by the typecheck\n\n" + marker)],
         )
         self.assertEqual(resolves, [the_thread["id"]])
+        self.assertEqual(work.cost_usd, 1.25)  # #54: shepherd spend recorded
 
     def test_applied_with_commit_on_branch_resolves(self):
         cfg = Config(trusted_actors=["reviewer"])

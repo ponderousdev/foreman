@@ -46,6 +46,7 @@ class PrWork:
     state: str = "healthy"  # healthy | fixed | rebased | adjudicated | waiting | escalated | settling | ready
     detail: str = ""
     actions: int = 0
+    cost_usd: float = 0.0
 
 
 @dataclass
@@ -315,6 +316,7 @@ def shepherd_pr(
         result = _resume_agent(
             gh, cfg, root, selection, work, "shepherd-ci-fix", tokens
         )
+        work.cost_usd += result.cost_usd or 0.0
         work_dir = _ensure_worktree(
             cfg, root, work.unit_number, work.branch, remote_name
         )
@@ -374,6 +376,7 @@ def shepherd_pr(
         result = _resume_agent(
             gh, cfg, root, selection, work, "shepherd-rebase", tokens
         )
+        work.cost_usd += result.cost_usd or 0.0
         if result.ok:
             ok, _tail, _failed = verify.run_gate(
                 gate.compose(cfg, selection.runner.capabilities()),
@@ -450,6 +453,7 @@ def shepherd_pr(
         result = _resume_agent(
             gh, cfg, root, selection, work, "shepherd-adjudicate", tokens
         )
+        work.cost_usd += result.cost_usd or 0.0
         wt_path = _ensure_worktree(
             cfg, root, work.unit_number, work.branch, remote_name
         )
@@ -581,6 +585,9 @@ def run_shepherd(
                 detail=str(exc),
             )
         out.worked.append(work)
+        # #54: shepherd spend was never accumulated — ShepherdReport.cost_usd
+        # stayed 0 and watch's --budget-usd systematically undercounted.
+        out.cost_usd += work.cost_usd
         if work.state == "escalated":
             out.environmental[work.unit_number] = work.detail
         if work.state == "waiting":
