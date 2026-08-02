@@ -197,6 +197,7 @@ def assemble_dispatch_prompt(
     handoffs: list[tuple[int, str]],
     verify_display: str,
     capabilities: set[str],
+    withheld_handoffs: list[int] | None = None,
 ) -> str:
     tokens = {
         "UNIT_NUMBER": str(unit.number),
@@ -247,6 +248,13 @@ def assemble_dispatch_prompt(
             "# Handoff contracts from merged dependencies (already on "
             f"{default_branch} — build on these, do not reinvent them)\n\n"
             + "\n\n".join(rendered)
+        )
+    if withheld_handoffs:
+        withheld_list = ", ".join(f"#{dep}" for dep in withheld_handoffs)
+        sections.append(
+            f"_Note: handoff(s) from {withheld_list} were withheld — their "
+            "origin issues carry untrusted contributions and this runner "
+            "lacks the untrusted-input boundary._"
         )
 
     return "\n\n---\n\n".join(sections) + "\n"

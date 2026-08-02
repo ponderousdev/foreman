@@ -223,6 +223,26 @@ class PromptAssembly(unittest.TestCase):
         # browsers would neuter a sprite agent for UI work.
         self.assertNotIn("no port binding", prompt)
 
+    def test_withheld_handoffs_are_disclosed(self):
+        cfg = Config()
+        gh, _runner = make_github(cfg)
+        prompt = spec.assemble_dispatch_prompt(
+            gh,
+            cfg,
+            unit_with(),
+            branch="foreman/feat/42-a-unit",
+            default_branch="main",
+            result_file="/tmp/result.json",
+            comments=[],
+            excluded_comments=0,
+            handoffs=[],
+            verify_display="task verify",
+            capabilities={"docker"},
+            withheld_handoffs=[41],
+        )
+        self.assertIn("handoff(s) from #41", prompt)
+        self.assertIn("withheld", prompt)
+
     def test_all_prompt_files_have_no_unknown_tokens(self):
         import re
 

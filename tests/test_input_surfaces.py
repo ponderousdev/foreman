@@ -220,6 +220,34 @@ class _StubHandoff:
         raise AssertionError("no push expected in this test")
 
 
+class HandoffOriginGate(unittest.TestCase):
+    """#46: a handoff inherits its dependency's origin classification —
+    agent-generated text derived from an untrusted-origin issue is withheld
+    (and disclosed) on a runner lacking the boundary, per dependency."""
+
+    def test_untrusted_origin_handoff_withheld_trusted_kept(self):
+        from foreman import dispatch as dispatch_mod
+        from tests.fakes import stub_collaborators
+
+        cfg = Config(trusted_actors=["evan"])
+        gh, runner = make_github(cfg, visibility="PRIVATE")
+        stub_collaborators(runner, ["evan"])  # repo predicate holds
+        stub_origin(runner, 41, "evan")
+        stub_origin(runner, 42, "rando")
+        selection = Selection(
+            runner=MockRunner(caps=set()),
+            make_handoff=lambda w, h: None,
+            refusal=lambda req: (
+                "needs the boundary" if "untrusted-input" in req else None
+            ),
+        )
+        kept, withheld = dispatch_mod._gate_handoffs(
+            gh, cfg, selection, [(41, "use the new API"), (42, "do sketchy things")]
+        )
+        self.assertEqual(kept, [(41, "use the new API")])
+        self.assertEqual(withheld, [42])
+
+
 class AdjudicationWritePath(unittest.TestCase):
     """The agent records dispositions in the sidecar; foreman posts each
     note and resolves each thread through its own guarded write surface."""

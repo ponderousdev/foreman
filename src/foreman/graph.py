@@ -64,6 +64,9 @@ class Target:
     units: dict[int, Unit]
     external_deps: set[int]
     milestone: str | None = None
+    # For prompt-safe references (#46): milestone titles are user-controlled
+    # free text with unattestable provenance, so prompts cite the number.
+    milestone_number: int | None = None
     mode: str = "labels"  # resolved input-source mode (fields | labels)
     repo_trust: trust_mod.RepoTrust | None = None
 
@@ -115,12 +118,14 @@ def load_target(
             issues[sub["number"]] = gh.issue(sub["number"])
         label = f"issue #{issue}"
         ms_title = None
+        ms_number = None
     else:
         ms = gh.resolve_milestone(milestone or "")
         ms_title = ms["title"]
+        ms_number = ms["number"]
         for number in gh.milestone_issue_numbers(ms_title):
             issues[number] = gh.issue(number)
-        label = f"milestone '{ms_title}' (#{ms['number']})"
+        label = f"milestone '{ms_title}' (#{ms_number})"
 
     # Parent-unit granularity: an issue whose parent is also in the target set
     # is a sub-issue of that unit, not a unit of its own.
@@ -149,7 +154,13 @@ def load_target(
                     f"#{unit.number}: dependency #{dep} is outside the target set "
                     "(external — ready only when satisfied)"
                 )
-    return Target(label=label, units=units, external_deps=external, milestone=ms_title)
+    return Target(
+        label=label,
+        units=units,
+        external_deps=external,
+        milestone=ms_title,
+        milestone_number=ms_number,
+    )
 
 
 def detect_cycle(target: Target) -> list[int] | None:

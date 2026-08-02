@@ -201,14 +201,22 @@ def _print_plan(
     return 1 if fail_loud else 0
 
 
-def _concurrent_activity(gh: GitHub, target: Target) -> list[str]:
+def _concurrent_activity(
+    gh: GitHub, target: Target, *, redact_titles: bool = False
+) -> list[str]:
+    """`redact_titles` is for prompt consumers (#46): milestone titles are
+    user-controlled free text whose provenance cannot be attested (the
+    creator may have lost access; renames have no event history), so
+    prompts cite milestone numbers only. Human terminal output keeps the
+    titles."""
     notices = []
     for ms in gh.milestones(state="open"):
         if target.milestone and ms["title"] == target.milestone:
             continue
         if ms.get("open_issues"):
+            name = f"#{ms['number']}" if redact_titles else f"'{ms['title']}'"
             notices.append(
-                f"open milestone '{ms['title']}' with {ms['open_issues']} open issue(s)"
+                f"open milestone {name} with {ms['open_issues']} open issue(s)"
             )
     others = [
         p
@@ -587,9 +595,18 @@ def cmd_vet(args: argparse.Namespace) -> int:
             else "vet: nothing to analyze — no units in the target"
         )
         return 1
+    # Prompt-safe target reference (#46): milestone titles are free text
+    # with unattestable provenance — the prompt cites the number; the units
+    # themselves carry the real, classified content.
+    prompt_target = (
+        f"milestone #{target.milestone_number}"
+        if target.milestone_number is not None
+        else target.label
+    )
     tokens = {
-        "TARGET": target.label,
-        "CONCURRENT": "\n".join(_concurrent_activity(gh, target)) or "(none detected)",
+        "TARGET": prompt_target,
+        "CONCURRENT": "\n".join(_concurrent_activity(gh, target, redact_titles=True))
+        or "(none detected)",
         "UNITS": "\n\n---\n\n".join(bodies),
     }
     prompt = spec.load_prompt("vet", tokens)
