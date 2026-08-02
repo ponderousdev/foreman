@@ -23,6 +23,11 @@ class ConfigLoading(unittest.TestCase):
             cfg = config_mod.load(Path(tmp))
         self.assertEqual(cfg.verify, {"default": ["task", "verify"]})
         self.assertEqual(cfg.required_capabilities, [])
+        self.assertEqual(cfg.trusted_actors, [])
+        self.assertEqual(cfg.runner, "local")
+        self.assertTrue(cfg.require_approval)
+        self.assertEqual(cfg.billing, "subscription")
+        self.assertEqual(cfg.max_parallel, 3)
 
     def test_dogfood_config_loads(self):
         # The repo's own .foreman.toml must always parse: in TOML, top-level
