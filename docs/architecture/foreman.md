@@ -138,8 +138,8 @@ task foreman:cleanup   # prune worktrees/branches for closed units
    the full log path and is classified by `signatures.toml` before any
    resume, so an environmental failure is never handed back as a code bug.
 7. **Freshness gate** — immediately before pushing: the issue is still open,
-   still armed, dependencies still satisfied, the spec hash (bodies +
-   trusted comments) unchanged since dispatch, and no PR appeared meanwhile.
+   still armed, dependencies still satisfied, the spec hash (titles, bodies
+   - trusted comments) unchanged since dispatch, and no PR appeared meanwhile.
    Drift means no push and a flagged unit.
 8. **PR** — non-draft (review bots skip drafts), machine-readable marker,
    `Closes #N` (or `Refs` when human tasks remain), test evidence, Handoff,
@@ -232,11 +232,11 @@ free text.
 
 | Role | Enters the prompt | Excluded in code | Enforced at |
 | --- | --- | --- | --- |
-| **Implementer** (dispatch) | Issue body + sub-issue bodies; **trusted-authored comments only**, with the number of withheld untrusted comments disclosed to the agent; `## Handoff` sections from merged dependency PRs; the capability preamble | Untrusted-authored comments never render; untrusted authorship/edits anywhere in the surface classify the unit `untrusted-input` (D13) and refuse where the boundary is absent; an untrusted post-arming edit breaks the arming attestation (fail closed) | `spec.trusted_comments`, `trust.classify_unit`, eligibility |
+| **Implementer** (dispatch) | Issue + sub-issue **titles and bodies**; **trusted-authored comments only** (foreman's own display-only status comment is marker-filtered out), with the number of withheld untrusted comments disclosed to the agent; `## Handoff` sections from merged dependency PRs; the capability preamble | Untrusted-authored comments never render; untrusted authorship/edits anywhere in the surface classify the unit `untrusted-input` (D13) and refuse where the boundary is absent. Under explicit arming, an untrusted post-arming edit additionally breaks the arming attestation (fail closed until a trusted actor re-arms); under `require_approval = false` the committed config is itself the standing attestation, so untrusted edits classify rather than break an arming event | `spec.trusted_comments`, `trust.classify_unit`, eligibility |
 | **Shepherd — CI fix** | The failing check's Actions log excerpt (`%%FAILURE_EXCERPT%%`) — framed as claims to adjudicate, not instructions | Log text of an untrusted-origin branch never reaches a prompt on a runner lacking `untrusted-input`: **a fix unit inherits its branch's classification** (origin unit author/edits/sub-issues, re-derived per tick) | `shepherd._origin_refusal` → `trust.classify_branch_origin` |
 | **Shepherd — rebase** | The deterministic conflict path list (`%%CONFLICTS%%`) from a `merge-tree` dry run | Same origin-inheritance guard — the agent works on the branch's tree | same |
-| **Shepherd — adjudicate** | Review-thread bodies (`%%THREADS%%`), only when **every commenter** in a thread is trusted or foreman itself — one untrusted voice taints the thread; at most the first 20 threads, which is also the disposition allowlist | An untrusted-authored thread on a runner lacking `untrusted-input` escalates to a human **before** any body renders — the decision input is the trusted *signal* (thread exists, unresolved), never the text; plus the origin-inheritance guard | `shepherd._thread_trusted`, the pre-render escalation, `_origin_refusal` |
-| **Vet** | Issue + sub-issue bodies and trusted-authored comments (same exclusion path as the implementer, withheld count disclosed) | Read-only run; its drafted corrections post **only** with explicit human approval | `cli.cmd_vet` → `spec.trusted_comments`, `github.post_vet_correction` |
+| **Shepherd — adjudicate** | The **first comment's body** of each of the first 20 unresolved threads (`%%THREADS%%` — the same 20 form the disposition allowlist). Where the runner lacks `untrusted-input`, only threads whose **every commenter** is trusted or foreman itself may render — one untrusted voice taints the thread. Where the runner advertises the boundary, untrusted threads render too — that is what the capability grants (D13) | On a runner lacking `untrusted-input`, any untrusted-authored thread escalates to a human **before** any body renders — the decision input is the trusted *signal* (thread exists, unresolved), never the text; plus the origin-inheritance guard | `shepherd._thread_trusted`, the pre-render escalation, `_origin_refusal` |
+| **Vet** | Issue + sub-issue **titles and bodies** and trusted-authored comments (same exclusion path as the implementer, withheld count disclosed) | Unit bodies are gated like dispatch: an `untrusted-input`-classified unit is refused on a runner lacking the boundary (D13) and never analyzed there. Read-only run; its drafted corrections post **only** with explicit human approval | `cli.cmd_vet` (per-unit `selection.refusal`) → `spec.trusted_comments`, `github.post_vet_correction` |
 
 Shepherd *decisions* (which branch of the runbook fires, when to escalate)
 key exclusively on deterministic signals: check-rollup conclusions,
@@ -247,6 +247,16 @@ validated sidecar (its token is read-only, #13); foreman performs every
 reply and resolution through the write contract, refusing thread ids it
 never rendered and `applied` claims whose named commit is not on the
 branch.
+
+Two ambient inputs ride along with every shepherd resume and are part of
+the surface: a fresh (non-resumable) invocation prefixes the prompt with
+the deterministic **resume-state** — worktree `git status`, the last five
+commit subjects, the session record, and the prior agent-log tail
+(branch-derived content covered by the same origin-inheritance guard, plus
+the previous agent's own output); a resumable invocation instead restores
+the backend session's prior conversation. And issue **titles** are
+user-controlled free text like bodies — they render into prompts and join
+the spec hash, so title drift is spec drift.
 
 ## Configuration (.foreman.toml)
 

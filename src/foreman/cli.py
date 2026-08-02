@@ -543,14 +543,24 @@ def cmd_vet(args: argparse.Namespace) -> int:
 
     backend_mod.assert_backend_version(cfg)
     target = prepare_target(gh, cfg, milestone=args.milestone, issue=args.issue)
-    # vet's input surface (#46): issue + sub-issue bodies and only
+    selection = runner_mod.select(cfg)
+    # vet's input surface (#46): issue + sub-issue titles/bodies and only
     # trusted-authored comments — untrusted comments are excluded in code,
     # exactly as the implementer's surface excludes them (#14). vet is
     # read-only and drafts comments for HUMAN approval, but the same rule
-    # holds: world-writable text never enters an agent prompt un-fenced.
+    # holds: world-writable text never enters an agent prompt un-fenced —
+    # including the bodies themselves: a unit classified untrusted-input
+    # (D13) is refused here via the same capability machinery as dispatch,
+    # never fed to a vet agent on a runner lacking the boundary.
     bodies = []
+    refused = 0
     for number in sorted(target.units):
         unit = target.units[number]
+        refusal = selection.refusal(unit.required_capabilities)
+        if refusal:
+            refused += 1
+            warn(f"vet: skipping #{number} — {refusal}")
+            continue
         comments, excluded = spec.trusted_comments(gh, cfg, number)
         bodies.append(f"# Unit #{number}: {unit.title}\n\n{unit.body}")
         for sub in unit.sub_issues:
@@ -567,6 +577,14 @@ def cmd_vet(args: argparse.Namespace) -> int:
                 f"_Note: {excluded} comment(s) from untrusted authors were "
                 f"withheld from this analysis of #{number}._"
             )
+    if not bodies:
+        warn(
+            f"vet: nothing to analyze — {refused} unit(s) refused "
+            "(untrusted-classified without the untrusted-input boundary)"
+            if refused
+            else "vet: nothing to analyze — no units in the target"
+        )
+        return 1
     tokens = {
         "TARGET": target.label,
         "CONCURRENT": "\n".join(_concurrent_activity(gh, target)) or "(none detected)",
@@ -578,7 +596,6 @@ def cmd_vet(args: argparse.Namespace) -> int:
     prompt_file = run_dir / "prompt.md"
     write_text(prompt_file, prompt)
     adapter = backend_mod.adapter_path(cfg.backend)
-    selection = runner_mod.select(cfg)
     os.environ["FOREMAN_READONLY"] = "1"
     try:
         result = backend_mod.run_backend(

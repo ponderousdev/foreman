@@ -112,6 +112,36 @@ class TrustedComments(unittest.TestCase):
         self.assertEqual([c["id"] for c in kept], [1, 3])  # viewer "bot" is trusted
         self.assertEqual(excluded, 1)
 
+    def test_status_comment_never_reenters_prompts(self):
+        # Foreman's own status comment is viewer-authored, so without the
+        # marker filter it would qualify as a trusted "correction" — feeding
+        # prior agent-generated text back as specification input.
+        from foreman.github import STATUS_MARKER
+
+        cfg = Config(trusted_actors=["owner"])
+        gh, runner = make_github(cfg)
+        comments = [
+            {
+                "id": 1,
+                "body": STATUS_MARKER + "\nstate: dispatched",
+                "user": {"login": "bot"},
+            },
+            {"id": 2, "body": "a real correction", "user": {"login": "owner"}},
+        ]
+        runner.when(
+            ["api", "repos/owner/repo/issues/42/comments", "--paginate", "--slurp"],
+            [comments],
+        )
+        kept, excluded = spec.trusted_comments(gh, cfg, 42)
+        self.assertEqual([c["id"] for c in kept], [2])
+        self.assertEqual(excluded, 0)  # display-only, not "untrusted"
+
+    def test_title_drift_changes_spec_hash(self):
+        unit = unit_with()
+        before = spec.spec_hash(unit, [])
+        unit.title = "renamed while in flight"
+        self.assertNotEqual(before, spec.spec_hash(unit, []))
+
 
 class PromptAssembly(unittest.TestCase):
     def test_tokens_fully_substituted_and_content_embedded(self):

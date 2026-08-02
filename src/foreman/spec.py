@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from foreman.config import Config
-from foreman.github import GitHub
+from foreman.github import STATUS_MARKER, GitHub
 from foreman.graph import Unit, foreman_prs_for_issue
 from foreman.util import sha256_hex
 
@@ -122,6 +122,12 @@ def trusted_comments(gh: GitHub, cfg: Config, number: int) -> tuple[list[dict], 
     me = gh.viewer()
     for comment in gh.issue_comments(number):
         author = (comment.get("user") or {}).get("login", "")
+        if STATUS_MARKER in (comment.get("body") or ""):
+            # Foreman's own unit-status comment is display-only and never
+            # read back (ADR 0002) — without this filter it would qualify
+            # as viewer-authored and re-enter prompts as a "correction",
+            # feeding prior agent-generated text back as specification.
+            continue
         if author == me or author in cfg.trusted_actors:
             kept.append(comment)
         else:
@@ -130,9 +136,14 @@ def trusted_comments(gh: GitHub, cfg: Config, number: int) -> tuple[list[dict], 
 
 
 def spec_hash(unit: Unit, comments: list[dict]) -> str:
-    """Stable hash of everything the prompt embeds from the spec."""
-    parts = [unit.body]
-    parts += [sub.get("body") or "" for sub in unit.sub_issues]
+    """Stable hash of everything the prompt embeds from the spec — titles
+    included: they render into prompts and are user-controlled free text,
+    so title drift is spec drift."""
+    parts = [unit.title, unit.body]
+    parts += [
+        f"{sub.get('title') or ''}\n\x00\n{sub.get('body') or ''}"
+        for sub in unit.sub_issues
+    ]
     parts += [
         comment.get("body") or ""
         for comment in sorted(comments, key=lambda c: c.get("id", 0))
