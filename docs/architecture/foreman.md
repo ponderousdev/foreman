@@ -165,9 +165,12 @@ Deterministic triggers → bounded agent actions on open foreman PRs:
   the agent (rebase additively, regenerate generated artifacts via tooling,
   re-verify) — always rebase, never merge-main.
 - **Unresolved review threads** → the agent adjudicates each finding: apply
-  (commit + reply + resolve) or decline with technical reasoning (bots are
-  sometimes wrong; deterministic facts beat speculation). Blanket-accepting
-  is prohibited. Foreman re-checks disposition completeness afterwards.
+  (commit the fix and record `applied` naming the commit) or decline with
+  technical reasoning (bots are sometimes wrong; deterministic facts beat
+  speculation). Blanket-accepting is prohibited. The agent only **records**
+  dispositions — its token is read-only — and foreman posts each reply and
+  resolves each thread through the write contract, then re-checks
+  disposition completeness deterministically.
 - **Green + adjudicated + mergeable** → `ready-to-merge` label plus a
   dependency-aware suggested merge order. Foreman performs no merge action
   of any kind.
@@ -218,7 +221,32 @@ USD budgets bind. Switching is a config flip plus one secret.
   review-bot findings and CI logs are framed as claims to adjudicate, not
   instructions; agents run with conservative permission modes outside the
   sandboxed bot devcontainer (`FOREMAN_SANDBOXED=1`
-  relaxes inside it).
+  relaxes inside it). The full per-role surface is the table below.
+
+### Input surfaces, per agent role (#46)
+
+Every LLM-consuming role has a defined input surface, enforced in code —
+what may enter a prompt, what decisions may consume, and what is excluded.
+Dispatch/continue decisions consume **deterministic signals only**, never
+free text.
+
+| Role | Enters the prompt | Excluded in code | Enforced at |
+| --- | --- | --- | --- |
+| **Implementer** (dispatch) | Issue body + sub-issue bodies; **trusted-authored comments only**, with the number of withheld untrusted comments disclosed to the agent; `## Handoff` sections from merged dependency PRs; the capability preamble | Untrusted-authored comments never render; untrusted authorship/edits anywhere in the surface classify the unit `untrusted-input` (D13) and refuse where the boundary is absent; an untrusted post-arming edit breaks the arming attestation (fail closed) | `spec.trusted_comments`, `trust.classify_unit`, eligibility |
+| **Shepherd — CI fix** | The failing check's Actions log excerpt (`%%FAILURE_EXCERPT%%`) — framed as claims to adjudicate, not instructions | Log text of an untrusted-origin branch never reaches a prompt on a runner lacking `untrusted-input`: **a fix unit inherits its branch's classification** (origin unit author/edits/sub-issues, re-derived per tick) | `shepherd._origin_refusal` → `trust.classify_branch_origin` |
+| **Shepherd — rebase** | The deterministic conflict path list (`%%CONFLICTS%%`) from a `merge-tree` dry run | Same origin-inheritance guard — the agent works on the branch's tree | same |
+| **Shepherd — adjudicate** | Review-thread bodies (`%%THREADS%%`), only when **every commenter** in a thread is trusted or foreman itself — one untrusted voice taints the thread; at most the first 20 threads, which is also the disposition allowlist | An untrusted-authored thread on a runner lacking `untrusted-input` escalates to a human **before** any body renders — the decision input is the trusted *signal* (thread exists, unresolved), never the text; plus the origin-inheritance guard | `shepherd._thread_trusted`, the pre-render escalation, `_origin_refusal` |
+| **Vet** | Issue + sub-issue bodies and trusted-authored comments (same exclusion path as the implementer, withheld count disclosed) | Read-only run; its drafted corrections post **only** with explicit human approval | `cli.cmd_vet` → `spec.trusted_comments`, `github.post_vet_correction` |
+
+Shepherd *decisions* (which branch of the runbook fires, when to escalate)
+key exclusively on deterministic signals: check-rollup conclusions,
+`signatures.toml` regex classification, `mergeStateStatus`, merge-tree
+conflict paths, thread `isResolved`, and mergeability — never on free text.
+On the write side the adjudication agent only **records** dispositions in a
+validated sidecar (its token is read-only, #13); foreman performs every
+reply and resolution through the write contract, refusing thread ids it
+never rendered and `applied` claims whose named commit is not on the
+branch.
 
 ## Configuration (.foreman.toml)
 
