@@ -47,3 +47,18 @@ jobs:
         id: release
         with:
           token: ${{ steps.app-token.outputs.token }}
+      # release-please bumps pyproject.toml but not uv.lock, which fails every
+      # `uv run --locked` gate on the release PR. Refresh the lock in the same
+      # run that (re)generated the branch — it is force-updated on every push
+      # to main, so the refresh must follow every update, not happen once.
+      # Checkout uses the App token so the push re-triggers the PR's checks.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        if: ${{ steps.release.outputs.pr }}
+        with:
+          ref: release-please--branches--main
+          token: ${{ steps.app-token.outputs.token }}
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        if: ${{ steps.release.outputs.pr }}
+      - name: Refresh uv.lock on the release PR
+        if: ${{ steps.release.outputs.pr }}
+        run: bash scripts/release-lock-refresh.sh
