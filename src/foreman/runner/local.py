@@ -11,10 +11,12 @@ that records the shell wait status (128+N for signal deaths) to
 process-group leader, so v1's kill-the-group semantics are unchanged, and it
 exits only after the rename — a dead unit with NO recorded status therefore
 means the wrapper itself was killed: abnormal termination, reported as such,
-never guessed. The wrapper installs a no-op TERM *handler* (`trap ':'`), not
-an ignore: handlers reset to default across exec, so the adapter child still
-dies on group-TERM while the wrapper survives long enough to record 143.
-(An ignored signal would be inherited by the child and break kill().)
+never guessed. The wrapper BACKGROUNDS the adapter, installs a TERM handler
+that forwards to that child's PID, and only then writes the ready marker —
+so "spawned" means the command exists, and a kill() immediately after
+spawn() always has a child to signal (#54; group-TERM also reaches the
+child directly). The reap loop distinguishes "wait interrupted by our
+trap" from a real 128+N death by probing whether the child still lives.
 
 Liveness is PID + process start-time (/proc/<pid>/stat field 22) — a bare
 PID is not a handle, because PIDs are reused. For processes this Foreman
