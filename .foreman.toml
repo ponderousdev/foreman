@@ -18,7 +18,7 @@ expected_login = "evanharmon1-bot"
 # this tight — it is the trust boundary for local dispatch. Renovate and
 # CodeRabbit author issues/PRs here; list the bots you actually trust to
 # arm and to author dispatchable content.
-trusted_actors = ["evanharmon1", "evanharmon1-bot", "AdmiralFraggle", "admiralfraggle-bot"]
+trusted_actors = ["evanharmon1", "evanharmon1-bot", "AdmiralFraggle", "admiralfraggle-bot", "Jessedroptable"]
 
 # Hard requirements: none. The baseline gate runs without special
 # capabilities, so a capability-poor runner is never refused for this repo.

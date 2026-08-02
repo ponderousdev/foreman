@@ -43,7 +43,13 @@ class ConfigLoading(unittest.TestCase):
         self.assertIn("docker", cfg.verify)
         self.assertEqual(
             cfg.trusted_actors,
-            ["evanharmon1", "evanharmon1-bot", "AdmiralFraggle", "admiralfraggle-bot"],
+            [
+                "evanharmon1",
+                "evanharmon1-bot",
+                "AdmiralFraggle",
+                "admiralfraggle-bot",
+                "Jessedroptable",
+            ],
         )
         self.assertEqual(cfg.runner, "local")
         self.assertTrue(cfg.require_approval)
