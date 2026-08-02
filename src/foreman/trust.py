@@ -129,6 +129,7 @@ def classify_unit(gh: GitHub, cfg: Config, unit: "Unit", mode: str) -> UnitTrust
 
     classify(unit.author, f"author of #{unit.number}")
     _classify_edits(gh, cfg, unit.number, out)
+    _classify_renames(gh, cfg, unit.number, out)
     for sub in unit.sub_issues:
         sub_number = sub.get("number")
         classify(
@@ -137,6 +138,7 @@ def classify_unit(gh: GitHub, cfg: Config, unit: "Unit", mode: str) -> UnitTrust
         )
         if isinstance(sub_number, int):
             _classify_edits(gh, cfg, sub_number, out)
+            _classify_renames(gh, cfg, sub_number, out)
     return out
 
 
@@ -191,12 +193,38 @@ def _classify_edits(gh: GitHub, cfg: Config, number: int, out: UnitTrust) -> Non
             continue  # a trusted edit refreshes the pin (new attestation)
         out.untrusted_input = True
         out.contributors.append(f"editor of #{number} @{editor or 'unknown'}")
-        if out.arming_at and edited_at > out.arming_at:
+        # >= not >: timeline/edit timestamps have second granularity, so an
+        # untrusted change in the SAME second as arming is order-unknowable —
+        # fail closed and treat it as post-arming.
+        if out.arming_at and edited_at >= out.arming_at:
             out.refusals.append(
                 f"#{number}: body edited by untrusted actor "
                 f"@{editor or 'unknown'} after arming — the attestation is "
                 "broken; fail closed until a trusted actor re-arms the "
                 "edited content (D13)"
+            )
+
+
+def _classify_renames(gh: GitHub, cfg: Config, number: int, out: UnitTrust) -> None:
+    """Title renames classify exactly like body edits: titles render into
+    prompts and join the spec hash, and GitHub's userContentEdits stream
+    covers bodies only — rename attribution comes from the issue timeline.
+    An untrusted rename after arming breaks the attestation, same as an
+    untrusted post-arming body edit."""
+    for rename in gh.issue_rename_events(number):
+        actor = rename.get("actor") or ""
+        renamed_at = rename.get("created_at") or ""
+        if _is_trusted(gh, cfg, actor):
+            continue  # a trusted rename refreshes the pin (new attestation)
+        out.untrusted_input = True
+        out.contributors.append(f"renamer of #{number} @{actor or 'unknown'}")
+        # >= not >: same-second rename is order-unknowable — fail closed.
+        if out.arming_at and renamed_at >= out.arming_at:
+            out.refusals.append(
+                f"#{number}: renamed by untrusted actor "
+                f"@{actor or 'unknown'} after arming — the attestation is "
+                "broken; fail closed until a trusted actor re-arms the "
+                "renamed content (D13)"
             )
 
 
@@ -219,6 +247,7 @@ def classify_branch_origin(gh: GitHub, cfg: Config, unit_number: int) -> UnitTru
     issue = gh.issue(unit_number)
     classify((issue.get("author") or {}).get("login"), f"author of #{unit_number}")
     _classify_edits(gh, cfg, unit_number, out)
+    _classify_renames(gh, cfg, unit_number, out)
     for ref in issue.get("subIssues") or []:
         sub_number = ref.get("number")
         if not isinstance(sub_number, int):
@@ -229,4 +258,5 @@ def classify_branch_origin(gh: GitHub, cfg: Config, unit_number: int) -> UnitTru
             f"author of sub-issue #{sub_number}",
         )
         _classify_edits(gh, cfg, sub_number, out)
+        _classify_renames(gh, cfg, sub_number, out)
     return out

@@ -58,7 +58,10 @@ AGENT_TOKEN_VAR = "FOREMAN_AGENT_GH_TOKEN"
 # session/log paths, timeout, billing, …) are layered on by run_backend and
 # are not host-inherited. FOREMAN_ANTHROPIC_API_KEY is included so `billing =
 # "api"` reaches the adapter; under subscription billing it is simply absent.
-AGENT_FOREMAN_ENV = ("FOREMAN_ANTHROPIC_API_KEY",)
+# FOREMAN_READONLY is included so vet's read-only mode actually reaches the
+# adapter (claude.sh branches on it) — the total-allowlist env otherwise
+# silently dropped it, and vet ran with normal write permissions.
+AGENT_FOREMAN_ENV = ("FOREMAN_ANTHROPIC_API_KEY", "FOREMAN_READONLY")
 # Reaping window after kill(): the group is already dead or dying; this only
 # bounds how long we wait for the recorded status to become readable.
 KILL_REAP_S = 30

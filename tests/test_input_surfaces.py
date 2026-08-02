@@ -20,8 +20,8 @@ from tests.mock_runner import MockRunner
 
 
 def stub_origin(runner: FakeRunner, number: int, author: str) -> None:
-    """The origin-unit reads classify_branch_origin performs: the issue and
-    its (empty) content-edit history."""
+    """The origin-unit reads classify_branch_origin performs: the issue,
+    its (empty) content-edit history, and its (empty) rename timeline."""
     runner.when(
         ["issue", "view", str(number)],
         {"number": number, "author": {"login": author}, "subIssues": []},
@@ -29,6 +29,15 @@ def stub_origin(runner: FakeRunner, number: int, author: str) -> None:
     runner.when(
         ["api", "graphql"],
         {"data": {"repository": {"issue": {"userContentEdits": {"nodes": []}}}}},
+    )
+    runner.when(
+        [
+            "api",
+            f"repos/owner/repo/issues/{number}/timeline?per_page=100",
+            "--paginate",
+            "--slurp",
+        ],
+        [[]],
     )
 
 
@@ -73,6 +82,15 @@ class ThreadTrust(unittest.TestCase):
         gh, _r = make_github(cfg)
         empty = {"id": "t", "comments": {"nodes": []}}
         self.assertFalse(shepherd_mod._thread_trusted(gh, cfg, empty))
+
+    def test_unfetched_comments_fail_closed(self):
+        # comments(first: 50): a 51st commenter is invisible to the trust
+        # check, so a fuller-than-fetched thread cannot be attested — taint.
+        cfg = Config(trusted_actors=["reviewer"])
+        gh, _r = make_github(cfg)
+        big = thread("reviewer")
+        big["comments"]["totalCount"] = 51
+        self.assertFalse(shepherd_mod._thread_trusted(gh, cfg, big))
 
 
 class UntrustedThreadEscalates(unittest.TestCase):
@@ -200,6 +218,34 @@ class _StubHandoff:
 
     def push(self, remote, branch, first=False):
         raise AssertionError("no push expected in this test")
+
+
+class HandoffOriginGate(unittest.TestCase):
+    """#46: a handoff inherits its dependency's origin classification —
+    agent-generated text derived from an untrusted-origin issue is withheld
+    (and disclosed) on a runner lacking the boundary, per dependency."""
+
+    def test_untrusted_origin_handoff_withheld_trusted_kept(self):
+        from foreman import dispatch as dispatch_mod
+        from tests.fakes import stub_collaborators
+
+        cfg = Config(trusted_actors=["evan"])
+        gh, runner = make_github(cfg, visibility="PRIVATE")
+        stub_collaborators(runner, ["evan"])  # repo predicate holds
+        stub_origin(runner, 41, "evan")
+        stub_origin(runner, 42, "rando")
+        selection = Selection(
+            runner=MockRunner(caps=set()),
+            make_handoff=lambda w, h: None,
+            refusal=lambda req: (
+                "needs the boundary" if "untrusted-input" in req else None
+            ),
+        )
+        kept, withheld = dispatch_mod._gate_handoffs(
+            gh, cfg, selection, [(41, "use the new API"), (42, "do sketchy things")]
+        )
+        self.assertEqual(kept, [(41, "use the new API")])
+        self.assertEqual(withheld, [42])
 
 
 class AdjudicationWritePath(unittest.TestCase):

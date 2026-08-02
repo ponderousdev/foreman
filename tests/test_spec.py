@@ -112,6 +112,61 @@ class TrustedComments(unittest.TestCase):
         self.assertEqual([c["id"] for c in kept], [1, 3])  # viewer "bot" is trusted
         self.assertEqual(excluded, 1)
 
+    def test_status_comment_never_reenters_prompts(self):
+        # Foreman's own status comment is viewer-authored, so without the
+        # marker filter it would qualify as a trusted "correction" — feeding
+        # prior agent-generated text back as specification input.
+        from foreman.github import STATUS_MARKER
+
+        cfg = Config(trusted_actors=["owner"])
+        gh, runner = make_github(cfg)
+        comments = [
+            {
+                "id": 1,
+                "body": STATUS_MARKER + "\nstate: dispatched",
+                "user": {"login": "bot"},
+            },
+            {"id": 2, "body": "a real correction", "user": {"login": "owner"}},
+        ]
+        runner.when(
+            ["api", "repos/owner/repo/issues/42/comments", "--paginate", "--slurp"],
+            [comments],
+        )
+        kept, excluded = spec.trusted_comments(gh, cfg, 42)
+        self.assertEqual([c["id"] for c in kept], [2])
+        self.assertEqual(excluded, 0)  # display-only, not "untrusted"
+
+    def test_forged_or_quoted_marker_is_not_a_status_comment(self):
+        # The filter is author-scoped (same rule as upsert_status_comment):
+        # an untrusted comment carrying a forged marker is still counted and
+        # excluded as untrusted; a trusted correction QUOTING the marker is
+        # still a correction and stays in the surface.
+        from foreman.github import STATUS_MARKER
+
+        cfg = Config(trusted_actors=["owner"])
+        gh, runner = make_github(cfg)
+        comments = [
+            {"id": 1, "body": STATUS_MARKER + " forged", "user": {"login": "attacker"}},
+            {
+                "id": 2,
+                "body": "see the status block: " + STATUS_MARKER,
+                "user": {"login": "owner"},
+            },
+        ]
+        runner.when(
+            ["api", "repos/owner/repo/issues/42/comments", "--paginate", "--slurp"],
+            [comments],
+        )
+        kept, excluded = spec.trusted_comments(gh, cfg, 42)
+        self.assertEqual([c["id"] for c in kept], [2])
+        self.assertEqual(excluded, 1)
+
+    def test_title_drift_changes_spec_hash(self):
+        unit = unit_with()
+        before = spec.spec_hash(unit, [])
+        unit.title = "renamed while in flight"
+        self.assertNotEqual(before, spec.spec_hash(unit, []))
+
 
 class PromptAssembly(unittest.TestCase):
     def test_tokens_fully_substituted_and_content_embedded(self):
@@ -167,6 +222,26 @@ class PromptAssembly(unittest.TestCase):
         # ...and NOT injected where ports exists — stripping servers and
         # browsers would neuter a sprite agent for UI work.
         self.assertNotIn("no port binding", prompt)
+
+    def test_withheld_handoffs_are_disclosed(self):
+        cfg = Config()
+        gh, _runner = make_github(cfg)
+        prompt = spec.assemble_dispatch_prompt(
+            gh,
+            cfg,
+            unit_with(),
+            branch="foreman/feat/42-a-unit",
+            default_branch="main",
+            result_file="/tmp/result.json",
+            comments=[],
+            excluded_comments=0,
+            handoffs=[],
+            verify_display="task verify",
+            capabilities={"docker"},
+            withheld_handoffs=[41],
+        )
+        self.assertIn("handoff(s) from #41", prompt)
+        self.assertIn("withheld", prompt)
 
     def test_all_prompt_files_have_no_unknown_tokens(self):
         import re

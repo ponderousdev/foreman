@@ -72,6 +72,7 @@ query($owner: String!, $name: String!, $number: Int!) {
           isOutdated
           path
           comments(first: 50) {
+            totalCount
             nodes { author { login } body url }
           }
         }
@@ -230,9 +231,12 @@ class GitHub:
                     logins.append(login)
         return logins
 
-    def issue_label_events(self, number: int) -> list[dict]:
-        """Chronological `labeled` events: {label, actor, created_at} — the
-        D13 arming-actor attribution source."""
+    def _issue_timeline(self, number: int) -> list[dict]:
+        """Raw timeline events — deliberately UNCACHED: arming and rename
+        attribution are TOCTOU re-checked pre-spawn and pre-push, and watch
+        ticks re-derive; a cached timeline would let an event landing after
+        planning slip past those gates. Fresh every call, like every other
+        trust input."""
         out = self.gh.json(
             [
                 "api",
@@ -243,16 +247,38 @@ class GitHub:
         )
         events: list[dict] = []
         for page in out or []:
-            for event in page or []:
-                if (event or {}).get("event") != "labeled":
-                    continue
-                events.append(
-                    {
-                        "label": ((event.get("label") or {}).get("name")) or "",
-                        "actor": ((event.get("actor") or {}).get("login")) or "",
-                        "created_at": event.get("created_at") or "",
-                    }
-                )
+            events.extend(event for event in page or [] if event)
+        return events
+
+    def issue_label_events(self, number: int) -> list[dict]:
+        """Chronological `labeled` events: {label, actor, created_at} — the
+        D13 arming-actor attribution source."""
+        events: list[dict] = []
+        for event in self._issue_timeline(number):
+            if event.get("event") != "labeled":
+                continue
+            events.append(
+                {
+                    "label": ((event.get("label") or {}).get("name")) or "",
+                    "actor": ((event.get("actor") or {}).get("login")) or "",
+                    "created_at": event.get("created_at") or "",
+                }
+            )
+        return events
+
+    def issue_rename_events(self, number: int) -> list[dict]:
+        """Chronological `renamed` events: {actor, created_at} — titles
+        render into prompts, so renames classify like body edits (D13)."""
+        events: list[dict] = []
+        for event in self._issue_timeline(number):
+            if event.get("event") != "renamed":
+                continue
+            events.append(
+                {
+                    "actor": ((event.get("actor") or {}).get("login")) or "",
+                    "created_at": event.get("created_at") or "",
+                }
+            )
         return events
 
     def issue_content_edits(self, number: int) -> list[dict]:

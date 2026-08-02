@@ -201,14 +201,22 @@ def _print_plan(
     return 1 if fail_loud else 0
 
 
-def _concurrent_activity(gh: GitHub, target: Target) -> list[str]:
+def _concurrent_activity(
+    gh: GitHub, target: Target, *, redact_titles: bool = False
+) -> list[str]:
+    """`redact_titles` is for prompt consumers (#46): milestone titles are
+    user-controlled free text whose provenance cannot be attested (the
+    creator may have lost access; renames have no event history), so
+    prompts cite milestone numbers only. Human terminal output keeps the
+    titles."""
     notices = []
     for ms in gh.milestones(state="open"):
         if target.milestone and ms["title"] == target.milestone:
             continue
         if ms.get("open_issues"):
+            name = f"#{ms['number']}" if redact_titles else f"'{ms['title']}'"
             notices.append(
-                f"open milestone '{ms['title']}' with {ms['open_issues']} open issue(s)"
+                f"open milestone {name} with {ms['open_issues']} open issue(s)"
             )
     others = [
         p
@@ -542,15 +550,27 @@ def cmd_vet(args: argparse.Namespace) -> int:
         return 0
 
     backend_mod.assert_backend_version(cfg)
-    target = prepare_target(gh, cfg, milestone=args.milestone, issue=args.issue)
-    # vet's input surface (#46): issue + sub-issue bodies and only
+    target = prepare_target(
+        gh, cfg, milestone=args.milestone, issue=args.issue, classify_closed=True
+    )
+    selection = runner_mod.select(cfg)
+    # vet's input surface (#46): issue + sub-issue titles/bodies and only
     # trusted-authored comments — untrusted comments are excluded in code,
     # exactly as the implementer's surface excludes them (#14). vet is
     # read-only and drafts comments for HUMAN approval, but the same rule
-    # holds: world-writable text never enters an agent prompt un-fenced.
+    # holds: world-writable text never enters an agent prompt un-fenced —
+    # including the bodies themselves: a unit classified untrusted-input
+    # (D13) is refused here via the same capability machinery as dispatch,
+    # never fed to a vet agent on a runner lacking the boundary.
     bodies = []
+    refused = 0
     for number in sorted(target.units):
         unit = target.units[number]
+        refusal = selection.refusal(unit.required_capabilities)
+        if refusal:
+            refused += 1
+            warn(f"vet: skipping #{number} — {refusal}")
+            continue
         comments, excluded = spec.trusted_comments(gh, cfg, number)
         bodies.append(f"# Unit #{number}: {unit.title}\n\n{unit.body}")
         for sub in unit.sub_issues:
@@ -567,9 +587,26 @@ def cmd_vet(args: argparse.Namespace) -> int:
                 f"_Note: {excluded} comment(s) from untrusted authors were "
                 f"withheld from this analysis of #{number}._"
             )
+    if not bodies:
+        warn(
+            f"vet: nothing to analyze — {refused} unit(s) refused "
+            "(untrusted-classified without the untrusted-input boundary)"
+            if refused
+            else "vet: nothing to analyze — no units in the target"
+        )
+        return 1
+    # Prompt-safe target reference (#46): milestone titles are free text
+    # with unattestable provenance — the prompt cites the number; the units
+    # themselves carry the real, classified content.
+    prompt_target = (
+        f"milestone #{target.milestone_number}"
+        if target.milestone_number is not None
+        else target.label
+    )
     tokens = {
-        "TARGET": target.label,
-        "CONCURRENT": "\n".join(_concurrent_activity(gh, target)) or "(none detected)",
+        "TARGET": prompt_target,
+        "CONCURRENT": "\n".join(_concurrent_activity(gh, target, redact_titles=True))
+        or "(none detected)",
         "UNITS": "\n\n---\n\n".join(bodies),
     }
     prompt = spec.load_prompt("vet", tokens)
@@ -578,7 +615,6 @@ def cmd_vet(args: argparse.Namespace) -> int:
     prompt_file = run_dir / "prompt.md"
     write_text(prompt_file, prompt)
     adapter = backend_mod.adapter_path(cfg.backend)
-    selection = runner_mod.select(cfg)
     os.environ["FOREMAN_READONLY"] = "1"
     try:
         result = backend_mod.run_backend(

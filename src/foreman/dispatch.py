@@ -35,6 +35,33 @@ from foreman.util import ForemanError, info, warn, write_text
 RETRIGGER_SUBJECT = "chore: retrigger ci (foreman)"
 
 
+def _gate_handoffs(
+    gh: GitHub,
+    cfg: Config,
+    selection: Selection,
+    handoffs: list[tuple[int, str]],
+) -> tuple[list[tuple[int, str]], list[int]]:
+    """#46: a handoff inherits its dependency's origin classification. The
+    text is agent-generated from that issue's content — and the origin's
+    contributors may have lost access since, so current repo trust cannot
+    attest it. A handoff whose origin carries untrusted contributions is
+    withheld on a runner lacking the untrusted-input boundary, and the
+    withholding is disclosed to the agent — excluded like untrusted
+    comments, never silently."""
+    kept: list[tuple[int, str]] = []
+    withheld: list[int] = []
+    if not handoffs:
+        return kept, withheld
+    repo = trust_mod.repo_trust(gh, cfg)
+    for dep, text in handoffs:
+        origin = trust_mod.classify_branch_origin(gh, cfg, dep)
+        if selection.refusal(trust_mod.required_for(cfg, repo, origin)):
+            withheld.append(dep)
+        else:
+            kept.append((dep, text))
+    return kept, withheld
+
+
 @dataclass
 class Outcome:
     unit: Unit
@@ -292,7 +319,9 @@ def _dispatch_locked(
 
     advertised = selection.runner.capabilities()
     gate_cmds = gate.compose(cfg, advertised)
-    handoffs = spec.collect_handoffs(gh, cfg, unit)
+    handoffs, withheld_handoffs = _gate_handoffs(
+        gh, cfg, selection, spec.collect_handoffs(gh, cfg, unit)
+    )
     prompt_text = spec.assemble_dispatch_prompt(
         gh,
         cfg,
@@ -305,6 +334,7 @@ def _dispatch_locked(
         handoffs=handoffs,
         verify_display=gate.describe(gate_cmds),
         capabilities=advertised,
+        withheld_handoffs=withheld_handoffs,
     )
     prompt_file = run_dir / "prompt.md"
     write_text(prompt_file, prompt_text)

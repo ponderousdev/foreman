@@ -64,6 +64,9 @@ class Target:
     units: dict[int, Unit]
     external_deps: set[int]
     milestone: str | None = None
+    # For prompt-safe references (#46): milestone titles are user-controlled
+    # free text with unattestable provenance, so prompts cite the number.
+    milestone_number: int | None = None
     mode: str = "labels"  # resolved input-source mode (fields | labels)
     repo_trust: trust_mod.RepoTrust | None = None
 
@@ -115,12 +118,14 @@ def load_target(
             issues[sub["number"]] = gh.issue(sub["number"])
         label = f"issue #{issue}"
         ms_title = None
+        ms_number = None
     else:
         ms = gh.resolve_milestone(milestone or "")
         ms_title = ms["title"]
+        ms_number = ms["number"]
         for number in gh.milestone_issue_numbers(ms_title):
             issues[number] = gh.issue(number)
-        label = f"milestone '{ms_title}' (#{ms['number']})"
+        label = f"milestone '{ms_title}' (#{ms_number})"
 
     # Parent-unit granularity: an issue whose parent is also in the target set
     # is a sub-issue of that unit, not a unit of its own.
@@ -149,7 +154,13 @@ def load_target(
                     f"#{unit.number}: dependency #{dep} is outside the target set "
                     "(external — ready only when satisfied)"
                 )
-    return Target(label=label, units=units, external_deps=external, milestone=ms_title)
+    return Target(
+        label=label,
+        units=units,
+        external_deps=external,
+        milestone=ms_title,
+        milestone_number=ms_number,
+    )
 
 
 def detect_cycle(target: Target) -> list[int] | None:
@@ -277,18 +288,29 @@ def dependency_satisfied(
 
 
 def prepare_target(
-    gh: GitHub, cfg: Config, *, milestone: str | None = None, issue: int | None = None
+    gh: GitHub,
+    cfg: Config,
+    *,
+    milestone: str | None = None,
+    issue: int | None = None,
+    classify_closed: bool = False,
 ) -> Target:
     """Load the target, resolve human inputs, and classify trust (D4/D13)
     for every unit. Classification injects untrusted-input into a unit's
     required capabilities; eligibility consumes the resulting set without
-    ever asking which runner is configured."""
+    ever asking which runner is configured.
+
+    `classify_closed` is for consumers that RENDER closed units (vet, #46):
+    anything that can enter a prompt must carry its D13 classification.
+    Dispatch/plan/status skip closed units, and classifying them anyway
+    would let one old ≥100-edit closed issue fail-close the whole target
+    while adding an attestation cost nothing consumes."""
     target = load_target(gh, cfg, milestone=milestone, issue=issue)
     target.mode = inputs_mod.detect_mode(gh, cfg)
     target.repo_trust = trust_mod.repo_trust(gh, cfg)
     for unit in target.units.values():
         unit.inputs = inputs_mod.resolve(gh, cfg, gh.issue(unit.number), target.mode)
-        if unit.open:
+        if unit.open or classify_closed:
             unit.trust = trust_mod.classify_unit(gh, cfg, unit, target.mode)
         unit.required_capabilities = trust_mod.required_for(
             cfg, target.repo_trust, unit.trust
