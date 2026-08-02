@@ -23,10 +23,22 @@ class ConfigLoading(unittest.TestCase):
             cfg = config_mod.load(Path(tmp))
         self.assertEqual(cfg.verify, {"default": ["task", "verify"]})
         self.assertEqual(cfg.required_capabilities, [])
-        self.assertEqual(cfg.trusted_actors, [])
+
+    def test_dogfood_config_loads(self):
+        # The repo's own .foreman.toml must always parse: in TOML, top-level
+        # keys placed after a [section] header silently belong to that
+        # section, and the unknown-key guards then reject them (caught live
+        # during #13 bring-up — required_capabilities/billing/sandboxed had
+        # drifted under [verify]).
+        root = Path(__file__).resolve().parents[1]
+        cfg = config_mod.load(root)
+        self.assertEqual(cfg.expected_login, "evanharmon1-bot")
+        self.assertEqual(cfg.billing, "subscription")
+        self.assertEqual(cfg.required_capabilities, [])
+        self.assertIn("docker", cfg.verify)
+        self.assertEqual(cfg.trusted_actors, ["evanharmon1", "evanharmon1-bot"])
         self.assertEqual(cfg.runner, "local")
         self.assertTrue(cfg.require_approval)
-        self.assertEqual(cfg.billing, "subscription")
         self.assertEqual(cfg.max_parallel, 3)
 
     def test_toml_values_and_tables(self):
