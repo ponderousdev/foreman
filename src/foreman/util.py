@@ -96,11 +96,17 @@ def tail(path: Path, lines: int = 40) -> str:
     return "\n".join(content[-lines:])
 
 
+def relation_refs(issue: dict, field: str) -> list[dict]:
+    """gh's relational-field JSON shapes vary by version: a bare list of
+    refs, or a connection object {nodes: [...], totalCount: N}. Applies to
+    subIssues, blockedBy, closedByPullRequestsReferences, and friends —
+    normalize to the list; iterating the dict yields string keys and
+    crashes."""
+    val = issue.get(field) or []
+    if isinstance(val, dict):
+        val = val.get("nodes") or []
+    return [ref for ref in val if isinstance(ref, dict)]
+
+
 def sub_issue_refs(issue: dict) -> list[dict]:
-    """gh's `subIssues` JSON shape varies by version: a bare list of issue
-    refs, or a connection object {nodes: [...], totalCount: N}. Normalize
-    to the list — iterating the dict yields string keys and crashes."""
-    subs = issue.get("subIssues") or []
-    if isinstance(subs, dict):
-        subs = subs.get("nodes") or []
-    return [sub for sub in subs if isinstance(sub, dict)]
+    return relation_refs(issue, "subIssues")

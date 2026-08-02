@@ -20,7 +20,7 @@ from foreman import inputs as inputs_mod
 from foreman import trust as trust_mod
 from foreman.config import Config
 from foreman.github import GitHub
-from foreman.util import ForemanError, sub_issue_refs
+from foreman.util import ForemanError, relation_refs, sub_issue_refs
 
 DEPENDS_ON_RE = re.compile(
     r"^depends-on:\s*(?P<refs>#\d+(?:\s*,\s*#\d+)*)\s*$", re.I | re.M
@@ -88,7 +88,7 @@ def _unit_from_issue(issue: dict) -> Unit:
 
 
 def _dependency_numbers(issue: dict, unit: Unit) -> list[int]:
-    native = [entry["number"] for entry in issue.get("blockedBy") or []]
+    native = [entry["number"] for entry in relation_refs(issue, "blockedBy")]
     match = DEPENDS_ON_RE.search(unit.body)
     trailer = (
         [int(ref.strip().lstrip("#")) for ref in match.group("refs").split(",")]
@@ -205,7 +205,7 @@ def foreman_prs_for_issue(gh: GitHub, cfg: Config, number: int) -> list[dict]:
     """Closing PRs that carry this unit's foreman marker, with merge facts."""
     issue = gh.issue(number)
     marked = []
-    for ref in issue.get("closedByPullRequestsReferences") or []:
+    for ref in relation_refs(issue, "closedByPullRequestsReferences"):
         pr = gh.pr_view(
             ref["number"],
             "number,url,body,merged,mergedAt,baseRefName,headRefName,author,state",
