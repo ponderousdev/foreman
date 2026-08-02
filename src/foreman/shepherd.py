@@ -31,7 +31,7 @@ from foreman.dispatch import RETRIGGER_SUBJECT
 from foreman.github import GitHub
 from foreman.graph import MARKER_RE
 from foreman.runner import Selection
-from foreman.util import info, warn, write_text
+from foreman.util import info, relation_refs, warn, write_text
 
 MAX_AGENT_ACTIONS_PER_PR = 2  # per shepherd run; watch ticks give more rounds
 
@@ -565,7 +565,7 @@ def merge_order(gh: GitHub, ready: list[PrWork]) -> list[tuple[int, str]]:
     for unit_number in by_unit:
         deps = [
             entry["number"]
-            for entry in (gh.issue(unit_number).get("blockedBy") or [])
+            for entry in relation_refs(gh.issue(unit_number), "blockedBy")
             if entry["number"] in by_unit
         ]
         sorter.add(unit_number, *deps)
