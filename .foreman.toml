@@ -20,14 +20,6 @@ expected_login = "evanharmon1-bot"
 # arm and to author dispatchable content.
 trusted_actors = ["evanharmon1", "evanharmon1-bot"]
 
-# The composed verify gate (#29). Foreman's own `verify` is check + build +
-# test and needs no daemon; the docker-keyed addition (devcontainer smoke +
-# permission assert) runs where a daemon is present and is GitHub Actions'
-# job otherwise. No `ports` key: this repo has no port-binding e2e.
-[verify]
-default = ["task", "verify"]
-docker = ["task", "test:devcontainer:permissions"]
-
 # Hard requirements: none. The baseline gate runs without special
 # capabilities, so a capability-poor runner is never refused for this repo.
 required_capabilities = []
@@ -41,6 +33,16 @@ billing = "subscription"
 # to relax the agent permission mode; the committed default stays
 # conservative for any other host.
 sandboxed = false
+
+# The composed verify gate (#29). Foreman's own `verify` is check + build +
+# test and needs no daemon; the docker-keyed addition (devcontainer smoke +
+# permission assert) runs where a daemon is present and is GitHub Actions'
+# job otherwise. No `ports` key: this repo has no port-binding e2e.
+# NOTE: [verify] must stay below every top-level key — in TOML, keys after
+# a section header belong to that section until the next header.
+[verify]
+default = ["task", "verify"]
+docker = ["task", "test:devcontainer:permissions"]
 
 [budgets]
 dispatch_usd = 20.0
