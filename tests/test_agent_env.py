@@ -23,6 +23,21 @@ class AgentEnvAllowlist(unittest.TestCase):
         os.environ.clear()
         os.environ.update(self._saved)
 
+    def test_readonly_flag_forwards_when_set(self):
+        # vet's read-only mode must actually reach the adapter — the total
+        # allowlist otherwise silently dropped it and vet ran writable.
+        os.environ.update(
+            {"PATH": "/usr/bin", "FOREMAN_AGENT_GH_TOKEN": "t", "FOREMAN_READONLY": "1"}
+        )
+        env = backend_mod.agent_env(Config())
+        self.assertEqual(env.get("FOREMAN_READONLY"), "1")
+
+    def test_readonly_flag_absent_when_unset(self):
+        os.environ.pop("FOREMAN_READONLY", None)
+        os.environ.update({"PATH": "/usr/bin", "FOREMAN_AGENT_GH_TOKEN": "t"})
+        env = backend_mod.agent_env(Config())
+        self.assertNotIn("FOREMAN_READONLY", env)
+
     def test_allowlist_shape(self):
         os.environ.update(
             {

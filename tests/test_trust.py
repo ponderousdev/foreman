@@ -141,6 +141,7 @@ class ArmingAuthorizes(unittest.TestCase):
         cfg = Config(trusted_actors=["owner"])
         gh, runner = make_github(cfg)
         stub_content_edits(runner, [])
+        stub_label_events(runner, 7, [])  # rename attribution reads the timeline
         unit = armed_unit(issue_json(7, author="owner"))
         result = trust_mod.classify_unit(gh, cfg, unit, "fields")
         self.assertTrue(any("fields mode" in r for r in result.refusals))
@@ -170,6 +171,60 @@ class AuthorshipClassifies(unittest.TestCase):
         self.assertTrue(result.untrusted_input)
         self.assertEqual(result.refusals, [])  # dispatchable where the boundary permits
         self.assertTrue(any("outsider" in c for c in result.contributors))
+
+    def classify_with_rename(self, *, rename_actor: str, renamed_at: str):
+        """Titles render into prompts, so renames classify like body edits —
+        attribution comes from the same timeline the arming reader uses."""
+        cfg = Config(trusted_actors=["owner", "evan"])
+        gh, runner = make_github(cfg)
+        runner.when(
+            [
+                "api",
+                "repos/owner/repo/issues/7/timeline?per_page=100",
+                "--paginate",
+                "--slurp",
+            ],
+            [
+                [
+                    {
+                        "event": "labeled",
+                        "label": {"name": "foreman:claude"},
+                        "actor": {"login": "owner"},
+                        "created_at": "2026-07-17T01:00:00Z",
+                    },
+                    {
+                        "event": "renamed",
+                        "actor": {"login": rename_actor},
+                        "created_at": renamed_at,
+                    },
+                ]
+            ],
+        )
+        stub_content_edits(runner, [])
+        unit = armed_unit(issue_json(7, author="owner"))
+        return trust_mod.classify_unit(gh, cfg, unit, "labels")
+
+    def test_trusted_rename_keeps_the_attestation(self):
+        result = self.classify_with_rename(
+            rename_actor="evan", renamed_at="2026-07-17T02:00:00Z"
+        )
+        self.assertFalse(result.untrusted_input)
+        self.assertEqual(result.refusals, [])
+
+    def test_untrusted_pre_arming_rename_classifies(self):
+        result = self.classify_with_rename(
+            rename_actor="outsider", renamed_at="2026-07-17T00:30:00Z"
+        )
+        self.assertTrue(result.untrusted_input)
+        self.assertEqual(result.refusals, [])
+        self.assertTrue(any("renamer" in c for c in result.contributors))
+
+    def test_untrusted_post_arming_rename_breaks_the_attestation(self):
+        result = self.classify_with_rename(
+            rename_actor="outsider", renamed_at="2026-07-17T02:00:00Z"
+        )
+        self.assertTrue(result.untrusted_input)
+        self.assertTrue(any("renamed by untrusted actor" in r for r in result.refusals))
 
     def test_trusted_post_arming_edit_keeps_the_attestation(self):
         result = self.classify(

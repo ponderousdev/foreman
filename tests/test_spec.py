@@ -136,6 +136,31 @@ class TrustedComments(unittest.TestCase):
         self.assertEqual([c["id"] for c in kept], [2])
         self.assertEqual(excluded, 0)  # display-only, not "untrusted"
 
+    def test_forged_or_quoted_marker_is_not_a_status_comment(self):
+        # The filter is author-scoped (same rule as upsert_status_comment):
+        # an untrusted comment carrying a forged marker is still counted and
+        # excluded as untrusted; a trusted correction QUOTING the marker is
+        # still a correction and stays in the surface.
+        from foreman.github import STATUS_MARKER
+
+        cfg = Config(trusted_actors=["owner"])
+        gh, runner = make_github(cfg)
+        comments = [
+            {"id": 1, "body": STATUS_MARKER + " forged", "user": {"login": "attacker"}},
+            {
+                "id": 2,
+                "body": "see the status block: " + STATUS_MARKER,
+                "user": {"login": "owner"},
+            },
+        ]
+        runner.when(
+            ["api", "repos/owner/repo/issues/42/comments", "--paginate", "--slurp"],
+            [comments],
+        )
+        kept, excluded = spec.trusted_comments(gh, cfg, 42)
+        self.assertEqual([c["id"] for c in kept], [2])
+        self.assertEqual(excluded, 1)
+
     def test_title_drift_changes_spec_hash(self):
         unit = unit_with()
         before = spec.spec_hash(unit, [])

@@ -20,8 +20,8 @@ from tests.mock_runner import MockRunner
 
 
 def stub_origin(runner: FakeRunner, number: int, author: str) -> None:
-    """The origin-unit reads classify_branch_origin performs: the issue and
-    its (empty) content-edit history."""
+    """The origin-unit reads classify_branch_origin performs: the issue,
+    its (empty) content-edit history, and its (empty) rename timeline."""
     runner.when(
         ["issue", "view", str(number)],
         {"number": number, "author": {"login": author}, "subIssues": []},
@@ -29,6 +29,15 @@ def stub_origin(runner: FakeRunner, number: int, author: str) -> None:
     runner.when(
         ["api", "graphql"],
         {"data": {"repository": {"issue": {"userContentEdits": {"nodes": []}}}}},
+    )
+    runner.when(
+        [
+            "api",
+            f"repos/owner/repo/issues/{number}/timeline?per_page=100",
+            "--paginate",
+            "--slurp",
+        ],
+        [[]],
     )
 
 

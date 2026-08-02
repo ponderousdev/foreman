@@ -288,8 +288,12 @@ def prepare_target(
     target.repo_trust = trust_mod.repo_trust(gh, cfg)
     for unit in target.units.values():
         unit.inputs = inputs_mod.resolve(gh, cfg, gh.issue(unit.number), target.mode)
-        if unit.open:
-            unit.trust = trust_mod.classify_unit(gh, cfg, unit, target.mode)
+        # Classify EVERY unit, open or closed: dispatch consumes only open
+        # units, but vet renders closed ones into its prompt too (#46) —
+        # anything that can enter a prompt must carry its D13 classification,
+        # or a closed issue authored/edited by a once-untrusted actor slips
+        # through the per-unit refusal.
+        unit.trust = trust_mod.classify_unit(gh, cfg, unit, target.mode)
         unit.required_capabilities = trust_mod.required_for(
             cfg, target.repo_trust, unit.trust
         )

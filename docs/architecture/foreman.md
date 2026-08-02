@@ -232,16 +232,19 @@ free text.
 
 | Role | Enters the prompt | Excluded in code | Enforced at |
 | --- | --- | --- | --- |
-| **Implementer** (dispatch) | Issue + sub-issue **titles and bodies**; **trusted-authored comments only** (foreman's own display-only status comment is marker-filtered out), with the number of withheld untrusted comments disclosed to the agent; `## Handoff` sections from merged dependency PRs; the capability preamble | Untrusted-authored comments never render; untrusted authorship/edits anywhere in the surface classify the unit `untrusted-input` (D13) and refuse where the boundary is absent. Under explicit arming, an untrusted post-arming edit additionally breaks the arming attestation (fail closed until a trusted actor re-arms); under `require_approval = false` the committed config is itself the standing attestation, so untrusted edits classify rather than break an arming event | `spec.trusted_comments`, `trust.classify_unit`, eligibility |
+| **Implementer** (dispatch) | Issue + sub-issue **titles and bodies**; **trusted-authored comments only** (foreman's own display-only status comment is marker-filtered out), with the number of withheld untrusted comments disclosed to the agent; `## Handoff` sections from merged dependency PRs; the capability preamble | Untrusted-authored comments never render; untrusted authorship, body edits, or title renames anywhere in the surface classify the unit `untrusted-input` (D13) and refuse where the boundary is absent. Under explicit arming, an untrusted post-arming edit or rename additionally breaks the arming attestation (fail closed until a trusted actor re-arms); under `require_approval = false` the committed config is itself the standing attestation, so untrusted edits classify rather than break an arming event | `spec.trusted_comments`, `trust.classify_unit`, eligibility |
 | **Shepherd — CI fix** | The failing check's Actions log excerpt (`%%FAILURE_EXCERPT%%`) — framed as claims to adjudicate, not instructions | Log text of an untrusted-origin branch never reaches a prompt on a runner lacking `untrusted-input`: **a fix unit inherits its branch's classification** (origin unit author/edits/sub-issues, re-derived per tick) | `shepherd._origin_refusal` → `trust.classify_branch_origin` |
 | **Shepherd — rebase** | The deterministic conflict path list (`%%CONFLICTS%%`) from a `merge-tree` dry run | Same origin-inheritance guard — the agent works on the branch's tree | same |
 | **Shepherd — adjudicate** | The **first comment's body** of each of the first 20 unresolved threads (`%%THREADS%%` — the same 20 form the disposition allowlist). Where the runner lacks `untrusted-input`, only threads whose **every commenter** is trusted or foreman itself may render — one untrusted voice taints the thread. Where the runner advertises the boundary, untrusted threads render too — that is what the capability grants (D13) | On a runner lacking `untrusted-input`, any untrusted-authored thread escalates to a human **before** any body renders — the decision input is the trusted *signal* (thread exists, unresolved), never the text; plus the origin-inheritance guard | `shepherd._thread_trusted`, the pre-render escalation, `_origin_refusal` |
 | **Vet** | Issue + sub-issue **titles and bodies** and trusted-authored comments (same exclusion path as the implementer, withheld count disclosed) | Unit bodies are gated like dispatch: an `untrusted-input`-classified unit is refused on a runner lacking the boundary (D13) and never analyzed there. Read-only run; its drafted corrections post **only** with explicit human approval | `cli.cmd_vet` (per-unit `selection.refusal`) → `spec.trusted_comments`, `github.post_vet_correction` |
 
 Shepherd *decisions* (which branch of the runbook fires, when to escalate)
-key exclusively on deterministic signals: check-rollup conclusions,
-`signatures.toml` regex classification, `mergeStateStatus`, merge-tree
-conflict paths, thread `isResolved`, and mergeability — never on free text.
+key on deterministic signals — check-rollup conclusions, `mergeStateStatus`,
+merge-tree conflict paths, thread `isResolved`, mergeability — plus exactly
+one bounded parse of free text: `signatures.toml` regexes classify the
+failing CI log before any LLM sees it, so log content can steer routing
+(quota-idle vs. environmental retry vs. agent fix) only through that fixed
+deterministic catalog, never through model interpretation.
 On the write side the adjudication agent only **records** dispositions in a
 validated sidecar (its token is read-only, #13); foreman performs every
 reply and resolution through the write contract, refusing thread ids it
@@ -255,8 +258,9 @@ commit subjects, the session record, and the prior agent-log tail
 (branch-derived content covered by the same origin-inheritance guard, plus
 the previous agent's own output); a resumable invocation instead restores
 the backend session's prior conversation. And issue **titles** are
-user-controlled free text like bodies — they render into prompts and join
-the spec hash, so title drift is spec drift.
+user-controlled free text like bodies — they render into prompts, join
+the spec hash (title drift is spec drift), and renames classify via
+timeline attribution exactly as body edits do.
 
 ## Configuration (.foreman.toml)
 

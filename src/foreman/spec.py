@@ -122,11 +122,15 @@ def trusted_comments(gh: GitHub, cfg: Config, number: int) -> tuple[list[dict], 
     me = gh.viewer()
     for comment in gh.issue_comments(number):
         author = (comment.get("user") or {}).get("login", "")
-        if STATUS_MARKER in (comment.get("body") or ""):
-            # Foreman's own unit-status comment is display-only and never
+        if author == me and STATUS_MARKER in (comment.get("body") or ""):
+            # Foreman's OWN unit-status comment is display-only and never
             # read back (ADR 0002) — without this filter it would qualify
             # as viewer-authored and re-enter prompts as a "correction",
             # feeding prior agent-generated text back as specification.
+            # Author-scoped deliberately: a marker in anyone else's comment
+            # is forged or quoted, not a status comment (the same rule
+            # upsert_status_comment enforces), and flows through the
+            # ordinary trust check below.
             continue
         if author == me or author in cfg.trusted_actors:
             kept.append(comment)

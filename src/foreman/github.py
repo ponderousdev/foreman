@@ -155,6 +155,7 @@ class GitHub:
         self._identity_ok = False
         self._cache: dict[str, Any] = {}
         self._issue_cache: dict[int, dict] = {}
+        self._timeline_cache: dict[int, list[dict]] = {}
 
     # ── facts ────────────────────────────────────────────────────────
 
@@ -230,29 +231,53 @@ class GitHub:
                     logins.append(login)
         return logins
 
+    def _issue_timeline(self, number: int) -> list[dict]:
+        """Raw timeline events, fetched once per issue per run (cached):
+        the shared source for label attribution and rename attribution."""
+        if number not in self._timeline_cache:
+            out = self.gh.json(
+                [
+                    "api",
+                    f"repos/{self.repo_slug()}/issues/{number}/timeline?per_page=100",
+                    "--paginate",
+                    "--slurp",
+                ]
+            )
+            events: list[dict] = []
+            for page in out or []:
+                events.extend(event for event in page or [] if event)
+            self._timeline_cache[number] = events
+        return self._timeline_cache[number]
+
     def issue_label_events(self, number: int) -> list[dict]:
         """Chronological `labeled` events: {label, actor, created_at} — the
         D13 arming-actor attribution source."""
-        out = self.gh.json(
-            [
-                "api",
-                f"repos/{self.repo_slug()}/issues/{number}/timeline?per_page=100",
-                "--paginate",
-                "--slurp",
-            ]
-        )
         events: list[dict] = []
-        for page in out or []:
-            for event in page or []:
-                if (event or {}).get("event") != "labeled":
-                    continue
-                events.append(
-                    {
-                        "label": ((event.get("label") or {}).get("name")) or "",
-                        "actor": ((event.get("actor") or {}).get("login")) or "",
-                        "created_at": event.get("created_at") or "",
-                    }
-                )
+        for event in self._issue_timeline(number):
+            if event.get("event") != "labeled":
+                continue
+            events.append(
+                {
+                    "label": ((event.get("label") or {}).get("name")) or "",
+                    "actor": ((event.get("actor") or {}).get("login")) or "",
+                    "created_at": event.get("created_at") or "",
+                }
+            )
+        return events
+
+    def issue_rename_events(self, number: int) -> list[dict]:
+        """Chronological `renamed` events: {actor, created_at} — titles
+        render into prompts, so renames classify like body edits (D13)."""
+        events: list[dict] = []
+        for event in self._issue_timeline(number):
+            if event.get("event") != "renamed":
+                continue
+            events.append(
+                {
+                    "actor": ((event.get("actor") or {}).get("login")) or "",
+                    "created_at": event.get("created_at") or "",
+                }
+            )
         return events
 
     def issue_content_edits(self, number: int) -> list[dict]:
