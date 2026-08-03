@@ -11,6 +11,7 @@ the `preflight` name without two meanings ever coexisting.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -27,6 +28,7 @@ from foreman.config import load as load_config
 from foreman.github import Gh, GitHub
 from foreman.graph import (
     Target,
+    _unit_from_issue,
     dependency_satisfied,
     detect_cycle,
     prepare_target,
@@ -92,7 +94,9 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     p_status = sub.add_parser("status", help="read-only snapshot + human-action queue")
-    _add_target_args(p_status)
+    # #84: with no target, status prints an overall snapshot across every open
+    # foreman PR + local run state — so the target is optional here alone.
+    _add_target_args(p_status, required=False)
 
     p_retry = sub.add_parser("retry", help="re-dispatch a unit whose PR a human closed")
     p_retry.add_argument("--unit", type=int, required=True)
@@ -312,8 +316,186 @@ def cmd_shepherd(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _read_local_result(path: Path) -> dict | None:
+    """Best-effort read of a unit's sidecar result.json for the overall
+    snapshot (#84). Display-only, so a missing or malformed file is simply
+    'nothing to show', never a hard error."""
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _status_overall(cfg: Config, root: Path, gh: GitHub) -> int:
+    """Untargeted `foreman status` (#84): an overall snapshot with no
+    --milestone/--issue — every open foreman PR and its state (in-flight
+    units, derived from branches/PRs), the consolidated human-action queue,
+    and recent terminal outcomes drawn from local run dirs."""
+    open_prs = shepherd_mod.open_foreman_prs(gh)
+    # Every open PR gets a row (a retried unit can hold several open
+    # attempts at once); the unit-number set exists only so local-dir
+    # entries are not double-reported.
+    units_with_prs = {p["_unit"] for p in open_prs}
+    statuses: list[report.UnitStatus] = []
+    human_tasks: dict[int, list[str]] = {}
+    blocked: dict[int, str] = {}
+    ready: list[shepherd_mod.PrWork] = []
+
+    def add_tasks(number: int, tasks: list[str]) -> None:
+        # Spec [HUMAN] items and contract human_tasks overlap by design
+        # (the implementer copies them) — dedupe, preserving order, and
+        # never create an empty entry (human_queue treats presence as work).
+        fresh = [t for t in tasks if t.strip()]
+        if not fresh:
+            return
+        existing = human_tasks.setdefault(number, [])
+        existing.extend(t for t in fresh if t not in existing)
+
+    spec_read: set[int] = set()
+    for pr in sorted(open_prs, key=lambda p: (p["_unit"], p["number"])):
+        number = pr["_unit"]
+        unit = _unit_from_issue(gh.issue(number))
+        if number not in spec_read:
+            spec_read.add(number)
+            spec_info = spec.validate(unit)
+            if not spec_info.errors:
+                add_tasks(number, spec.human_only_tasks(unit, spec_info))
+        status = gh.pr_status(pr["number"])
+        checks_state, _failed = shepherd_mod.classify_checks(
+            status.get("statusCheckRollup")
+        )
+        labels = [label["name"] for label in status.get("labels") or []]
+        # A ready-to-merge label can go stale (new commits, regressed
+        # checks, base advanced, fresh review threads) — readiness
+        # revalidates every predicate the shepherd requires: green checks,
+        # a clean merge state, and no unresolved review threads. The
+        # checks state renders either way.
+        ready_now = (
+            "ready-to-merge" in labels
+            and checks_state == "green"
+            and (status.get("mergeStateStatus") or "").upper() == "CLEAN"
+            and not any(
+                not t.get("isResolved") for t in gh.review_threads(pr["number"])
+            )
+        )
+        state = "ready-to-merge" if ready_now else f"pr-open ({checks_state})"
+        if ready_now:
+            ready.append(
+                shepherd_mod.PrWork(
+                    number=pr["number"],
+                    unit_number=number,
+                    branch=status["headRefName"],
+                    url=status["url"],
+                    title=status["title"],
+                )
+            )
+        statuses.append(
+            report.UnitStatus(
+                unit=unit,
+                state=state,
+                branch=status["headRefName"],
+                pr_url=status["url"],
+                checks=checks_state,
+                detail=status["title"],
+            )
+        )
+
+    # Local run dirs supply three things. For EVERY unit with a contract:
+    # agent-reported human_tasks and (open-issue) blocked questions join the
+    # queue — an open PR does not erase the human work its run discovered.
+    # For units WITHOUT an open PR only: an entry in the snapshot — active
+    # runs (run record, no contract yet) go to the in-flight section, and
+    # contracted runs to recent outcomes as agent:<status>, display-only
+    # (a "completed" contract does not prove the supervisor's post-agent
+    # gates passed; no PR here says otherwise).
+    candidates: list[tuple[str, int, str, str]] = []
+    units_root = root / cfg.runtime_dir / "units"
+    for unit_dir in (d for d in units_root.glob("*") if d.name.isdigit()):
+        number = int(unit_dir.name)
+        started = _read_local_result(unit_dir / "run_started.json") or {}
+        started_at = started.get("started_at")
+        sort_key = str(started_at) if isinstance(started_at, str) else ""
+        result = _read_local_result(unit_dir / "result.json")
+        if result is None:
+            if started and number not in units_with_prs:
+                # A recorded exit status means the run is DEAD without a
+                # contract — a terminal outcome, not an in-flight row. No
+                # status file and no contract reads as still active
+                # (best-effort: a SIGKILLed wrapper leaves no record and
+                # will show as in-flight until cleaned).
+                if (unit_dir / "exit-status").exists():
+                    candidates.append(
+                        (sort_key, number, "agent:died (no contract)", "")
+                    )
+                else:
+                    statuses.append(
+                        report.UnitStatus(
+                            unit=_unit_from_issue(gh.issue(number)),
+                            state="in-flight (no contract)",
+                            detail=sort_key,
+                        )
+                    )
+            continue
+        # The real contract validator judges the sidecar (schema, allowed
+        # statuses, required fields). The worktree feeds the BLOCKED.md
+        # fallback, so resolve the unit's preserved worktree like targeted
+        # status does (fall back to the run dir when none survives).
+        wt = next(iter((root / cfg.worktrees_dir).glob(f"{number}-*")), unit_dir)
+        contract, _errors = backend_mod.read_result(unit_dir, wt)
+        if contract is None:
+            if number not in units_with_prs:
+                candidates.append((sort_key, number, "agent:invalid-contract", ""))
+            continue
+        # Queue candidates first; the issue state (one gh read) is checked
+        # only when the contract could actually contribute queue entries —
+        # a completed no-task contract costs no API call.
+        question = contract.blocked_question
+        question = question.strip() if isinstance(question, str) else ""
+        contributes = bool(contract.human_tasks) or (
+            contract.status == "blocked" and question
+        )
+        issue_open = contributes and (
+            (gh.issue(number).get("state") or "").upper() == "OPEN"
+        )
+        # Tasks and blocked questions from closed/cancelled issues must
+        # not haunt the queue forever.
+        if issue_open and contract.human_tasks:
+            add_tasks(number, list(contract.human_tasks))
+        if contract.status == "blocked" and issue_open and question:
+            blocked[number] = question
+        if number in units_with_prs:
+            continue  # represented by its PR row(s) above
+        detail = contract.summary.strip().splitlines()[0] if contract.summary else ""
+        candidates.append((sort_key, number, f"agent:{contract.status}", detail))
+    # Bounded and recency-ordered: newest run_started first, cap at 10.
+    candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
+    outcomes = [(n, st, d) for _ts, n, st, d in candidates[:10]]
+
+    # merge_order is unit-keyed; a unit with several simultaneously-ready
+    # attempts contributes its lowest-numbered PR (the human sees the rest
+    # as rows above and resolves the duplicate-attempt state deliberately).
+    first_ready: dict[int, shepherd_mod.PrWork] = {}
+    for work in sorted(ready, key=lambda w: w.number):
+        first_ready.setdefault(work.unit_number, work)
+    print(
+        report.overall_snapshot(
+            statuses=statuses,
+            merge_order=shepherd_mod.merge_order(gh, list(first_ready.values())),
+            human_tasks=human_tasks,
+            blocked=blocked,
+            outcomes=outcomes,
+        )
+    )
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     cfg, root, gh = _context(read_only=True)
+    if args.milestone is None and args.issue is None:
+        return _status_overall(cfg, root, gh)
     target = prepare_target(gh, cfg, milestone=args.milestone, issue=args.issue)
     open_prs = shepherd_mod.open_foreman_prs(gh)
     prs_by_unit = {p["_unit"]: p for p in open_prs}

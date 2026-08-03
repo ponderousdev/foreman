@@ -52,6 +52,7 @@ STATE_ICONS = {
     "held": "⏸",
     "waiting": "⏳",
     "merged": "🎉",
+    "completed": "✔",
     "skipped": "⏭",
     "not-armed": "🔒",
     "refused": "⛔",
@@ -117,6 +118,43 @@ def summary_table(statuses: list[UnitStatus]) -> str:
             ]
         )
     return table(["unit", "status", "branch", "pr", "detail"], rows)
+
+
+def overall_snapshot(
+    *,
+    statuses: list[UnitStatus],
+    merge_order: list[tuple[int, str]],
+    human_tasks: dict[int, list[str]],
+    blocked: dict[int, str],
+    outcomes: list[tuple[int, str, str]],
+) -> str:
+    """Untargeted `foreman status` (#84): open foreman PRs + in-flight units,
+    the consolidated human-action queue, and recent terminal outcomes — one
+    snapshot with no --milestone/--issue."""
+    lines: list[str] = ["Foreman overall status", ""]
+    lines.append("Open foreman PRs and in-flight units:")
+    lines.append(summary_table(statuses) if statuses else "  (none in flight)")
+    lines.append("")
+    lines.append(
+        human_queue(
+            merge_order=merge_order,
+            human_tasks=human_tasks,
+            blocked=blocked,
+            environmental={},
+        )
+    )
+    lines.append("")
+    lines.append("Recent outcomes:")
+    if outcomes:
+        for number, state, detail in outcomes:
+            # Outcome states arrive prefixed (agent:<status>) — icon by
+            # the underlying status, honest prefixed label in the text.
+            icon = STATE_ICONS.get(state.removeprefix("agent:"), "•")
+            suffix = f": {detail}" if detail else ""
+            lines.append(f"  {icon} #{number} {state}{suffix}")
+    else:
+        lines.append("  (none recorded)")
+    return "\n".join(lines)
 
 
 def human_queue(
