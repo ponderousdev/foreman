@@ -404,14 +404,24 @@ class GitHub:
             # must never read as green. Tests may pre-supply a rollup in
             # the pr-view fixture, which is honored untouched.
             status["statusCheckRollup"] = self._check_contexts(
-                status.get("headRefOid") or ""
+                status.get("headRefOid") or "",
+                status.get("baseRefName") or self.default_branch(),
             )
         return status
 
-    def _check_contexts(self, sha: str) -> list[dict]:
+    # Conclusions classify_checks treats as non-red; any other COMPLETED
+    # conclusion (stale, startup_failure, future values) normalizes to
+    # FAILURE — an unknown outcome must never read as green.
+    _GREEN_CONCLUSIONS = {"SUCCESS", "SKIPPED", "NEUTRAL", ""}
+    _RED_CONCLUSIONS = {"FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "CANCELLED", "ERROR"}
+
+    def _check_contexts(self, sha: str, base_branch: str) -> list[dict]:
         if not sha:
             raise ForemanError("check contexts: PR has no head SHA — failing closed")
-        contexts: list[dict] = []
+        # The same workflow can run repeatedly on one SHA (open + reopen):
+        # only the newest run per workflow name counts — a superseded
+        # failure must not keep the rollup red.
+        latest: dict[str, dict] = {}
         runs = self.gh.json(
             [
                 "api",
@@ -422,27 +432,80 @@ class GitHub:
         )
         for page in runs or []:
             for wf_run in (page or {}).get("workflow_runs") or []:
+                name = wf_run.get("name") or "workflow"
+                run_id = wf_run.get("id") or 0
+                current = latest.get(name)
+                if current is not None and current["_run_id"] >= run_id:
+                    continue
+                conclusion = (wf_run.get("conclusion") or "").upper()
+                run_status = (wf_run.get("status") or "").upper()
+                if (
+                    run_status == "COMPLETED"
+                    and conclusion not in self._GREEN_CONCLUSIONS
+                    and conclusion not in self._RED_CONCLUSIONS
+                ):
+                    conclusion = "FAILURE"
+                latest[name] = {
+                    "name": name,
+                    "status": run_status,
+                    "conclusion": conclusion,
+                    "detailsUrl": wf_run.get("html_url") or "",
+                    "_run_id": run_id,
+                }
+        contexts: list[dict] = [
+            {k: v for k, v in entry.items() if k != "_run_id"}
+            for entry in latest.values()
+        ]
+        combined = self.gh.json(
+            [
+                "api",
+                f"repos/{self.repo_slug()}/commits/{sha}/status?per_page=100",
+                "--paginate",
+                "--slurp",
+            ]
+        )
+        for page in combined or []:
+            for st in (page or {}).get("statuses") or []:
+                state = (st.get("state") or "").upper()
                 contexts.append(
                     {
-                        "name": wf_run.get("name") or "workflow",
-                        "status": (wf_run.get("status") or "").upper(),
-                        "conclusion": (wf_run.get("conclusion") or "").upper(),
-                        "detailsUrl": wf_run.get("html_url") or "",
+                        "name": st.get("context") or "status",
+                        "status": "PENDING" if state == "PENDING" else "COMPLETED",
+                        "conclusion": "" if state == "PENDING" else state,
+                        "detailsUrl": st.get("target_url") or "",
                     }
                 )
-        combined = self.gh.json(
-            ["api", f"repos/{self.repo_slug()}/commits/{sha}/status"]
+        # Third-party Checks-API contexts are invisible to both sources
+        # above. The branch rules name every REQUIRED context (readable
+        # within the PAT's grant — preflight proves it), so a required
+        # context we cannot observe becomes a PENDING sentinel: the rollup
+        # can be red or pending on its account, never falsely green.
+        observed = {c["name"] for c in contexts}
+        for required in self._required_contexts(base_branch):
+            if required not in observed:
+                contexts.append(
+                    {
+                        "name": f"{required} (required; unobservable via PAT)",
+                        "status": "PENDING",
+                        "conclusion": "",
+                        "detailsUrl": "",
+                    }
+                )
+        return contexts
+
+    def _required_contexts(self, branch: str) -> list[str]:
+        rules = self.gh.json(
+            ["api", f"repos/{self.repo_slug()}/rules/branches/{branch}"]
         )
-        for st in (combined or {}).get("statuses") or []:
-            state = (st.get("state") or "").upper()
-            contexts.append(
-                {
-                    "name": st.get("context") or "status",
-                    "status": "PENDING" if state == "PENDING" else "COMPLETED",
-                    "conclusion": "" if state == "PENDING" else state,
-                    "detailsUrl": st.get("target_url") or "",
-                }
-            )
+        contexts: list[str] = []
+        for rule in rules or []:
+            if (rule or {}).get("type") != "required_status_checks":
+                continue
+            params = rule.get("parameters") or {}
+            for check in params.get("required_status_checks") or []:
+                name = (check or {}).get("context")
+                if name:
+                    contexts.append(name)
         return contexts
 
     def review_threads(self, number: int) -> list[dict]:

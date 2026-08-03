@@ -149,9 +149,10 @@ class DerivedCheckContexts(unittest.TestCase):
             [{"workflow_runs": workflow_runs}],
         )
         runner.when(
-            ["api", "repos/owner/repo/commits/abc123/status"],
-            {"statuses": statuses},
+            ["api", "repos/owner/repo/commits/abc123/status?per_page=100"],
+            [{"statuses": statuses}],
         )
+        runner.when(["api", "repos/owner/repo/rules/branches/main"], [])
         return gh
 
     def test_actions_and_commit_status_synthesize_rollup(self):
@@ -189,3 +190,78 @@ class DerivedCheckContexts(unittest.TestCase):
         self.assertEqual(
             classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "red"
         )
+
+
+class CheckContextEdgeCases(unittest.TestCase):
+    """Round-two hardening of the derived rollup (#89)."""
+
+    def _gh(self, workflow_runs, statuses, rules=None):
+        gh, runner = _mk()
+        runner.when(
+            ["pr", "view", "9"],
+            {"number": 9, "headRefOid": "abc123", "baseRefName": "main"},
+        )
+        runner.when(
+            ["api", "repos/owner/repo/actions/runs?head_sha=abc123&per_page=100"],
+            [{"workflow_runs": workflow_runs}],
+        )
+        runner.when(
+            ["api", "repos/owner/repo/commits/abc123/status?per_page=100"],
+            [{"statuses": statuses}],
+        )
+        runner.when(["api", "repos/owner/repo/rules/branches/main"], rules or [])
+        return gh
+
+    def test_unknown_conclusion_normalizes_to_failure(self):
+        gh = self._gh(
+            [
+                {
+                    "name": "build",
+                    "status": "completed",
+                    "conclusion": "startup_failure",
+                }
+            ],
+            [],
+        )
+        state, failed = classify_checks(gh.pr_status(9)["statusCheckRollup"])
+        self.assertEqual(state, "red")
+        self.assertEqual(failed[0]["conclusion"], "FAILURE")
+
+    def test_superseded_run_is_ignored(self):
+        gh = self._gh(
+            [
+                {
+                    "id": 1,
+                    "name": "build",
+                    "status": "completed",
+                    "conclusion": "failure",
+                },
+                {
+                    "id": 2,
+                    "name": "build",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+            ],
+            [],
+        )
+        self.assertEqual(
+            classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "green"
+        )
+
+    def test_missing_required_context_is_pending_never_green(self):
+        gh = self._gh(
+            [{"name": "build", "status": "completed", "conclusion": "success"}],
+            [],
+            rules=[
+                {
+                    "type": "required_status_checks",
+                    "parameters": {
+                        "required_status_checks": [{"context": "third-party/scan"}]
+                    },
+                }
+            ],
+        )
+        rollup = gh.pr_status(9)["statusCheckRollup"]
+        self.assertEqual(classify_checks(rollup)[0], "pending")
+        self.assertTrue(any("third-party/scan" in c["name"] for c in rollup))
