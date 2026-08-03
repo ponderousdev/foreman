@@ -160,14 +160,17 @@ class DerivedCheckContexts(unittest.TestCase):
                     }
                 ]
             runner.when(
-                ["api", f"repos/owner/repo/actions/runs/{rid}/jobs?per_page=100"],
+                [
+                    "api",
+                    f"repos/owner/repo/actions/runs/{rid}/jobs?filter=all&per_page=100",
+                ],
                 [{"jobs": jobs}],
             )
         runner.when(
             ["api", "repos/owner/repo/commits/abc123/status?per_page=100"],
             [{"statuses": statuses}],
         )
-        runner.when(["api", "repos/owner/repo/rules/branches/main"], [])
+        runner.when(["api", "repos/owner/repo/rules/branches/main?per_page=100"], [[]])
         return gh
 
     def test_actions_and_commit_status_synthesize_rollup(self):
@@ -232,14 +235,20 @@ class CheckContextEdgeCases(unittest.TestCase):
                     }
                 ]
             runner.when(
-                ["api", f"repos/owner/repo/actions/runs/{rid}/jobs?per_page=100"],
+                [
+                    "api",
+                    f"repos/owner/repo/actions/runs/{rid}/jobs?filter=all&per_page=100",
+                ],
                 [{"jobs": jobs}],
             )
         runner.when(
             ["api", "repos/owner/repo/commits/abc123/status?per_page=100"],
             [{"statuses": statuses}],
         )
-        runner.when(["api", "repos/owner/repo/rules/branches/main"], rules or [])
+        runner.when(
+            ["api", "repos/owner/repo/rules/branches/main?per_page=100"],
+            [rules or []],
+        )
         return gh
 
     def test_unknown_conclusion_normalizes_to_failure(self):
@@ -364,4 +373,69 @@ class JobGranularity(unittest.TestCase):
         )
         self.assertEqual(
             classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "red"
+        )
+
+
+class IntegrationBoundRequirements(unittest.TestCase):
+    """#89 round four: a required check bound to an integration is not
+    satisfied by a same-named observation from another source."""
+
+    _gh = CheckContextEdgeCases._gh
+
+    def test_status_context_cannot_satisfy_actions_bound_requirement(self):
+        gh = self._gh(
+            [],
+            [{"context": "verify", "state": "success"}],
+            rules=[
+                {
+                    "type": "required_status_checks",
+                    "parameters": {
+                        "required_status_checks": [
+                            {"context": "verify", "integration_id": 15368}
+                        ]
+                    },
+                }
+            ],
+        )
+        rollup = gh.pr_status(9)["statusCheckRollup"]
+        self.assertEqual(classify_checks(rollup)[0], "pending")
+        self.assertTrue(any("unobservable" in c["name"] for c in rollup))
+
+    def test_partial_rerun_keeps_prior_successful_jobs(self):
+        gh = self._gh(
+            [
+                {
+                    "id": 7,
+                    "name": "Build & Validate",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "jobs": [
+                        {
+                            "name": "verify",
+                            "status": "completed",
+                            "conclusion": "success",
+                            "run_attempt": 1,
+                            "id": 11,
+                        },
+                        {
+                            "name": "security",
+                            "status": "completed",
+                            "conclusion": "failure",
+                            "run_attempt": 1,
+                            "id": 12,
+                        },
+                        {
+                            "name": "security",
+                            "status": "completed",
+                            "conclusion": "success",
+                            "run_attempt": 2,
+                            "id": 20,
+                        },
+                    ],
+                }
+            ],
+            [],
+        )
+        self.assertEqual(
+            classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "green"
         )

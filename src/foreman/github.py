@@ -29,6 +29,10 @@ Runner = Callable[[list[str], str | None], tuple[int, str, str]]
 
 STATUS_MARKER = "<!-- foreman:unit-status -->"
 
+# GitHub Actions' own App id — stable and public. Required checks bound to
+# this integration are satisfiable only by Actions job observations.
+_ACTIONS_APP_ID = 15368
+
 # Labels foreman idempotently ensures and is allowed to apply to its own PRs.
 FOREMAN_LABELS = {
     "foreman-dispatched": ("1D76DB", "PR opened by foreman for a dispatched unit"),
@@ -449,20 +453,30 @@ class GitHub:
             # Required-status-check contexts name Actions JOBS, not the
             # workflow display name ("verify"/"security" vs "Build &
             # Validate") — and classification belongs at job granularity.
+            # filter=all: a partial "re-run failed jobs" reuses the run id
+            # and the default (latest attempt) omits previously successful
+            # jobs — fetch every attempt and keep the newest per job name.
             jobs_pages = self.gh.json(
                 [
                     "api",
                     f"repos/{self.repo_slug()}/actions/runs/"
-                    f"{wf_run.get('id') or 0}/jobs?per_page=100",
+                    f"{wf_run.get('id') or 0}/jobs?filter=all&per_page=100",
                     "--paginate",
                     "--slurp",
                 ]
             )
-            jobs = [
-                job
-                for page in jobs_pages or []
-                for job in (page or {}).get("jobs") or []
-            ]
+            best_jobs: dict[str, dict] = {}
+            for page in jobs_pages or []:
+                for job in (page or {}).get("jobs") or []:
+                    name = job.get("name") or "job"
+                    rank = (job.get("run_attempt") or 0, job.get("id") or 0)
+                    held = best_jobs.get(name)
+                    if held is None or rank > (
+                        held.get("run_attempt") or 0,
+                        held.get("id") or 0,
+                    ):
+                        best_jobs[name] = job
+            jobs = list(best_jobs.values())
             if not jobs:
                 # Queued run with no jobs yet: a workflow-level pending row.
                 contexts.append(
@@ -474,6 +488,7 @@ class GitHub:
                             (wf_run.get("conclusion") or "").upper(),
                         ),
                         "detailsUrl": wf_run.get("html_url") or "",
+                        "_source": "actions",
                     }
                 )
                 continue
@@ -487,6 +502,7 @@ class GitHub:
                             job_status, (job.get("conclusion") or "").upper()
                         ),
                         "detailsUrl": job.get("html_url") or "",
+                        "_source": "actions",
                     }
                 )
         combined = self.gh.json(
@@ -506,24 +522,41 @@ class GitHub:
                         "status": "PENDING" if state == "PENDING" else "COMPLETED",
                         "conclusion": "" if state == "PENDING" else state,
                         "detailsUrl": st.get("target_url") or "",
+                        "_source": "commit-status",
                     }
                 )
         # Third-party Checks-API contexts are invisible to both sources
-        # above. The branch rules name every REQUIRED context (readable
-        # within the PAT's grant — preflight proves it), so a required
-        # context we cannot observe becomes a PENDING sentinel: the rollup
-        # can be red or pending on its account, never falsely green.
-        observed = {c["name"] for c in contexts}
-        for required in self._required_contexts(base_branch):
-            if required not in observed:
+        # above, and a required context may be BOUND to an integration
+        # (integration_id): a same-named legacy status or foreign check
+        # must not satisfy it. Actions-bound requirements accept only
+        # Actions job observations; other-integration requirements are
+        # always unobservable; unbound requirements accept either source.
+        # Anything unsatisfied becomes a PENDING sentinel — the rollup can
+        # be red or pending on its account, never falsely green.
+        job_names = {c["name"] for c in contexts if c.get("_source") == "actions"}
+        status_names = {
+            c["name"] for c in contexts if c.get("_source") == "commit-status"
+        }
+        for req in self._required_contexts(base_branch):
+            name = req["context"]
+            integration = req.get("integration_id")
+            if integration is None:
+                satisfied = name in job_names or name in status_names
+            elif integration == _ACTIONS_APP_ID:
+                satisfied = name in job_names
+            else:
+                satisfied = False
+            if not satisfied:
                 contexts.append(
                     {
-                        "name": f"{required} (required; unobservable via PAT)",
+                        "name": f"{name} (required; unobservable via PAT)",
                         "status": "PENDING",
                         "conclusion": "",
                         "detailsUrl": "",
                     }
                 )
+        for context in contexts:
+            context.pop("_source", None)
         return contexts
 
     def _normalize_conclusion(self, status: str, conclusion: str) -> str:
@@ -535,19 +568,30 @@ class GitHub:
             return "FAILURE"
         return conclusion
 
-    def _required_contexts(self, branch: str) -> list[str]:
-        rules = self.gh.json(
-            ["api", f"repos/{self.repo_slug()}/rules/branches/{branch}"]
+    def _required_contexts(self, branch: str) -> list[dict]:
+        pages = self.gh.json(
+            [
+                "api",
+                f"repos/{self.repo_slug()}/rules/branches/{branch}?per_page=100",
+                "--paginate",
+                "--slurp",
+            ]
         )
-        contexts: list[str] = []
-        for rule in rules or []:
-            if (rule or {}).get("type") != "required_status_checks":
-                continue
-            params = rule.get("parameters") or {}
-            for check in params.get("required_status_checks") or []:
-                name = (check or {}).get("context")
-                if name:
-                    contexts.append(name)
+        contexts: list[dict] = []
+        for page in pages or []:
+            for rule in page or []:
+                if (rule or {}).get("type") != "required_status_checks":
+                    continue
+                params = rule.get("parameters") or {}
+                for check in params.get("required_status_checks") or []:
+                    name = (check or {}).get("context")
+                    if name:
+                        contexts.append(
+                            {
+                                "context": name,
+                                "integration_id": (check or {}).get("integration_id"),
+                            }
+                        )
         return contexts
 
     def review_threads(self, number: int) -> list[dict]:
