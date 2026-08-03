@@ -439,3 +439,164 @@ class IntegrationBoundRequirements(unittest.TestCase):
         self.assertEqual(
             classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "green"
         )
+
+
+class RunAttemptAndIdentity(unittest.TestCase):
+    """#89 round four: run status is authoritative during reruns, workflow
+    identity is the stable workflow_id, same-attempt name collisions are
+    retained, and a red run never launders green through job filtering."""
+
+    _gh = CheckContextEdgeCases._gh
+
+    def test_rerunning_workflow_masks_prior_attempt_jobs(self):
+        # filter=all serves attempt-1 jobs while attempt 2 is in flight;
+        # neither their stale green nor stale red may leak.
+        for stale in ("success", "failure"):
+            gh = self._gh(
+                [
+                    {
+                        "id": 7,
+                        "name": "CI",
+                        "status": "in_progress",
+                        "conclusion": None,
+                        "jobs": [
+                            {
+                                "name": "verify",
+                                "status": "completed",
+                                "conclusion": stale,
+                                "run_attempt": 1,
+                                "id": 11,
+                            }
+                        ],
+                    }
+                ],
+                [],
+            )
+            self.assertEqual(
+                classify_checks(gh.pr_status(9)["statusCheckRollup"])[0],
+                "pending",
+                f"stale {stale} attempt-1 job leaked through a live rerun",
+            )
+
+    def test_same_display_name_distinct_workflow_files_both_count(self):
+        gh = self._gh(
+            [
+                {
+                    "id": 5,
+                    "workflow_id": 200,
+                    "name": "CI",
+                    "event": "push",
+                    "status": "completed",
+                    "conclusion": "failure",
+                },
+                {
+                    "id": 9,
+                    "workflow_id": 100,
+                    "name": "CI",
+                    "event": "push",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+            ],
+            [],
+        )
+        self.assertEqual(
+            classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "red"
+        )
+
+    def test_same_attempt_name_collision_keeps_the_red_sibling(self):
+        gh = self._gh(
+            [
+                {
+                    "id": 7,
+                    "name": "CI",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "jobs": [
+                        {
+                            "name": "build",
+                            "status": "completed",
+                            "conclusion": "success",
+                            "run_attempt": 1,
+                            "id": 10,
+                        },
+                        {
+                            "name": "build",
+                            "status": "completed",
+                            "conclusion": "failure",
+                            "run_attempt": 1,
+                            "id": 11,
+                        },
+                    ],
+                }
+            ],
+            [],
+        )
+        self.assertEqual(
+            classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "red"
+        )
+
+    def test_red_run_with_green_visible_jobs_stays_red(self):
+        # The failing job fell outside the attempt view; the run verdict wins.
+        gh = self._gh(
+            [
+                {
+                    "id": 7,
+                    "name": "CI",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "jobs": [
+                        {
+                            "name": "build",
+                            "status": "completed",
+                            "conclusion": "success",
+                            "run_attempt": 2,
+                            "id": 20,
+                        }
+                    ],
+                }
+            ],
+            [],
+        )
+        self.assertEqual(
+            classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "red"
+        )
+
+
+class MergeStateAndBranchEncoding(unittest.TestCase):
+    """#89 round four: UNSTABLE surfaces invisible optional-check failures,
+    and slash-containing base branches reach the rules endpoint encoded."""
+
+    def test_unstable_merge_state_never_classifies_green(self):
+        gh, runner = _mk()
+        runner.when(
+            ["pr", "view", "9"],
+            {
+                "number": 9,
+                "headRefOid": "abc123",
+                "baseRefName": "main",
+                "mergeStateStatus": "UNSTABLE",
+            },
+        )
+        runner.when(
+            ["api", "repos/owner/repo/actions/runs?head_sha=abc123&per_page=100"],
+            [{"workflow_runs": []}],
+        )
+        runner.when(
+            ["api", "repos/owner/repo/commits/abc123/status?per_page=100"],
+            [{"statuses": [{"context": "lint", "state": "success"}]}],
+        )
+        runner.when(["api", "repos/owner/repo/rules/branches/main?per_page=100"], [[]])
+        rollup = gh.pr_status(9)["statusCheckRollup"]
+        self.assertEqual(classify_checks(rollup)[0], "pending")
+        self.assertTrue(any("UNSTABLE" in c["name"] for c in rollup))
+
+    def test_slash_branch_is_encoded_in_rules_path(self):
+        gh, runner = _mk()
+        # FakeRunner raises on any unexpected argv: passing proves the
+        # branch rode the path as one percent-encoded segment.
+        runner.when(
+            ["api", "repos/owner/repo/rules/branches/release%2F2.x?per_page=100"],
+            [[]],
+        )
+        self.assertEqual(gh._required_contexts("release/2.x"), [])

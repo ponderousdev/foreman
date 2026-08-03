@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Callable
+from urllib.parse import quote
 
 from foreman.config import Config
 from foreman.util import ForemanError, run
@@ -411,6 +412,22 @@ class GitHub:
                 status.get("headRefOid") or "",
                 status.get("baseRefName") or self.default_branch(),
             )
+            if (status.get("mergeStateStatus") or "").upper() == "UNSTABLE":
+                # UNSTABLE = some non-passing check that is not required.
+                # A failing third-party Checks-API run is invisible to both
+                # derived sources and earns no required-context sentinel, so
+                # GitHub's own verdict is the only signal — surface it as a
+                # pending row: never green (no ready-to-merge), never red
+                # (no fixer agent chasing a check the PAT cannot see).
+                status["statusCheckRollup"].append(
+                    {
+                        "name": "non-required checks "
+                        "(mergeStateStatus UNSTABLE; unobservable via PAT)",
+                        "status": "PENDING",
+                        "conclusion": "",
+                        "detailsUrl": "",
+                    }
+                )
         return status
 
     # Conclusions classify_checks treats as non-red; any other COMPLETED
@@ -438,8 +455,10 @@ class GitHub:
         )
         for page in runs or []:
             for wf_run in (page or {}).get("workflow_runs") or []:
+                # workflow_id is the stable identity; two workflow FILES can
+                # share a display name, and merging them would drop one.
                 key = (
-                    wf_run.get("name") or "workflow",
+                    wf_run.get("workflow_id") or wf_run.get("name") or "workflow",
                     wf_run.get("event") or "",
                 )
                 current = latest.get(key)
@@ -450,12 +469,31 @@ class GitHub:
                 latest[key] = wf_run
         contexts: list[dict] = []
         for wf_run in latest.values():
+            wf_status = (wf_run.get("status") or "").upper()
+            if wf_status != "COMPLETED":
+                # The run status is authoritative. While a run is queued or
+                # re-running, filter=all still returns prior-attempt jobs
+                # whose stale green would mask the rerun (and whose stale
+                # red would bait a redundant fixer) — so a non-completed
+                # run contributes exactly one pending row and no jobs.
+                contexts.append(
+                    {
+                        "name": wf_run.get("name") or "workflow",
+                        "status": wf_status,
+                        "conclusion": "",
+                        "detailsUrl": wf_run.get("html_url") or "",
+                        "_source": "actions",
+                    }
+                )
+                continue
             # Required-status-check contexts name Actions JOBS, not the
             # workflow display name ("verify"/"security" vs "Build &
             # Validate") — and classification belongs at job granularity.
             # filter=all: a partial "re-run failed jobs" reuses the run id
             # and the default (latest attempt) omits previously successful
-            # jobs — fetch every attempt and keep the newest per job name.
+            # jobs. Jobs group by name; the whole group at the newest
+            # attempt survives, so same-named siblings WITHIN an attempt
+            # are all retained while superseded attempts are replaced.
             jobs_pages = self.gh.json(
                 [
                     "api",
@@ -465,43 +503,57 @@ class GitHub:
                     "--slurp",
                 ]
             )
-            best_jobs: dict[str, dict] = {}
+            groups: dict[str, list[dict]] = {}
             for page in jobs_pages or []:
                 for job in (page or {}).get("jobs") or []:
-                    name = job.get("name") or "job"
-                    rank = (job.get("run_attempt") or 0, job.get("id") or 0)
-                    held = best_jobs.get(name)
-                    if held is None or rank > (
-                        held.get("run_attempt") or 0,
-                        held.get("id") or 0,
-                    ):
-                        best_jobs[name] = job
-            jobs = list(best_jobs.values())
+                    groups.setdefault(job.get("name") or "job", []).append(job)
+            jobs: list[dict] = []
+            for group in groups.values():
+                top = max((j.get("run_attempt") or 0) for j in group)
+                jobs.extend(j for j in group if (j.get("run_attempt") or 0) == top)
+            run_conclusion = self._normalize_conclusion(
+                "COMPLETED", (wf_run.get("conclusion") or "").upper()
+            )
             if not jobs:
-                # Queued run with no jobs yet: a workflow-level pending row.
                 contexts.append(
                     {
                         "name": wf_run.get("name") or "workflow",
-                        "status": (wf_run.get("status") or "").upper(),
-                        "conclusion": self._normalize_conclusion(
-                            (wf_run.get("status") or "").upper(),
-                            (wf_run.get("conclusion") or "").upper(),
-                        ),
+                        "status": wf_status,
+                        "conclusion": run_conclusion,
                         "detailsUrl": wf_run.get("html_url") or "",
                         "_source": "actions",
                     }
                 )
                 continue
+            any_red = False
             for job in jobs:
                 job_status = (job.get("status") or "").upper()
+                conclusion = self._normalize_conclusion(
+                    job_status, (job.get("conclusion") or "").upper()
+                )
+                if conclusion in self._RED_CONCLUSIONS:
+                    any_red = True
                 contexts.append(
                     {
                         "name": job.get("name") or "job",
                         "status": job_status,
-                        "conclusion": self._normalize_conclusion(
-                            job_status, (job.get("conclusion") or "").upper()
-                        ),
+                        "conclusion": conclusion,
                         "detailsUrl": job.get("html_url") or "",
+                        "_source": "actions",
+                    }
+                )
+            if run_conclusion in self._RED_CONCLUSIONS and not any_red:
+                # Backstop: the run itself concluded red but every job we
+                # retained reads green — some failing job fell outside the
+                # attempt view (e.g. a same-named sibling whose twin was
+                # individually re-run). The run verdict wins; never let
+                # job filtering launder a red run into a green rollup.
+                contexts.append(
+                    {
+                        "name": wf_run.get("name") or "workflow",
+                        "status": wf_status,
+                        "conclusion": run_conclusion,
+                        "detailsUrl": wf_run.get("html_url") or "",
                         "_source": "actions",
                     }
                 )
@@ -572,7 +624,8 @@ class GitHub:
         pages = self.gh.json(
             [
                 "api",
-                f"repos/{self.repo_slug()}/rules/branches/{branch}?per_page=100",
+                f"repos/{self.repo_slug()}/rules/branches/"
+                f"{quote(branch, safe='')}?per_page=100",
                 "--paginate",
                 "--slurp",
             ]
