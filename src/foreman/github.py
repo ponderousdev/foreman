@@ -418,10 +418,12 @@ class GitHub:
     def _check_contexts(self, sha: str, base_branch: str) -> list[dict]:
         if not sha:
             raise ForemanError("check contexts: PR has no head SHA — failing closed")
-        # The same workflow can run repeatedly on one SHA (open + reopen):
-        # only the newest run per workflow name counts — a superseded
-        # failure must not keep the rollup red.
-        latest: dict[str, dict] = {}
+        # The same workflow can run repeatedly on one SHA: dedupe by
+        # (workflow name, triggering event) keeping the newest run —
+        # a superseded failure must not hold the rollup red, while a
+        # manual workflow_dispatch must not displace the pull_request
+        # suite (they are distinct check identities).
+        latest: dict[tuple[str, str], dict] = {}
         runs = self.gh.json(
             [
                 "api",
@@ -432,30 +434,61 @@ class GitHub:
         )
         for page in runs or []:
             for wf_run in (page or {}).get("workflow_runs") or []:
-                name = wf_run.get("name") or "workflow"
-                run_id = wf_run.get("id") or 0
-                current = latest.get(name)
-                if current is not None and current["_run_id"] >= run_id:
-                    continue
-                conclusion = (wf_run.get("conclusion") or "").upper()
-                run_status = (wf_run.get("status") or "").upper()
-                if (
-                    run_status == "COMPLETED"
-                    and conclusion not in self._GREEN_CONCLUSIONS
-                    and conclusion not in self._RED_CONCLUSIONS
+                key = (
+                    wf_run.get("name") or "workflow",
+                    wf_run.get("event") or "",
+                )
+                current = latest.get(key)
+                if current is not None and (current.get("id") or 0) >= (
+                    wf_run.get("id") or 0
                 ):
-                    conclusion = "FAILURE"
-                latest[name] = {
-                    "name": name,
-                    "status": run_status,
-                    "conclusion": conclusion,
-                    "detailsUrl": wf_run.get("html_url") or "",
-                    "_run_id": run_id,
-                }
-        contexts: list[dict] = [
-            {k: v for k, v in entry.items() if k != "_run_id"}
-            for entry in latest.values()
-        ]
+                    continue
+                latest[key] = wf_run
+        contexts: list[dict] = []
+        for wf_run in latest.values():
+            # Required-status-check contexts name Actions JOBS, not the
+            # workflow display name ("verify"/"security" vs "Build &
+            # Validate") — and classification belongs at job granularity.
+            jobs_pages = self.gh.json(
+                [
+                    "api",
+                    f"repos/{self.repo_slug()}/actions/runs/"
+                    f"{wf_run.get('id') or 0}/jobs?per_page=100",
+                    "--paginate",
+                    "--slurp",
+                ]
+            )
+            jobs = [
+                job
+                for page in jobs_pages or []
+                for job in (page or {}).get("jobs") or []
+            ]
+            if not jobs:
+                # Queued run with no jobs yet: a workflow-level pending row.
+                contexts.append(
+                    {
+                        "name": wf_run.get("name") or "workflow",
+                        "status": (wf_run.get("status") or "").upper(),
+                        "conclusion": self._normalize_conclusion(
+                            (wf_run.get("status") or "").upper(),
+                            (wf_run.get("conclusion") or "").upper(),
+                        ),
+                        "detailsUrl": wf_run.get("html_url") or "",
+                    }
+                )
+                continue
+            for job in jobs:
+                job_status = (job.get("status") or "").upper()
+                contexts.append(
+                    {
+                        "name": job.get("name") or "job",
+                        "status": job_status,
+                        "conclusion": self._normalize_conclusion(
+                            job_status, (job.get("conclusion") or "").upper()
+                        ),
+                        "detailsUrl": job.get("html_url") or "",
+                    }
+                )
         combined = self.gh.json(
             [
                 "api",
@@ -492,6 +525,15 @@ class GitHub:
                     }
                 )
         return contexts
+
+    def _normalize_conclusion(self, status: str, conclusion: str) -> str:
+        if (
+            status == "COMPLETED"
+            and conclusion not in self._GREEN_CONCLUSIONS
+            and conclusion not in self._RED_CONCLUSIONS
+        ):
+            return "FAILURE"
+        return conclusion
 
     def _required_contexts(self, branch: str) -> list[str]:
         rules = self.gh.json(

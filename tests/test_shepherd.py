@@ -148,6 +148,21 @@ class DerivedCheckContexts(unittest.TestCase):
             ["api", "repos/owner/repo/actions/runs?head_sha=abc123&per_page=100"],
             [{"workflow_runs": workflow_runs}],
         )
+        for wf in workflow_runs:
+            rid = wf.get("id", 0)
+            jobs = wf.get("jobs")
+            if jobs is None:
+                jobs = [
+                    {
+                        "name": wf.get("name"),
+                        "status": wf.get("status"),
+                        "conclusion": wf.get("conclusion"),
+                    }
+                ]
+            runner.when(
+                ["api", f"repos/owner/repo/actions/runs/{rid}/jobs?per_page=100"],
+                [{"jobs": jobs}],
+            )
         runner.when(
             ["api", "repos/owner/repo/commits/abc123/status?per_page=100"],
             [{"statuses": statuses}],
@@ -205,6 +220,21 @@ class CheckContextEdgeCases(unittest.TestCase):
             ["api", "repos/owner/repo/actions/runs?head_sha=abc123&per_page=100"],
             [{"workflow_runs": workflow_runs}],
         )
+        for wf in workflow_runs:
+            rid = wf.get("id", 0)
+            jobs = wf.get("jobs")
+            if jobs is None:
+                jobs = [
+                    {
+                        "name": wf.get("name"),
+                        "status": wf.get("status"),
+                        "conclusion": wf.get("conclusion"),
+                    }
+                ]
+            runner.when(
+                ["api", f"repos/owner/repo/actions/runs/{rid}/jobs?per_page=100"],
+                [{"jobs": jobs}],
+            )
         runner.when(
             ["api", "repos/owner/repo/commits/abc123/status?per_page=100"],
             [{"statuses": statuses}],
@@ -265,3 +295,73 @@ class CheckContextEdgeCases(unittest.TestCase):
         rollup = gh.pr_status(9)["statusCheckRollup"]
         self.assertEqual(classify_checks(rollup)[0], "pending")
         self.assertTrue(any("third-party/scan" in c["name"] for c in rollup))
+
+
+class JobGranularity(unittest.TestCase):
+    """#89 round three: required contexts name Actions JOBS, and
+    event-distinct runs are separate check identities."""
+
+    _gh = CheckContextEdgeCases._gh
+
+    def test_required_context_matches_job_name(self):
+        gh = self._gh(
+            [
+                {
+                    "id": 5,
+                    "name": "Build & Validate",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "jobs": [
+                        {
+                            "name": "verify",
+                            "status": "completed",
+                            "conclusion": "success",
+                        },
+                        {
+                            "name": "security",
+                            "status": "completed",
+                            "conclusion": "success",
+                        },
+                    ],
+                }
+            ],
+            [],
+            rules=[
+                {
+                    "type": "required_status_checks",
+                    "parameters": {
+                        "required_status_checks": [
+                            {"context": "verify"},
+                            {"context": "security"},
+                        ]
+                    },
+                }
+            ],
+        )
+        rollup = gh.pr_status(9)["statusCheckRollup"]
+        self.assertEqual(classify_checks(rollup)[0], "green")
+        self.assertFalse(any("unobservable" in c["name"] for c in rollup))
+
+    def test_event_distinct_runs_both_count(self):
+        gh = self._gh(
+            [
+                {
+                    "id": 1,
+                    "name": "Build & Validate",
+                    "event": "pull_request",
+                    "status": "completed",
+                    "conclusion": "failure",
+                },
+                {
+                    "id": 2,
+                    "name": "Build & Validate",
+                    "event": "workflow_dispatch",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+            ],
+            [],
+        )
+        self.assertEqual(
+            classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "red"
+        )
