@@ -8,6 +8,7 @@ from foreman import signatures as signatures_mod
 from foreman.shepherd import classify_checks
 from foreman.util import ForemanError
 from tests.fakes import make_github
+from tests.fakes import make_github as _mk
 
 
 class ReviewThreadReads(unittest.TestCase):
@@ -131,3 +132,471 @@ class SignatureCatalog(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DerivedCheckContexts(unittest.TestCase):
+    """#89: fine-grained PATs cannot read the GraphQL rollup; CI state is
+    derived from Actions runs + combined commit status, in rollup shape."""
+
+    def _gh(self, workflow_runs, statuses):
+        gh, runner = _mk()
+        runner.when(
+            ["pr", "view", "9"],
+            {"number": 9, "headRefOid": "abc123", "labels": []},
+        )
+        runner.when(
+            ["api", "repos/owner/repo/actions/runs?head_sha=abc123&per_page=100"],
+            [{"workflow_runs": workflow_runs}],
+        )
+        for wf in workflow_runs:
+            rid = wf.get("id", 0)
+            jobs = wf.get("jobs")
+            if jobs is None:
+                jobs = [
+                    {
+                        "name": wf.get("name"),
+                        "status": wf.get("status"),
+                        "conclusion": wf.get("conclusion"),
+                    }
+                ]
+            runner.when(
+                [
+                    "api",
+                    f"repos/owner/repo/actions/runs/{rid}/jobs?filter=all&per_page=100",
+                ],
+                [{"jobs": jobs}],
+            )
+        runner.when(
+            ["api", "repos/owner/repo/commits/abc123/status?per_page=100"],
+            [{"statuses": statuses}],
+        )
+        runner.when(["api", "repos/owner/repo/rules/branches/main?per_page=100"], [[]])
+        return gh
+
+    def test_actions_and_commit_status_synthesize_rollup(self):
+        gh = self._gh(
+            [
+                {"name": "build", "status": "completed", "conclusion": "success"},
+                {"name": "e2e", "status": "in_progress", "conclusion": None},
+            ],
+            [{"context": "vendor/scan", "state": "failure"}],
+        )
+        rollup = gh.pr_status(9)["statusCheckRollup"]
+        state, failed = classify_checks(rollup)
+        self.assertEqual(state, "red")
+        self.assertEqual([f["name"] for f in failed], ["vendor/scan"])
+
+    def test_all_green_and_pending_bucketing(self):
+        gh = self._gh(
+            [{"name": "build", "status": "completed", "conclusion": "success"}],
+            [],
+        )
+        self.assertEqual(
+            classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "green"
+        )
+        gh = self._gh([{"name": "build", "status": "queued", "conclusion": None}], [])
+        self.assertEqual(
+            classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "pending"
+        )
+
+    def test_fixture_supplied_rollup_is_honored(self):
+        gh, runner = _mk()
+        runner.when(
+            ["pr", "view", "9"],
+            {"number": 9, "statusCheckRollup": [{"conclusion": "FAILURE"}]},
+        )
+        self.assertEqual(
+            classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "red"
+        )
+
+
+class CheckContextEdgeCases(unittest.TestCase):
+    """Round-two hardening of the derived rollup (#89)."""
+
+    def _gh(self, workflow_runs, statuses, rules=None):
+        gh, runner = _mk()
+        runner.when(
+            ["pr", "view", "9"],
+            {"number": 9, "headRefOid": "abc123", "baseRefName": "main"},
+        )
+        runner.when(
+            ["api", "repos/owner/repo/actions/runs?head_sha=abc123&per_page=100"],
+            [{"workflow_runs": workflow_runs}],
+        )
+        for wf in workflow_runs:
+            rid = wf.get("id", 0)
+            jobs = wf.get("jobs")
+            if jobs is None:
+                jobs = [
+                    {
+                        "name": wf.get("name"),
+                        "status": wf.get("status"),
+                        "conclusion": wf.get("conclusion"),
+                    }
+                ]
+            runner.when(
+                [
+                    "api",
+                    f"repos/owner/repo/actions/runs/{rid}/jobs?filter=all&per_page=100",
+                ],
+                [{"jobs": jobs}],
+            )
+        runner.when(
+            ["api", "repos/owner/repo/commits/abc123/status?per_page=100"],
+            [{"statuses": statuses}],
+        )
+        runner.when(
+            ["api", "repos/owner/repo/rules/branches/main?per_page=100"],
+            [rules or []],
+        )
+        return gh
+
+    def test_unknown_conclusion_normalizes_to_failure(self):
+        gh = self._gh(
+            [
+                {
+                    "name": "build",
+                    "status": "completed",
+                    "conclusion": "startup_failure",
+                }
+            ],
+            [],
+        )
+        state, failed = classify_checks(gh.pr_status(9)["statusCheckRollup"])
+        self.assertEqual(state, "red")
+        self.assertEqual(failed[0]["conclusion"], "FAILURE")
+
+    def test_superseded_run_is_ignored(self):
+        gh = self._gh(
+            [
+                {
+                    "id": 1,
+                    "name": "build",
+                    "status": "completed",
+                    "conclusion": "failure",
+                },
+                {
+                    "id": 2,
+                    "name": "build",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+            ],
+            [],
+        )
+        self.assertEqual(
+            classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "green"
+        )
+
+    def test_missing_required_context_is_pending_never_green(self):
+        gh = self._gh(
+            [{"name": "build", "status": "completed", "conclusion": "success"}],
+            [],
+            rules=[
+                {
+                    "type": "required_status_checks",
+                    "parameters": {
+                        "required_status_checks": [{"context": "third-party/scan"}]
+                    },
+                }
+            ],
+        )
+        rollup = gh.pr_status(9)["statusCheckRollup"]
+        self.assertEqual(classify_checks(rollup)[0], "pending")
+        self.assertTrue(any("third-party/scan" in c["name"] for c in rollup))
+
+
+class JobGranularity(unittest.TestCase):
+    """#89 round three: required contexts name Actions JOBS, and
+    event-distinct runs are separate check identities."""
+
+    _gh = CheckContextEdgeCases._gh
+
+    def test_required_context_matches_job_name(self):
+        gh = self._gh(
+            [
+                {
+                    "id": 5,
+                    "name": "Build & Validate",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "jobs": [
+                        {
+                            "name": "verify",
+                            "status": "completed",
+                            "conclusion": "success",
+                        },
+                        {
+                            "name": "security",
+                            "status": "completed",
+                            "conclusion": "success",
+                        },
+                    ],
+                }
+            ],
+            [],
+            rules=[
+                {
+                    "type": "required_status_checks",
+                    "parameters": {
+                        "required_status_checks": [
+                            {"context": "verify"},
+                            {"context": "security"},
+                        ]
+                    },
+                }
+            ],
+        )
+        rollup = gh.pr_status(9)["statusCheckRollup"]
+        self.assertEqual(classify_checks(rollup)[0], "green")
+        self.assertFalse(any("unobservable" in c["name"] for c in rollup))
+
+    def test_event_distinct_runs_both_count(self):
+        gh = self._gh(
+            [
+                {
+                    "id": 1,
+                    "name": "Build & Validate",
+                    "event": "pull_request",
+                    "status": "completed",
+                    "conclusion": "failure",
+                },
+                {
+                    "id": 2,
+                    "name": "Build & Validate",
+                    "event": "workflow_dispatch",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+            ],
+            [],
+        )
+        self.assertEqual(
+            classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "red"
+        )
+
+
+class IntegrationBoundRequirements(unittest.TestCase):
+    """#89 round four: a required check bound to an integration is not
+    satisfied by a same-named observation from another source."""
+
+    _gh = CheckContextEdgeCases._gh
+
+    def test_status_context_cannot_satisfy_actions_bound_requirement(self):
+        gh = self._gh(
+            [],
+            [{"context": "verify", "state": "success"}],
+            rules=[
+                {
+                    "type": "required_status_checks",
+                    "parameters": {
+                        "required_status_checks": [
+                            {"context": "verify", "integration_id": 15368}
+                        ]
+                    },
+                }
+            ],
+        )
+        rollup = gh.pr_status(9)["statusCheckRollup"]
+        self.assertEqual(classify_checks(rollup)[0], "pending")
+        self.assertTrue(any("unobservable" in c["name"] for c in rollup))
+
+    def test_partial_rerun_keeps_prior_successful_jobs(self):
+        gh = self._gh(
+            [
+                {
+                    "id": 7,
+                    "name": "Build & Validate",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "jobs": [
+                        {
+                            "name": "verify",
+                            "status": "completed",
+                            "conclusion": "success",
+                            "run_attempt": 1,
+                            "id": 11,
+                        },
+                        {
+                            "name": "security",
+                            "status": "completed",
+                            "conclusion": "failure",
+                            "run_attempt": 1,
+                            "id": 12,
+                        },
+                        {
+                            "name": "security",
+                            "status": "completed",
+                            "conclusion": "success",
+                            "run_attempt": 2,
+                            "id": 20,
+                        },
+                    ],
+                }
+            ],
+            [],
+        )
+        self.assertEqual(
+            classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "green"
+        )
+
+
+class RunAttemptAndIdentity(unittest.TestCase):
+    """#89 round four: run status is authoritative during reruns, workflow
+    identity is the stable workflow_id, same-attempt name collisions are
+    retained, and a red run never launders green through job filtering."""
+
+    _gh = CheckContextEdgeCases._gh
+
+    def test_rerunning_workflow_masks_prior_attempt_jobs(self):
+        # filter=all serves attempt-1 jobs while attempt 2 is in flight;
+        # neither their stale green nor stale red may leak.
+        for stale in ("success", "failure"):
+            gh = self._gh(
+                [
+                    {
+                        "id": 7,
+                        "name": "CI",
+                        "status": "in_progress",
+                        "conclusion": None,
+                        "jobs": [
+                            {
+                                "name": "verify",
+                                "status": "completed",
+                                "conclusion": stale,
+                                "run_attempt": 1,
+                                "id": 11,
+                            }
+                        ],
+                    }
+                ],
+                [],
+            )
+            self.assertEqual(
+                classify_checks(gh.pr_status(9)["statusCheckRollup"])[0],
+                "pending",
+                f"stale {stale} attempt-1 job leaked through a live rerun",
+            )
+
+    def test_same_display_name_distinct_workflow_files_both_count(self):
+        gh = self._gh(
+            [
+                {
+                    "id": 5,
+                    "workflow_id": 200,
+                    "name": "CI",
+                    "event": "push",
+                    "status": "completed",
+                    "conclusion": "failure",
+                },
+                {
+                    "id": 9,
+                    "workflow_id": 100,
+                    "name": "CI",
+                    "event": "push",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+            ],
+            [],
+        )
+        self.assertEqual(
+            classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "red"
+        )
+
+    def test_same_attempt_name_collision_keeps_the_red_sibling(self):
+        gh = self._gh(
+            [
+                {
+                    "id": 7,
+                    "name": "CI",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "jobs": [
+                        {
+                            "name": "build",
+                            "status": "completed",
+                            "conclusion": "success",
+                            "run_attempt": 1,
+                            "id": 10,
+                        },
+                        {
+                            "name": "build",
+                            "status": "completed",
+                            "conclusion": "failure",
+                            "run_attempt": 1,
+                            "id": 11,
+                        },
+                    ],
+                }
+            ],
+            [],
+        )
+        self.assertEqual(
+            classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "red"
+        )
+
+    def test_red_run_with_green_visible_jobs_stays_red(self):
+        # The failing job fell outside the attempt view; the run verdict wins.
+        gh = self._gh(
+            [
+                {
+                    "id": 7,
+                    "name": "CI",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "jobs": [
+                        {
+                            "name": "build",
+                            "status": "completed",
+                            "conclusion": "success",
+                            "run_attempt": 2,
+                            "id": 20,
+                        }
+                    ],
+                }
+            ],
+            [],
+        )
+        self.assertEqual(
+            classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "red"
+        )
+
+
+class MergeStateAndBranchEncoding(unittest.TestCase):
+    """#89 round four: UNSTABLE surfaces invisible optional-check failures,
+    and slash-containing base branches reach the rules endpoint encoded."""
+
+    def test_unstable_merge_state_never_classifies_green(self):
+        gh, runner = _mk()
+        runner.when(
+            ["pr", "view", "9"],
+            {
+                "number": 9,
+                "headRefOid": "abc123",
+                "baseRefName": "main",
+                "mergeStateStatus": "UNSTABLE",
+            },
+        )
+        runner.when(
+            ["api", "repos/owner/repo/actions/runs?head_sha=abc123&per_page=100"],
+            [{"workflow_runs": []}],
+        )
+        runner.when(
+            ["api", "repos/owner/repo/commits/abc123/status?per_page=100"],
+            [{"statuses": [{"context": "lint", "state": "success"}]}],
+        )
+        runner.when(["api", "repos/owner/repo/rules/branches/main?per_page=100"], [[]])
+        rollup = gh.pr_status(9)["statusCheckRollup"]
+        self.assertEqual(classify_checks(rollup)[0], "pending")
+        self.assertTrue(any("UNSTABLE" in c["name"] for c in rollup))
+
+    def test_slash_branch_is_encoded_in_rules_path(self):
+        gh, runner = _mk()
+        # FakeRunner raises on any unexpected argv: passing proves the
+        # branch rode the path as one percent-encoded segment.
+        runner.when(
+            ["api", "repos/owner/repo/rules/branches/release%2F2.x?per_page=100"],
+            [[]],
+        )
+        self.assertEqual(gh._required_contexts("release/2.x"), [])

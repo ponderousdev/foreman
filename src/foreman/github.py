@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Callable
+from urllib.parse import quote
 
 from foreman.config import Config
 from foreman.util import ForemanError, run
@@ -28,6 +29,10 @@ from foreman.util import ForemanError, run
 Runner = Callable[[list[str], str | None], tuple[int, str, str]]
 
 STATUS_MARKER = "<!-- foreman:unit-status -->"
+
+# GitHub Actions' own App id — stable and public. Required checks bound to
+# this integration are satisfiable only by Actions job observations.
+_ACTIONS_APP_ID = 15368
 
 # Labels foreman idempotently ensures and is allowed to apply to its own PRs.
 FOREMAN_LABELS = {
@@ -389,11 +394,258 @@ class GitHub:
         return self.gh.json(["pr", "view", str(number), "--json", fields])
 
     def pr_status(self, number: int) -> dict:
-        return self.pr_view(
+        status = self.pr_view(
             number,
             "number,title,body,url,state,isDraft,mergedAt,author,labels,"
-            "headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,statusCheckRollup",
+            "headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus",
         )
+        if "statusCheckRollup" not in status:
+            # #89: the GraphQL rollup is structurally unreadable by
+            # fine-grained PATs (no Checks permission exists for them), so
+            # CI state is derived from the two sources the bot token CAN
+            # read — Actions workflow runs and combined commit status —
+            # synthesized into the rollup shape classify_checks consumes.
+            # A read failure raises (fail closed): an unreadable rollup
+            # must never read as green. Tests may pre-supply a rollup in
+            # the pr-view fixture, which is honored untouched.
+            status["statusCheckRollup"] = self._check_contexts(
+                status.get("headRefOid") or "",
+                status.get("baseRefName") or self.default_branch(),
+            )
+            if (status.get("mergeStateStatus") or "").upper() == "UNSTABLE":
+                # UNSTABLE = some non-passing check that is not required.
+                # A failing third-party Checks-API run is invisible to both
+                # derived sources and earns no required-context sentinel, so
+                # GitHub's own verdict is the only signal — surface it as a
+                # pending row: never green (no ready-to-merge), never red
+                # (no fixer agent chasing a check the PAT cannot see).
+                status["statusCheckRollup"].append(
+                    {
+                        "name": "non-required checks "
+                        "(mergeStateStatus UNSTABLE; unobservable via PAT)",
+                        "status": "PENDING",
+                        "conclusion": "",
+                        "detailsUrl": "",
+                    }
+                )
+        return status
+
+    # Conclusions classify_checks treats as non-red; any other COMPLETED
+    # conclusion (stale, startup_failure, future values) normalizes to
+    # FAILURE — an unknown outcome must never read as green.
+    _GREEN_CONCLUSIONS = {"SUCCESS", "SKIPPED", "NEUTRAL", ""}
+    _RED_CONCLUSIONS = {"FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "CANCELLED", "ERROR"}
+
+    def _check_contexts(self, sha: str, base_branch: str) -> list[dict]:
+        if not sha:
+            raise ForemanError("check contexts: PR has no head SHA — failing closed")
+        # The same workflow can run repeatedly on one SHA: dedupe by
+        # (workflow name, triggering event) keeping the newest run —
+        # a superseded failure must not hold the rollup red, while a
+        # manual workflow_dispatch must not displace the pull_request
+        # suite (they are distinct check identities).
+        latest: dict[tuple[str, str], dict] = {}
+        runs = self.gh.json(
+            [
+                "api",
+                f"repos/{self.repo_slug()}/actions/runs?head_sha={sha}&per_page=100",
+                "--paginate",
+                "--slurp",
+            ]
+        )
+        for page in runs or []:
+            for wf_run in (page or {}).get("workflow_runs") or []:
+                # workflow_id is the stable identity; two workflow FILES can
+                # share a display name, and merging them would drop one.
+                key = (
+                    wf_run.get("workflow_id") or wf_run.get("name") or "workflow",
+                    wf_run.get("event") or "",
+                )
+                current = latest.get(key)
+                if current is not None and (current.get("id") or 0) >= (
+                    wf_run.get("id") or 0
+                ):
+                    continue
+                latest[key] = wf_run
+        contexts: list[dict] = []
+        for wf_run in latest.values():
+            wf_status = (wf_run.get("status") or "").upper()
+            if wf_status != "COMPLETED":
+                # The run status is authoritative. While a run is queued or
+                # re-running, filter=all still returns prior-attempt jobs
+                # whose stale green would mask the rerun (and whose stale
+                # red would bait a redundant fixer) — so a non-completed
+                # run contributes exactly one pending row and no jobs.
+                contexts.append(
+                    {
+                        "name": wf_run.get("name") or "workflow",
+                        "status": wf_status,
+                        "conclusion": "",
+                        "detailsUrl": wf_run.get("html_url") or "",
+                        "_source": "actions",
+                    }
+                )
+                continue
+            # Required-status-check contexts name Actions JOBS, not the
+            # workflow display name ("verify"/"security" vs "Build &
+            # Validate") — and classification belongs at job granularity.
+            # filter=all: a partial "re-run failed jobs" reuses the run id
+            # and the default (latest attempt) omits previously successful
+            # jobs. Jobs group by name; the whole group at the newest
+            # attempt survives, so same-named siblings WITHIN an attempt
+            # are all retained while superseded attempts are replaced.
+            jobs_pages = self.gh.json(
+                [
+                    "api",
+                    f"repos/{self.repo_slug()}/actions/runs/"
+                    f"{wf_run.get('id') or 0}/jobs?filter=all&per_page=100",
+                    "--paginate",
+                    "--slurp",
+                ]
+            )
+            groups: dict[str, list[dict]] = {}
+            for page in jobs_pages or []:
+                for job in (page or {}).get("jobs") or []:
+                    groups.setdefault(job.get("name") or "job", []).append(job)
+            jobs: list[dict] = []
+            for group in groups.values():
+                top = max((j.get("run_attempt") or 0) for j in group)
+                jobs.extend(j for j in group if (j.get("run_attempt") or 0) == top)
+            run_conclusion = self._normalize_conclusion(
+                "COMPLETED", (wf_run.get("conclusion") or "").upper()
+            )
+            if not jobs:
+                contexts.append(
+                    {
+                        "name": wf_run.get("name") or "workflow",
+                        "status": wf_status,
+                        "conclusion": run_conclusion,
+                        "detailsUrl": wf_run.get("html_url") or "",
+                        "_source": "actions",
+                    }
+                )
+                continue
+            any_red = False
+            for job in jobs:
+                job_status = (job.get("status") or "").upper()
+                conclusion = self._normalize_conclusion(
+                    job_status, (job.get("conclusion") or "").upper()
+                )
+                if conclusion in self._RED_CONCLUSIONS:
+                    any_red = True
+                contexts.append(
+                    {
+                        "name": job.get("name") or "job",
+                        "status": job_status,
+                        "conclusion": conclusion,
+                        "detailsUrl": job.get("html_url") or "",
+                        "_source": "actions",
+                    }
+                )
+            if run_conclusion in self._RED_CONCLUSIONS and not any_red:
+                # Backstop: the run itself concluded red but every job we
+                # retained reads green — some failing job fell outside the
+                # attempt view (e.g. a same-named sibling whose twin was
+                # individually re-run). The run verdict wins; never let
+                # job filtering launder a red run into a green rollup.
+                contexts.append(
+                    {
+                        "name": wf_run.get("name") or "workflow",
+                        "status": wf_status,
+                        "conclusion": run_conclusion,
+                        "detailsUrl": wf_run.get("html_url") or "",
+                        "_source": "actions",
+                    }
+                )
+        combined = self.gh.json(
+            [
+                "api",
+                f"repos/{self.repo_slug()}/commits/{sha}/status?per_page=100",
+                "--paginate",
+                "--slurp",
+            ]
+        )
+        for page in combined or []:
+            for st in (page or {}).get("statuses") or []:
+                state = (st.get("state") or "").upper()
+                contexts.append(
+                    {
+                        "name": st.get("context") or "status",
+                        "status": "PENDING" if state == "PENDING" else "COMPLETED",
+                        "conclusion": "" if state == "PENDING" else state,
+                        "detailsUrl": st.get("target_url") or "",
+                        "_source": "commit-status",
+                    }
+                )
+        # Third-party Checks-API contexts are invisible to both sources
+        # above, and a required context may be BOUND to an integration
+        # (integration_id): a same-named legacy status or foreign check
+        # must not satisfy it. Actions-bound requirements accept only
+        # Actions job observations; other-integration requirements are
+        # always unobservable; unbound requirements accept either source.
+        # Anything unsatisfied becomes a PENDING sentinel — the rollup can
+        # be red or pending on its account, never falsely green.
+        job_names = {c["name"] for c in contexts if c.get("_source") == "actions"}
+        status_names = {
+            c["name"] for c in contexts if c.get("_source") == "commit-status"
+        }
+        for req in self._required_contexts(base_branch):
+            name = req["context"]
+            integration = req.get("integration_id")
+            if integration is None:
+                satisfied = name in job_names or name in status_names
+            elif integration == _ACTIONS_APP_ID:
+                satisfied = name in job_names
+            else:
+                satisfied = False
+            if not satisfied:
+                contexts.append(
+                    {
+                        "name": f"{name} (required; unobservable via PAT)",
+                        "status": "PENDING",
+                        "conclusion": "",
+                        "detailsUrl": "",
+                    }
+                )
+        for context in contexts:
+            context.pop("_source", None)
+        return contexts
+
+    def _normalize_conclusion(self, status: str, conclusion: str) -> str:
+        if (
+            status == "COMPLETED"
+            and conclusion not in self._GREEN_CONCLUSIONS
+            and conclusion not in self._RED_CONCLUSIONS
+        ):
+            return "FAILURE"
+        return conclusion
+
+    def _required_contexts(self, branch: str) -> list[dict]:
+        pages = self.gh.json(
+            [
+                "api",
+                f"repos/{self.repo_slug()}/rules/branches/"
+                f"{quote(branch, safe='')}?per_page=100",
+                "--paginate",
+                "--slurp",
+            ]
+        )
+        contexts: list[dict] = []
+        for page in pages or []:
+            for rule in page or []:
+                if (rule or {}).get("type") != "required_status_checks":
+                    continue
+                params = rule.get("parameters") or {}
+                for check in params.get("required_status_checks") or []:
+                    name = (check or {}).get("context")
+                    if name:
+                        contexts.append(
+                            {
+                                "context": name,
+                                "integration_id": (check or {}).get("integration_id"),
+                            }
+                        )
+        return contexts
 
     def review_threads(self, number: int) -> list[dict]:
         out = self.gh.json(
