@@ -367,8 +367,17 @@ def _scan_local_run(
     run = LocalRun(
         number=number, started_at=str(started_at) if isinstance(started_at, str) else ""
     )
-    result = _read_local_result(unit_dir / "result.json")
+    result_path = unit_dir / "result.json"
+    result = _read_local_result(result_path)
     if result is None:
+        if result_path.exists():
+            # The sidecar EXISTS but is unreadable or non-object — that is
+            # a contract failure, not a process death; classify it as the
+            # validator would rather than misdiagnosing agent:died.
+            if not has_open_pr:
+                run.state = "agent:invalid-contract"
+                run.terminal = True
+            return run
         # A recorded exit status means the run is DEAD without a contract —
         # a terminal outcome, not an in-flight row. No status file and no
         # contract reads as still active (best-effort: a SIGKILLed wrapper
@@ -385,7 +394,15 @@ def _scan_local_run(
     # statuses, required fields). The worktree feeds the BLOCKED.md fallback,
     # so resolve the unit's preserved worktree (fall back to the run dir when
     # none survives).
-    wt = next(iter((root / cfg.worktrees_dir).glob(f"{number}-*")), unit_dir)
+    # A rename + retry can leave several NUMBER-* worktrees; the newest
+    # mtime is the current attempt — never whichever the filesystem lists
+    # first (the BLOCKED.md fallback must not read a stale attempt).
+    attempts = sorted(
+        (root / cfg.worktrees_dir).glob(f"{number}-*"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    wt = attempts[0] if attempts else unit_dir
     contract, _errors = backend_mod.read_result(unit_dir, wt)
     if contract is None:
         if not has_open_pr:
@@ -403,7 +420,11 @@ def _scan_local_run(
         (gh.issue(number).get("state") or "").upper() == "OPEN"
     )
     if issue_open and contract.human_tasks:
-        run.human_tasks = list(contract.human_tasks)
+        # Same hygiene as the overall queue: blank/whitespace tasks never
+        # create entries — the two views must not diverge on this.
+        run.human_tasks = [
+            t for t in contract.human_tasks if isinstance(t, str) and t.strip()
+        ]
     if contract.status == "blocked" and issue_open and question:
         run.blocked_question = question
     if not has_open_pr:
@@ -608,6 +629,15 @@ def _status_targeted(cfg: Config, root: Path, gh: GitHub, target: Target) -> int
                     detail=status["title"],
                 )
             )
+            # The PR row is the live state, but the run's contract may still
+            # owe the queue human_tasks / a blocked question — scan it with
+            # has_open_pr=True exactly as the overall snapshot does.
+            run = _scan_local_run(cfg, root, gh, number, has_open_pr=True)
+            if run and run.human_tasks:
+                existing = human_tasks.setdefault(number, [])
+                existing.extend(t for t in run.human_tasks if t not in existing)
+            if run and run.blocked_question:
+                blocked[number] = run.blocked_question
             continue
         # Fold in the same local-run evidence the overall snapshot reads, so
         # a mid-run unit reports in-flight/agent:<status>/agent:died here too
