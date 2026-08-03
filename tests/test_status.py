@@ -42,6 +42,7 @@ def pr_view(number: int, *, unit: int, labels: list[str] | None = None) -> dict:
         "labels": [{"name": name} for name in labels or []],
         "headRefName": f"foreman/feat/{unit}-x",
         "statusCheckRollup": [{"status": "COMPLETED", "conclusion": "SUCCESS"}],
+        "mergeStateStatus": "CLEAN",
     }
 
 
@@ -107,11 +108,28 @@ class OverallSnapshot(unittest.TestCase):
         runner.when(["pr", "list"], [pr_json(7, unit=3, merged=False)])
         runner.when(["issue", "view", "3"], issue_json(3))
         runner.when(["pr", "view", "7"], pr_view(7, unit=3, labels=["ready-to-merge"]))
+        # Readiness revalidates every shepherd predicate: green checks,
+        # CLEAN merge state, and no unresolved review threads.
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
         with tempfile.TemporaryDirectory() as tmp:
             rc, out = self._run(gh, Path(tmp))
         self.assertEqual(rc, 0)
         self.assertIn("ready-to-merge", out)
         self.assertIn("Pending merges", out)
+
+    def test_stale_ready_label_with_unresolved_thread_is_not_queued(self):
+        cfg = Config()
+        gh, runner = make_github(cfg)
+        runner.when(["pr", "list"], [pr_json(7, unit=3, merged=False)])
+        runner.when(["issue", "view", "3"], issue_json(3))
+        runner.when(["pr", "view", "7"], pr_view(7, unit=3, labels=["ready-to-merge"]))
+        gh.review_threads = lambda number: [  # type: ignore[assignment]
+            {"id": "t", "isResolved": False}
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out = self._run(gh, Path(tmp))
+        self.assertEqual(rc, 0)
+        self.assertNotIn("Pending merges", out)
 
     def test_local_blocked_and_completed_dirs_are_reported(self):
         cfg = Config()
@@ -124,6 +142,7 @@ class OverallSnapshot(unittest.TestCase):
                 11,
                 {"schema": 1, "status": "blocked", "blocked_question": "which db?"},
             )
+            runner.when(["issue", "view", "11"], issue_json(11))
             run_dir(
                 root,
                 12,
