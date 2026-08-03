@@ -12,9 +12,9 @@ import unittest
 from pathlib import Path
 
 from foreman import report
-from foreman.cli import _parser, _status_overall
+from foreman.cli import _parser, _scan_local_run, _status_overall, _status_targeted
 from foreman.config import Config
-from foreman.graph import Unit
+from foreman.graph import Target, Unit
 from tests.fakes import issue_json, make_github, pr_json
 
 
@@ -46,11 +46,43 @@ def pr_view(number: int, *, unit: int, labels: list[str] | None = None) -> dict:
     }
 
 
-def run_dir(root: Path, number: int, result: dict | None) -> None:
+def run_dir(
+    root: Path, number: int, result: dict | None, *, concluded: bool = True
+) -> None:
     unit_dir = root / ".foreman" / "units" / str(number)
     unit_dir.mkdir(parents=True, exist_ok=True)
     if result is not None:
         (unit_dir / "result.json").write_text(json.dumps(result), encoding="utf-8")
+    if concluded:
+        # The wrapper's recorded exit — without it a contract-bearing run
+        # is still live and renders as in-flight (89614 semantics).
+        (unit_dir / "exit-status").write_text("0", encoding="utf-8")
+
+
+def run_started(
+    root: Path,
+    number: int,
+    *,
+    started_at: str = "2026-08-03T00:00:00Z",
+    died: bool = False,
+) -> None:
+    """An in-flight run: run_started.json but no contract yet. `died=True`
+    drops the wrapper's exit-status sentinel (dead without a contract)."""
+    unit_dir = root / ".foreman" / "units" / str(number)
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    (unit_dir / "run_started.json").write_text(
+        json.dumps({"started_at": started_at}), encoding="utf-8"
+    )
+    if died:
+        (unit_dir / "exit-status").write_text("1\n", encoding="utf-8")
+
+
+def target_of(*numbers: int) -> Target:
+    return Target(
+        label="issue #" + "/".join(str(n) for n in numbers),
+        units={n: bare_unit(n) for n in numbers},
+        external_deps=set(),
+    )
 
 
 class ParserAcceptsNoTarget(unittest.TestCase):
@@ -176,6 +208,118 @@ class OverallSnapshot(unittest.TestCase):
         # as a recent outcome.
         self.assertIn("(none recorded)", out)
         self.assertNotIn("stale", out)
+
+
+class TargetedMatchesOverall(unittest.TestCase):
+    """#94: the targeted and untargeted views must report the same state for
+    a mid-run unit — both now fold in the same local-run evidence."""
+
+    def _overall(self, gh, root: Path) -> str:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.assertEqual(_status_overall(Config(), root, gh), 0)
+        return buf.getvalue()
+
+    def _targeted(self, gh, root: Path, *numbers: int) -> str:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.assertEqual(
+                _status_targeted(Config(), root, gh, target_of(*numbers)), 0
+            )
+        return buf.getvalue()
+
+    def test_active_dispatch_reports_in_flight_in_both_views(self):
+        # A run that has started but pushed nothing: the old targeted path
+        # read this as a bare "waiting" while the overall view already called
+        # it in-flight. Both must now agree.
+        cfg = Config()
+        gh, runner = make_github(cfg)
+        runner.when(["pr", "list"], [])
+        runner.when(["issue", "view", "90"], issue_json(90, title="Unit ninety"))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_started(root, 90)
+            overall = self._overall(gh, root)
+            targeted = self._targeted(gh, root, 90)
+        self.assertIn("in-flight (no contract)", overall)
+        self.assertIn("in-flight (no contract)", targeted)
+        # The old bug rendered the unit's state row as "⏳ waiting".
+        self.assertNotIn("⏳ waiting", targeted)
+
+    def test_died_without_contract_reports_agent_died_in_both_views(self):
+        cfg = Config()
+        gh, runner = make_github(cfg)
+        runner.when(["pr", "list"], [])
+        runner.when(["issue", "view", "90"], issue_json(90))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_started(root, 90, died=True)
+            overall = self._overall(gh, root)
+            targeted = self._targeted(gh, root, 90)
+        self.assertIn("agent:died", overall)
+        self.assertIn("agent:died", targeted)
+
+    def test_no_local_run_still_reports_waiting_when_targeted(self):
+        # The scheduling fallback survives: a unit with no run dir at all is
+        # still "waiting" (nothing has been dispatched yet).
+        cfg = Config()
+        gh, runner = make_github(cfg)
+        runner.when(["pr", "list"], [])
+        with tempfile.TemporaryDirectory() as tmp:
+            targeted = self._targeted(gh, Path(tmp), 90)
+        self.assertIn("⏳ waiting", targeted)
+
+
+class LocalScanSingleSourced(unittest.TestCase):
+    """#94 AC: the local-scan logic is single-sourced — one helper, both call
+    sites. Assert both status paths route through _scan_local_run so they can
+    never drift apart again."""
+
+    def test_both_status_paths_call_the_shared_helper(self):
+        import inspect
+
+        for fn in (_status_overall, _status_targeted):
+            self.assertIn("_scan_local_run", inspect.getsource(fn))
+
+    def test_helper_classifies_active_and_dead_runs(self):
+        cfg = Config()
+        gh, runner = make_github(cfg)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_started(root, 1)
+            active = _scan_local_run(cfg, root, gh, 1, has_open_pr=False)
+            run_started(root, 2, died=True)
+            dead = _scan_local_run(cfg, root, gh, 2, has_open_pr=False)
+            missing = _scan_local_run(cfg, root, gh, 3, has_open_pr=False)
+        self.assertEqual(active.state, "in-flight (no contract)")
+        self.assertFalse(active.terminal)
+        self.assertEqual(dead.state, "agent:died (no contract)")
+        self.assertTrue(dead.terminal)
+        self.assertIsNone(missing)
+
+    def test_open_pr_suppresses_snapshot_but_keeps_queue_contribution(self):
+        cfg = Config()
+        gh, runner = make_github(cfg)
+        runner.when(["issue", "view", "5"], issue_json(5))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir(
+                root,
+                5,
+                {
+                    "schema": 1,
+                    "status": "completed",
+                    "summary": "did it",
+                    "handoff": "api",
+                    "human_tasks": ["deploy the thing"],
+                    "ac_test_map": [{"criterion": "c", "tests": ["t"]}],
+                },
+            )
+            run = _scan_local_run(cfg, root, gh, 5, has_open_pr=True)
+        # Represented by its PR row elsewhere: no snapshot state here...
+        self.assertIsNone(run.state)
+        # ...but the run's human work still reaches the queue.
+        self.assertEqual(run.human_tasks, ["deploy the thing"])
 
 
 class OverallSnapshotRendering(unittest.TestCase):
