@@ -8,6 +8,7 @@ from foreman import signatures as signatures_mod
 from foreman.shepherd import classify_checks
 from foreman.util import ForemanError
 from tests.fakes import make_github
+from tests.fakes import make_github as _mk
 
 
 class ReviewThreadReads(unittest.TestCase):
@@ -131,3 +132,60 @@ class SignatureCatalog(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DerivedCheckContexts(unittest.TestCase):
+    """#89: fine-grained PATs cannot read the GraphQL rollup; CI state is
+    derived from Actions runs + combined commit status, in rollup shape."""
+
+    def _gh(self, workflow_runs, statuses):
+        gh, runner = _mk()
+        runner.when(
+            ["pr", "view", "9"],
+            {"number": 9, "headRefOid": "abc123", "labels": []},
+        )
+        runner.when(
+            ["api", "repos/owner/repo/actions/runs?head_sha=abc123&per_page=100"],
+            [{"workflow_runs": workflow_runs}],
+        )
+        runner.when(
+            ["api", "repos/owner/repo/commits/abc123/status"],
+            {"statuses": statuses},
+        )
+        return gh
+
+    def test_actions_and_commit_status_synthesize_rollup(self):
+        gh = self._gh(
+            [
+                {"name": "build", "status": "completed", "conclusion": "success"},
+                {"name": "e2e", "status": "in_progress", "conclusion": None},
+            ],
+            [{"context": "vendor/scan", "state": "failure"}],
+        )
+        rollup = gh.pr_status(9)["statusCheckRollup"]
+        state, failed = classify_checks(rollup)
+        self.assertEqual(state, "red")
+        self.assertEqual([f["name"] for f in failed], ["vendor/scan"])
+
+    def test_all_green_and_pending_bucketing(self):
+        gh = self._gh(
+            [{"name": "build", "status": "completed", "conclusion": "success"}],
+            [],
+        )
+        self.assertEqual(
+            classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "green"
+        )
+        gh = self._gh([{"name": "build", "status": "queued", "conclusion": None}], [])
+        self.assertEqual(
+            classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "pending"
+        )
+
+    def test_fixture_supplied_rollup_is_honored(self):
+        gh, runner = _mk()
+        runner.when(
+            ["pr", "view", "9"],
+            {"number": 9, "statusCheckRollup": [{"conclusion": "FAILURE"}]},
+        )
+        self.assertEqual(
+            classify_checks(gh.pr_status(9)["statusCheckRollup"])[0], "red"
+        )

@@ -389,11 +389,61 @@ class GitHub:
         return self.gh.json(["pr", "view", str(number), "--json", fields])
 
     def pr_status(self, number: int) -> dict:
-        return self.pr_view(
+        status = self.pr_view(
             number,
             "number,title,body,url,state,isDraft,mergedAt,author,labels,"
-            "headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,statusCheckRollup",
+            "headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus",
         )
+        if "statusCheckRollup" not in status:
+            # #89: the GraphQL rollup is structurally unreadable by
+            # fine-grained PATs (no Checks permission exists for them), so
+            # CI state is derived from the two sources the bot token CAN
+            # read — Actions workflow runs and combined commit status —
+            # synthesized into the rollup shape classify_checks consumes.
+            # A read failure raises (fail closed): an unreadable rollup
+            # must never read as green. Tests may pre-supply a rollup in
+            # the pr-view fixture, which is honored untouched.
+            status["statusCheckRollup"] = self._check_contexts(
+                status.get("headRefOid") or ""
+            )
+        return status
+
+    def _check_contexts(self, sha: str) -> list[dict]:
+        if not sha:
+            raise ForemanError("check contexts: PR has no head SHA — failing closed")
+        contexts: list[dict] = []
+        runs = self.gh.json(
+            [
+                "api",
+                f"repos/{self.repo_slug()}/actions/runs?head_sha={sha}&per_page=100",
+                "--paginate",
+                "--slurp",
+            ]
+        )
+        for page in runs or []:
+            for wf_run in (page or {}).get("workflow_runs") or []:
+                contexts.append(
+                    {
+                        "name": wf_run.get("name") or "workflow",
+                        "status": (wf_run.get("status") or "").upper(),
+                        "conclusion": (wf_run.get("conclusion") or "").upper(),
+                        "detailsUrl": wf_run.get("html_url") or "",
+                    }
+                )
+        combined = self.gh.json(
+            ["api", f"repos/{self.repo_slug()}/commits/{sha}/status"]
+        )
+        for st in (combined or {}).get("statuses") or []:
+            state = (st.get("state") or "").upper()
+            contexts.append(
+                {
+                    "name": st.get("context") or "status",
+                    "status": "PENDING" if state == "PENDING" else "COMPLETED",
+                    "conclusion": "" if state == "PENDING" else state,
+                    "detailsUrl": st.get("target_url") or "",
+                }
+            )
+        return contexts
 
     def review_threads(self, number: int) -> list[dict]:
         out = self.gh.json(
