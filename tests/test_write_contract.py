@@ -142,6 +142,75 @@ class GuardedChannels(unittest.TestCase):
             gh.upsert_status_comment(7, "no marker here")
 
 
+class StatusCommentBody(unittest.TestCase):
+    """#90: `-f body=@-` makes gh post the literal string '@-'; only `-F`
+    reads the body from stdin. Assert the real marker+status body is sent and
+    the argv carries the read-from-stdin idiom, never a literal '-f body=@-'.
+    """
+
+    def _assert_reads_body_from_stdin(self, argv, input_text, body):
+        # gh must read the body from stdin (`-F body=@-`), not receive '@-'
+        # as a literal field value (`-f body=@-`), and the real content must
+        # ride stdin.
+        self.assertEqual(input_text, body)
+        self.assertIn(STATUS_MARKER, input_text)
+        self.assertIn("state: dispatched", input_text)
+        self.assertIn("body=@-", argv)
+        idiom = argv[argv.index("body=@-") - 1]
+        self.assertEqual(idiom, "-F", f"expected `-F body=@-`, got `{idiom} body=@-`")
+        self.assertNotIn("-f", argv)
+
+    def test_create_branch_posts_real_marker_and_status_body(self):
+        gh, runner = make_github()
+        # No existing marked comment -> the create (POST) branch runs.
+        runner.when(
+            ["api", "repos/owner/repo/issues/7/comments", "--paginate", "--slurp"],
+            [[]],
+        )
+        runner.when(["api", "--method", "POST"], "{}")
+        body = STATUS_MARKER + "\n| unit | state |\n| 7 | state: dispatched |"
+        gh.upsert_status_comment(7, body)
+        posts = [
+            (argv, text)
+            for argv, text in runner.calls
+            if argv[:3] == ["api", "--method", "POST"]
+        ]
+        self.assertEqual(len(posts), 1)
+        self._assert_reads_body_from_stdin(*posts[0], body)
+
+    def test_edit_branch_patches_real_marker_and_status_body(self):
+        gh, runner = make_github()
+        runner.when(
+            ["api", "repos/owner/repo/issues/7/comments", "--paginate", "--slurp"],
+            [[{"id": 2, "body": STATUS_MARKER + " old", "user": {"login": "bot"}}]],
+        )
+        runner.when(
+            ["api", "--method", "PATCH", "repos/owner/repo/issues/comments/2"], "{}"
+        )
+        body = STATUS_MARKER + "\n| unit | state |\n| 7 | state: dispatched |"
+        gh.upsert_status_comment(7, body)
+        patches = [
+            (argv, text)
+            for argv, text in runner.calls
+            if argv[:3] == ["api", "--method", "PATCH"]
+        ]
+        self.assertEqual(len(patches), 1)
+        self._assert_reads_body_from_stdin(*patches[0], body)
+
+    def test_post_vet_correction_posts_real_body(self):
+        gh, runner = make_github()
+        runner.when(["api", "--method", "POST"], "{}")
+        body = STATUS_MARKER + "\nstate: dispatched — correction body"
+        gh.post_vet_correction(7, body, human_approved=True)
+        posts = [
+            (argv, text)
+            for argv, text in runner.calls
+            if argv[:3] == ["api", "--method", "POST"]
+        ]
+        self.assertEqual(len(posts), 1)
+        self._assert_reads_body_from_stdin(*posts[0], body)
+
+
 class ForbiddenOperationsAbsent(unittest.TestCase):
     """Merging, closing/reopening/editing issues, deleting others' comments —
     the write contract says these must not exist. Keep them nonexistent."""
