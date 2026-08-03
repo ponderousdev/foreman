@@ -233,6 +233,14 @@ conventional commits; merging it cuts the tag, GitHub release, and CHANGELOG.
 Nothing auto-releases on a normal merge. `task release:*` stays as a manual
 override.
 
+## Dogfood
+
+Foreman runs on its own repository: it dispatches, verifies, and shepherds
+Foreman's own issues through the same pipeline it ships. This very section was
+added by a Foreman-dispatched agent working
+[issue #72](https://github.com/ponderousdev/foreman/issues/72) — the end-to-end
+smoke test of the v2.0 dispatch pipeline.
+
 ## License
 
 See [LICENSE](LICENSE).
