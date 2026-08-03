@@ -368,28 +368,7 @@ def _scan_local_run(
         number=number, started_at=str(started_at) if isinstance(started_at, str) else ""
     )
     result_path = unit_dir / "result.json"
-    result = _read_local_result(result_path)
-    if result is None:
-        if result_path.exists():
-            # The sidecar EXISTS but is unreadable or non-object — that is
-            # a contract failure, not a process death; classify it as the
-            # validator would rather than misdiagnosing agent:died.
-            if not has_open_pr:
-                run.state = "agent:invalid-contract"
-                run.terminal = True
-            return run
-        # A recorded exit status means the run is DEAD without a contract —
-        # a terminal outcome, not an in-flight row. No status file and no
-        # contract reads as still active (best-effort: a SIGKILLed wrapper
-        # leaves no record and shows as in-flight until cleaned).
-        if started and not has_open_pr:
-            if (unit_dir / "exit-status").exists():
-                run.state = "agent:died (no contract)"
-                run.terminal = True
-            else:
-                run.state = "in-flight (no contract)"
-                run.detail = run.started_at
-        return run
+    concluded = (unit_dir / "exit-status").exists()
     # The real contract validator judges the sidecar (schema, allowed
     # statuses, required fields). The worktree feeds the BLOCKED.md fallback,
     # so resolve the unit's preserved worktree (fall back to the run dir when
@@ -406,8 +385,22 @@ def _scan_local_run(
     contract, _errors = backend_mod.read_result(unit_dir, wt)
     if contract is None:
         if not has_open_pr:
-            run.state = "agent:invalid-contract"
-            run.terminal = True
+            if result_path.exists():
+                # The sidecar EXISTS but is invalid — a contract failure,
+                # not a process death.
+                run.state = "agent:invalid-contract"
+                run.terminal = True
+            elif started:
+                # No sidecar and no BLOCKED.md fallback (read_result checks
+                # both): a recorded exit status means the run died without
+                # a contract; otherwise it reads as still active
+                # (best-effort: a SIGKILLed wrapper leaves no record).
+                if concluded:
+                    run.state = "agent:died (no contract)"
+                    run.terminal = True
+                else:
+                    run.state = "in-flight (no contract)"
+                    run.detail = run.started_at
         return run
     # An open PR does not erase the human work the run discovered: gate the
     # queue contributions on the issue being open, not on PR presence.
@@ -430,11 +423,18 @@ def _scan_local_run(
     if not has_open_pr:
         # A "completed" contract does not prove the supervisor's post-agent
         # gates passed; with no PR here the honest label is agent:<status>.
-        run.state = f"agent:{contract.status}"
-        run.detail = (
-            contract.summary.strip().splitlines()[0] if contract.summary else ""
-        )
-        run.terminal = True
+        # And the contract is written BEFORE process exit — without a
+        # recorded exit status the run is still live: collect its queue
+        # contributions but keep it in the in-flight section.
+        if concluded:
+            run.state = f"agent:{contract.status}"
+            run.detail = (
+                contract.summary.strip().splitlines()[0] if contract.summary else ""
+            )
+            run.terminal = True
+        else:
+            run.state = f"in-flight (agent:{contract.status} recorded)"
+            run.detail = run.started_at
     return run
 
 
@@ -649,18 +649,27 @@ def _status_targeted(cfg: Config, root: Path, gh: GitHub, target: Target) -> int
             existing.extend(t for t in run.human_tasks if t not in existing)
         if run and run.blocked_question:
             blocked[number] = run.blocked_question
-        if run and run.state:
+        # Live scheduling state: a HISTORICAL terminal outcome must not
+        # mask a current hold or dis-arming — only genuinely active
+        # in-flight evidence outranks the scheduling state.
+        scheduling = None
+        if unit.inputs and unit.inputs.hold:
+            scheduling = "held"
+        elif unit.inputs and not unit.inputs.armed:
+            scheduling = "not-armed"
+        if run and run.state and not (run.terminal and scheduling):
             statuses.append(
                 report.UnitStatus(unit=unit, state=run.state, detail=run.detail)
             )
             continue
-        # No local run in progress — fall back to the scheduling state.
-        outcome_state = "waiting"
-        if unit.inputs and unit.inputs.hold:
-            outcome_state = "held"
-        elif unit.inputs and not unit.inputs.armed:
-            outcome_state = "not-armed"
-        statuses.append(report.UnitStatus(unit=unit, state=outcome_state))
+        if scheduling and run and run.terminal and run.state:
+            statuses.append(
+                report.UnitStatus(
+                    unit=unit, state=scheduling, detail=f"last: {run.state}"
+                )
+            )
+            continue
+        statuses.append(report.UnitStatus(unit=unit, state=scheduling or "waiting"))
     print(report.summary_table(statuses))
     print()
     print(

@@ -46,11 +46,17 @@ def pr_view(number: int, *, unit: int, labels: list[str] | None = None) -> dict:
     }
 
 
-def run_dir(root: Path, number: int, result: dict | None) -> None:
+def run_dir(
+    root: Path, number: int, result: dict | None, *, concluded: bool = True
+) -> None:
     unit_dir = root / ".foreman" / "units" / str(number)
     unit_dir.mkdir(parents=True, exist_ok=True)
     if result is not None:
         (unit_dir / "result.json").write_text(json.dumps(result), encoding="utf-8")
+    if concluded:
+        # The wrapper's recorded exit — without it a contract-bearing run
+        # is still live and renders as in-flight (89614 semantics).
+        (unit_dir / "exit-status").write_text("0", encoding="utf-8")
 
 
 def run_started(
