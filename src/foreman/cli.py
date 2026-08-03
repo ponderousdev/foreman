@@ -11,6 +11,7 @@ the `preflight` name without two meanings ever coexisting.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -27,6 +28,7 @@ from foreman.config import load as load_config
 from foreman.github import Gh, GitHub
 from foreman.graph import (
     Target,
+    _unit_from_issue,
     dependency_satisfied,
     detect_cycle,
     prepare_target,
@@ -92,7 +94,9 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     p_status = sub.add_parser("status", help="read-only snapshot + human-action queue")
-    _add_target_args(p_status)
+    # #84: with no target, status prints an overall snapshot across every open
+    # foreman PR + local run state — so the target is optional here alone.
+    _add_target_args(p_status, required=False)
 
     p_retry = sub.add_parser("retry", help="re-dispatch a unit whose PR a human closed")
     p_retry.add_argument("--unit", type=int, required=True)
@@ -312,8 +316,104 @@ def cmd_shepherd(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _read_local_result(path: Path) -> dict | None:
+    """Best-effort read of a unit's sidecar result.json for the overall
+    snapshot (#84). Display-only, so a missing or malformed file is simply
+    'nothing to show', never a hard error."""
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _status_overall(cfg: Config, root: Path, gh: GitHub) -> int:
+    """Untargeted `foreman status` (#84): an overall snapshot with no
+    --milestone/--issue — every open foreman PR and its state (in-flight
+    units, derived from branches/PRs), the consolidated human-action queue,
+    and recent terminal outcomes drawn from local run dirs."""
+    open_prs = shepherd_mod.open_foreman_prs(gh)
+    prs_by_unit = {p["_unit"]: p for p in open_prs}
+    statuses: list[report.UnitStatus] = []
+    human_tasks: dict[int, list[str]] = {}
+    blocked: dict[int, str] = {}
+    ready: list[shepherd_mod.PrWork] = []
+    for number in sorted(prs_by_unit):
+        pr = prs_by_unit[number]
+        unit = _unit_from_issue(gh.issue(number))
+        spec_info = spec.validate(unit)
+        tasks = spec.human_only_tasks(unit, spec_info) if not spec_info.errors else []
+        if tasks:
+            human_tasks[number] = tasks
+        status = gh.pr_status(pr["number"])
+        checks_state, _failed = shepherd_mod.classify_checks(
+            status.get("statusCheckRollup")
+        )
+        labels = [label["name"] for label in status.get("labels") or []]
+        state = "ready-to-merge" if "ready-to-merge" in labels else "pr-open"
+        if state == "ready-to-merge":
+            ready.append(
+                shepherd_mod.PrWork(
+                    number=pr["number"],
+                    unit_number=number,
+                    branch=status["headRefName"],
+                    url=status["url"],
+                    title=status["title"],
+                )
+            )
+        statuses.append(
+            report.UnitStatus(
+                unit=unit,
+                state=state,
+                branch=status["headRefName"],
+                pr_url=status["url"],
+                checks=checks_state,
+                detail=status["title"],
+            )
+        )
+
+    # In-flight-without-a-PR and terminal outcomes come from local run dirs.
+    # A unit that still has an open PR is represented by that PR above.
+    outcomes: list[tuple[int, str, str]] = []
+    units_root = root / cfg.runtime_dir / "units"
+    for unit_dir in sorted(
+        (d for d in units_root.glob("*") if d.name.isdigit()),
+        key=lambda d: int(d.name),
+    ):
+        number = int(unit_dir.name)
+        if number in prs_by_unit:
+            continue
+        result = _read_local_result(unit_dir / "result.json")
+        if result is None:
+            continue
+        result_status = result.get("status") or "unknown"
+        if result_status == "blocked":
+            question = (result.get("blocked_question") or "").strip()
+            if question:
+                blocked[number] = question
+            continue
+        summary = (result.get("summary") or "").strip()
+        detail = summary.splitlines()[0] if summary else ""
+        outcomes.append((number, result_status, detail))
+
+    print(
+        report.overall_snapshot(
+            statuses=statuses,
+            merge_order=shepherd_mod.merge_order(gh, ready),
+            human_tasks=human_tasks,
+            blocked=blocked,
+            outcomes=outcomes,
+        )
+    )
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     cfg, root, gh = _context(read_only=True)
+    if args.milestone is None and args.issue is None:
+        return _status_overall(cfg, root, gh)
     target = prepare_target(gh, cfg, milestone=args.milestone, issue=args.issue)
     open_prs = shepherd_mod.open_foreman_prs(gh)
     prs_by_unit = {p["_unit"]: p for p in open_prs}
