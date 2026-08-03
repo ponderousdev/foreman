@@ -110,3 +110,12 @@ def relation_refs(issue: dict, field: str) -> list[dict]:
 
 def sub_issue_refs(issue: dict) -> list[dict]:
     return relation_refs(issue, "subIssues")
+
+
+def pr_is_merged(pr: dict) -> bool:
+    """Current gh dropped the boolean `merged` JSON field (#85); derive
+    merged-ness from what every gh version exposes. Tolerates dicts that
+    still carry the old boolean."""
+    if pr.get("merged"):
+        return True
+    return bool(pr.get("mergedAt")) or (pr.get("state") or "").upper() == "MERGED"

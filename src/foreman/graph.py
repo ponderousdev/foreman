@@ -20,7 +20,7 @@ from foreman import inputs as inputs_mod
 from foreman import trust as trust_mod
 from foreman.config import Config
 from foreman.github import GitHub
-from foreman.util import ForemanError, relation_refs, sub_issue_refs
+from foreman.util import ForemanError, pr_is_merged, relation_refs, sub_issue_refs
 
 DEPENDS_ON_RE = re.compile(
     r"^depends-on:\s*(?P<refs>#\d+(?:\s*,\s*#\d+)*)\s*$", re.I | re.M
@@ -208,7 +208,7 @@ def foreman_prs_for_issue(gh: GitHub, cfg: Config, number: int) -> list[dict]:
     for ref in relation_refs(issue, "closedByPullRequestsReferences"):
         pr = gh.pr_view(
             ref["number"],
-            "number,url,body,merged,mergedAt,baseRefName,headRefName,author,state",
+            "number,url,body,mergedAt,baseRefName,headRefName,author,state",
         )
         match = MARKER_RE.search(pr.get("body") or "")
         if match and int(match.group("number")) == number:
@@ -242,7 +242,7 @@ def dependency_satisfied(
         default_branch = gh.default_branch()
         for pr in marked_prs:
             problems = []
-            if not pr.get("merged"):
+            if not pr_is_merged(pr):
                 problems.append("not merged")
             if pr.get("baseRefName") != default_branch:
                 problems.append(

@@ -391,7 +391,7 @@ class GitHub:
     def pr_status(self, number: int) -> dict:
         return self.pr_view(
             number,
-            "number,title,body,url,state,isDraft,merged,mergedAt,author,labels,"
+            "number,title,body,url,state,isDraft,mergedAt,author,labels,"
             "headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,statusCheckRollup",
         )
 

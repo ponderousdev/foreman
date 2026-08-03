@@ -20,7 +20,7 @@ from pathlib import Path
 from foreman.config import Config
 from foreman.github import STATUS_MARKER, GitHub
 from foreman.graph import Unit, foreman_prs_for_issue
-from foreman.util import sha256_hex
+from foreman.util import pr_is_merged, sha256_hex
 
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
@@ -176,7 +176,7 @@ def collect_handoffs(gh: GitHub, cfg: Config, unit: Unit) -> list[tuple[int, str
     handoffs: list[tuple[int, str]] = []
     for dep in unit.blocked_by:
         for pr in foreman_prs_for_issue(gh, cfg, dep):
-            if not pr.get("merged"):
+            if not pr_is_merged(pr):
                 continue
             text = extract_handoff(pr.get("body") or "")
             if text:
