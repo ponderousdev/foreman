@@ -382,10 +382,22 @@ def _scan_local_run(
         reverse=True,
     )
     wt = attempts[0] if attempts else unit_dir
-    contract, _errors = backend_mod.read_result(unit_dir, wt)
+    try:
+        contract, _errors = backend_mod.read_result(unit_dir, wt)
+    except (OSError, UnicodeDecodeError):
+        # Display-only evidence: a sidecar that cannot even be read (bad
+        # encoding, concurrent filesystem churn) is handled like any other
+        # unreadable contract, never a crash.
+        contract = None
     if contract is None:
         if not has_open_pr:
             if result_path.exists():
+                if not concluded:
+                    # The agent may be mid-write (adapters need not replace
+                    # the sidecar atomically) — still live, not a verdict.
+                    run.state = "in-flight (contract unreadable)"
+                    run.detail = run.started_at
+                    return run
                 # The sidecar EXISTS but is invalid — a contract failure,
                 # not a process death.
                 run.state = "agent:invalid-contract"
