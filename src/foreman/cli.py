@@ -335,18 +335,30 @@ def _status_overall(cfg: Config, root: Path, gh: GitHub) -> int:
     units, derived from branches/PRs), the consolidated human-action queue,
     and recent terminal outcomes drawn from local run dirs."""
     open_prs = shepherd_mod.open_foreman_prs(gh)
-    prs_by_unit = {p["_unit"]: p for p in open_prs}
+    # Every open PR gets a row (a retried unit can hold several open
+    # attempts at once); the unit-number set exists only so local-dir
+    # entries are not double-reported.
+    units_with_prs = {p["_unit"] for p in open_prs}
     statuses: list[report.UnitStatus] = []
     human_tasks: dict[int, list[str]] = {}
     blocked: dict[int, str] = {}
     ready: list[shepherd_mod.PrWork] = []
-    for number in sorted(prs_by_unit):
-        pr = prs_by_unit[number]
+
+    def add_tasks(number: int, tasks: list[str]) -> None:
+        # Spec [HUMAN] items and contract human_tasks overlap by design
+        # (the implementer copies them) — dedupe, preserving order.
+        existing = human_tasks.setdefault(number, [])
+        existing.extend(t for t in tasks if t not in existing)
+
+    spec_read: set[int] = set()
+    for pr in sorted(open_prs, key=lambda p: (p["_unit"], p["number"])):
+        number = pr["_unit"]
         unit = _unit_from_issue(gh.issue(number))
-        spec_info = spec.validate(unit)
-        tasks = spec.human_only_tasks(unit, spec_info) if not spec_info.errors else []
-        if tasks:
-            human_tasks[number] = tasks
+        if number not in spec_read:
+            spec_read.add(number)
+            spec_info = spec.validate(unit)
+            if not spec_info.errors:
+                add_tasks(number, spec.human_only_tasks(unit, spec_info))
         status = gh.pr_status(pr["number"])
         checks_state, _failed = shepherd_mod.classify_checks(
             status.get("statusCheckRollup")
@@ -404,7 +416,7 @@ def _status_overall(cfg: Config, root: Path, gh: GitHub) -> int:
         sort_key = str(started_at) if isinstance(started_at, str) else ""
         result = _read_local_result(unit_dir / "result.json")
         if result is None:
-            if started and number not in prs_by_unit:
+            if started and number not in units_with_prs:
                 # Active (result deleted pre-spawn) or died-before-contract:
                 # nonterminal, so it belongs with the in-flight rows.
                 statuses.append(
@@ -415,31 +427,30 @@ def _status_overall(cfg: Config, root: Path, gh: GitHub) -> int:
                     )
                 )
             continue
-        result_status = result.get("status")
-        if not isinstance(result_status, str):
-            continue  # malformed contract: best-effort display skips it
-        contract_tasks = result.get("human_tasks")
-        if isinstance(contract_tasks, list):
-            valid = [t for t in contract_tasks if isinstance(t, str) and t.strip()]
-            if valid:
-                human_tasks.setdefault(number, []).extend(valid)
-        if result_status == "blocked":
-            question = result.get("blocked_question")
-            if (
-                isinstance(question, str)
-                and question.strip()
-                # A closed/cancelled issue no longer awaits an answer —
-                # old sidecars must not haunt the queue forever.
-                and (gh.issue(number).get("state") or "").upper() == "OPEN"
-            ):
-                blocked[number] = question.strip()
-        if number in prs_by_unit:
-            continue  # represented by its PR row above
-        summary = result.get("summary")
-        detail = ""
-        if isinstance(summary, str) and summary.strip():
-            detail = summary.strip().splitlines()[0]
-        candidates.append((sort_key, number, f"agent:{result_status}", detail))
+        # The real contract validator judges the sidecar (schema, allowed
+        # statuses, required fields) — an invalid file renders as exactly
+        # that and contributes nothing to the queue. The worktree arg only
+        # feeds the BLOCKED.md fallback, which has no home here.
+        contract, _errors = backend_mod.read_result(unit_dir, unit_dir)
+        if contract is None:
+            if number not in units_with_prs:
+                candidates.append((sort_key, number, "agent:invalid-contract", ""))
+            continue
+        issue_open = (gh.issue(number).get("state") or "").upper() == "OPEN"
+        # Tasks and blocked questions from closed/cancelled issues must
+        # not haunt the queue forever.
+        if issue_open and contract.human_tasks:
+            add_tasks(number, [t for t in contract.human_tasks if t.strip()])
+        if (
+            contract.status == "blocked"
+            and issue_open
+            and (contract.blocked_question or "").strip()
+        ):
+            blocked[number] = (contract.blocked_question or "").strip()
+        if number in units_with_prs:
+            continue  # represented by its PR row(s) above
+        detail = contract.summary.strip().splitlines()[0] if contract.summary else ""
+        candidates.append((sort_key, number, f"agent:{contract.status}", detail))
     # Bounded and recency-ordered: newest run_started first, cap at 10.
     candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
     outcomes = [(n, st, d) for _ts, n, st, d in candidates[:10]]

@@ -147,7 +147,9 @@ def overall_snapshot(
     lines.append("Recent outcomes:")
     if outcomes:
         for number, state, detail in outcomes:
-            icon = STATE_ICONS.get(state, "•")
+            # Outcome states arrive prefixed (agent:<status>) — icon by
+            # the underlying status, honest prefixed label in the text.
+            icon = STATE_ICONS.get(state.removeprefix("agent:"), "•")
             suffix = f": {detail}" if detail else ""
             lines.append(f"  {icon} #{number} {state}{suffix}")
     else:

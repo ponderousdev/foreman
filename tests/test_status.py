@@ -143,10 +143,17 @@ class OverallSnapshot(unittest.TestCase):
                 {"schema": 1, "status": "blocked", "blocked_question": "which db?"},
             )
             runner.when(["issue", "view", "11"], issue_json(11))
+            runner.when(["issue", "view", "12"], issue_json(12))
             run_dir(
                 root,
                 12,
-                {"schema": 1, "status": "completed", "summary": "did the thing"},
+                {
+                    "schema": 1,
+                    "status": "completed",
+                    "summary": "did the thing",
+                    "handoff": "the new API",
+                    "ac_test_map": [{"criterion": "c", "tests": ["t"]}],
+                },
             )
             rc, out = self._run(gh, root)
         self.assertEqual(rc, 0)
