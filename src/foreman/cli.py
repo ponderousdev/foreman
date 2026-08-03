@@ -346,9 +346,13 @@ def _status_overall(cfg: Config, root: Path, gh: GitHub) -> int:
 
     def add_tasks(number: int, tasks: list[str]) -> None:
         # Spec [HUMAN] items and contract human_tasks overlap by design
-        # (the implementer copies them) — dedupe, preserving order.
+        # (the implementer copies them) — dedupe, preserving order, and
+        # never create an empty entry (human_queue treats presence as work).
+        fresh = [t for t in tasks if t.strip()]
+        if not fresh:
+            return
         existing = human_tasks.setdefault(number, [])
-        existing.extend(t for t in tasks if t not in existing)
+        existing.extend(t for t in fresh if t not in existing)
 
     spec_read: set[int] = set()
     for pr in sorted(open_prs, key=lambda p: (p["_unit"], p["number"])):
@@ -417,36 +421,51 @@ def _status_overall(cfg: Config, root: Path, gh: GitHub) -> int:
         result = _read_local_result(unit_dir / "result.json")
         if result is None:
             if started and number not in units_with_prs:
-                # Active (result deleted pre-spawn) or died-before-contract:
-                # nonterminal, so it belongs with the in-flight rows.
-                statuses.append(
-                    report.UnitStatus(
-                        unit=_unit_from_issue(gh.issue(number)),
-                        state="in-flight (no contract)",
-                        detail=sort_key,
+                # A recorded exit status means the run is DEAD without a
+                # contract — a terminal outcome, not an in-flight row. No
+                # status file and no contract reads as still active
+                # (best-effort: a SIGKILLed wrapper leaves no record and
+                # will show as in-flight until cleaned).
+                if (unit_dir / "exit-status").exists():
+                    candidates.append(
+                        (sort_key, number, "agent:died (no contract)", "")
                     )
-                )
+                else:
+                    statuses.append(
+                        report.UnitStatus(
+                            unit=_unit_from_issue(gh.issue(number)),
+                            state="in-flight (no contract)",
+                            detail=sort_key,
+                        )
+                    )
             continue
         # The real contract validator judges the sidecar (schema, allowed
-        # statuses, required fields) — an invalid file renders as exactly
-        # that and contributes nothing to the queue. The worktree arg only
-        # feeds the BLOCKED.md fallback, which has no home here.
-        contract, _errors = backend_mod.read_result(unit_dir, unit_dir)
+        # statuses, required fields). The worktree feeds the BLOCKED.md
+        # fallback, so resolve the unit's preserved worktree like targeted
+        # status does (fall back to the run dir when none survives).
+        wt = next(iter((root / cfg.worktrees_dir).glob(f"{number}-*")), unit_dir)
+        contract, _errors = backend_mod.read_result(unit_dir, wt)
         if contract is None:
             if number not in units_with_prs:
                 candidates.append((sort_key, number, "agent:invalid-contract", ""))
             continue
-        issue_open = (gh.issue(number).get("state") or "").upper() == "OPEN"
+        # Queue candidates first; the issue state (one gh read) is checked
+        # only when the contract could actually contribute queue entries —
+        # a completed no-task contract costs no API call.
+        question = contract.blocked_question
+        question = question.strip() if isinstance(question, str) else ""
+        contributes = bool(contract.human_tasks) or (
+            contract.status == "blocked" and question
+        )
+        issue_open = contributes and (
+            (gh.issue(number).get("state") or "").upper() == "OPEN"
+        )
         # Tasks and blocked questions from closed/cancelled issues must
         # not haunt the queue forever.
         if issue_open and contract.human_tasks:
-            add_tasks(number, [t for t in contract.human_tasks if t.strip()])
-        if (
-            contract.status == "blocked"
-            and issue_open
-            and (contract.blocked_question or "").strip()
-        ):
-            blocked[number] = (contract.blocked_question or "").strip()
+            add_tasks(number, list(contract.human_tasks))
+        if contract.status == "blocked" and issue_open and question:
+            blocked[number] = question
         if number in units_with_prs:
             continue  # represented by its PR row(s) above
         detail = contract.summary.strip().splitlines()[0] if contract.summary else ""
@@ -455,10 +474,16 @@ def _status_overall(cfg: Config, root: Path, gh: GitHub) -> int:
     candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
     outcomes = [(n, st, d) for _ts, n, st, d in candidates[:10]]
 
+    # merge_order is unit-keyed; a unit with several simultaneously-ready
+    # attempts contributes its lowest-numbered PR (the human sees the rest
+    # as rows above and resolves the duplicate-attempt state deliberately).
+    first_ready: dict[int, shepherd_mod.PrWork] = {}
+    for work in sorted(ready, key=lambda w: w.number):
+        first_ready.setdefault(work.unit_number, work)
     print(
         report.overall_snapshot(
             statuses=statuses,
-            merge_order=shepherd_mod.merge_order(gh, ready),
+            merge_order=shepherd_mod.merge_order(gh, list(first_ready.values())),
             human_tasks=human_tasks,
             blocked=blocked,
             outcomes=outcomes,
