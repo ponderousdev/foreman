@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from foreman import backend as backend_mod
@@ -329,6 +330,93 @@ def _read_local_result(path: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+@dataclass
+class LocalRun:
+    """One unit's local run-dir evidence (run_started.json, result.json,
+    exit-status), classified into a display-only state. The single source
+    both the targeted (#94) and untargeted (#84/#88) status paths read, so
+    the two views can never disagree about a mid-run unit."""
+
+    number: int
+    started_at: str = ""  # run_started.started_at, for recency ordering
+    # The derived state label, or None when the run dir carries no snapshot
+    # for this unit (e.g. it is represented by an open PR instead).
+    state: str | None = None
+    detail: str = ""
+    # True for a concluded run (agent:<status>, agent:died, invalid-contract)
+    # that belongs in "recent outcomes"; False for an active in-flight row.
+    terminal: bool = False
+    human_tasks: list[str] = field(default_factory=list)
+    blocked_question: str = ""  # only for an open issue's blocked contract
+
+
+def _scan_local_run(
+    cfg: Config, root: Path, gh: GitHub, number: int, *, has_open_pr: bool
+) -> LocalRun | None:
+    """Read a unit's local run dir and classify it exactly as the overall
+    snapshot does. Returns None when no run dir exists. Snapshot states
+    (in-flight/agent:<status>/died) are suppressed for a unit that already
+    has an open PR — the PR row is the live state — but its contract's
+    human_tasks and (open-issue) blocked question still join the queue.
+    Display-only: a missing or malformed sidecar is 'nothing to show'."""
+    unit_dir = root / cfg.runtime_dir / "units" / str(number)
+    if not unit_dir.is_dir():
+        return None
+    started = _read_local_result(unit_dir / "run_started.json") or {}
+    started_at = started.get("started_at")
+    run = LocalRun(
+        number=number, started_at=str(started_at) if isinstance(started_at, str) else ""
+    )
+    result = _read_local_result(unit_dir / "result.json")
+    if result is None:
+        # A recorded exit status means the run is DEAD without a contract —
+        # a terminal outcome, not an in-flight row. No status file and no
+        # contract reads as still active (best-effort: a SIGKILLed wrapper
+        # leaves no record and shows as in-flight until cleaned).
+        if started and not has_open_pr:
+            if (unit_dir / "exit-status").exists():
+                run.state = "agent:died (no contract)"
+                run.terminal = True
+            else:
+                run.state = "in-flight (no contract)"
+                run.detail = run.started_at
+        return run
+    # The real contract validator judges the sidecar (schema, allowed
+    # statuses, required fields). The worktree feeds the BLOCKED.md fallback,
+    # so resolve the unit's preserved worktree (fall back to the run dir when
+    # none survives).
+    wt = next(iter((root / cfg.worktrees_dir).glob(f"{number}-*")), unit_dir)
+    contract, _errors = backend_mod.read_result(unit_dir, wt)
+    if contract is None:
+        if not has_open_pr:
+            run.state = "agent:invalid-contract"
+            run.terminal = True
+        return run
+    # An open PR does not erase the human work the run discovered: gate the
+    # queue contributions on the issue being open, not on PR presence.
+    question = contract.blocked_question
+    question = question.strip() if isinstance(question, str) else ""
+    contributes = bool(contract.human_tasks) or (
+        contract.status == "blocked" and question
+    )
+    issue_open = contributes and (
+        (gh.issue(number).get("state") or "").upper() == "OPEN"
+    )
+    if issue_open and contract.human_tasks:
+        run.human_tasks = list(contract.human_tasks)
+    if contract.status == "blocked" and issue_open and question:
+        run.blocked_question = question
+    if not has_open_pr:
+        # A "completed" contract does not prove the supervisor's post-agent
+        # gates passed; with no PR here the honest label is agent:<status>.
+        run.state = f"agent:{contract.status}"
+        run.detail = (
+            contract.summary.strip().splitlines()[0] if contract.summary else ""
+        )
+        run.terminal = True
+    return run
+
+
 def _status_overall(cfg: Config, root: Path, gh: GitHub) -> int:
     """Untargeted `foreman status` (#84): an overall snapshot with no
     --milestone/--issue — every open foreman PR and its state (in-flight
@@ -403,73 +491,39 @@ def _status_overall(cfg: Config, root: Path, gh: GitHub) -> int:
             )
         )
 
-    # Local run dirs supply three things. For EVERY unit with a contract:
-    # agent-reported human_tasks and (open-issue) blocked questions join the
-    # queue — an open PR does not erase the human work its run discovered.
-    # For units WITHOUT an open PR only: an entry in the snapshot — active
-    # runs (run record, no contract yet) go to the in-flight section, and
-    # contracted runs to recent outcomes as agent:<status>, display-only
-    # (a "completed" contract does not prove the supervisor's post-agent
-    # gates passed; no PR here says otherwise).
+    # Local run dirs supply three things via the shared _scan_local_run
+    # helper. For EVERY unit with a contract: agent-reported human_tasks and
+    # (open-issue) blocked questions join the queue — an open PR does not
+    # erase the human work its run discovered. For units WITHOUT an open PR
+    # only: an entry in the snapshot — active runs (run record, no contract
+    # yet) go to the in-flight section, and contracted/dead runs to recent
+    # outcomes as agent:<status>.
     candidates: list[tuple[str, int, str, str]] = []
     units_root = root / cfg.runtime_dir / "units"
     for unit_dir in (d for d in units_root.glob("*") if d.name.isdigit()):
         number = int(unit_dir.name)
-        started = _read_local_result(unit_dir / "run_started.json") or {}
-        started_at = started.get("started_at")
-        sort_key = str(started_at) if isinstance(started_at, str) else ""
-        result = _read_local_result(unit_dir / "result.json")
-        if result is None:
-            if started and number not in units_with_prs:
-                # A recorded exit status means the run is DEAD without a
-                # contract — a terminal outcome, not an in-flight row. No
-                # status file and no contract reads as still active
-                # (best-effort: a SIGKILLed wrapper leaves no record and
-                # will show as in-flight until cleaned).
-                if (unit_dir / "exit-status").exists():
-                    candidates.append(
-                        (sort_key, number, "agent:died (no contract)", "")
-                    )
-                else:
-                    statuses.append(
-                        report.UnitStatus(
-                            unit=_unit_from_issue(gh.issue(number)),
-                            state="in-flight (no contract)",
-                            detail=sort_key,
-                        )
-                    )
-            continue
-        # The real contract validator judges the sidecar (schema, allowed
-        # statuses, required fields). The worktree feeds the BLOCKED.md
-        # fallback, so resolve the unit's preserved worktree like targeted
-        # status does (fall back to the run dir when none survives).
-        wt = next(iter((root / cfg.worktrees_dir).glob(f"{number}-*")), unit_dir)
-        contract, _errors = backend_mod.read_result(unit_dir, wt)
-        if contract is None:
-            if number not in units_with_prs:
-                candidates.append((sort_key, number, "agent:invalid-contract", ""))
-            continue
-        # Queue candidates first; the issue state (one gh read) is checked
-        # only when the contract could actually contribute queue entries —
-        # a completed no-task contract costs no API call.
-        question = contract.blocked_question
-        question = question.strip() if isinstance(question, str) else ""
-        contributes = bool(contract.human_tasks) or (
-            contract.status == "blocked" and question
+        run = _scan_local_run(
+            cfg, root, gh, number, has_open_pr=number in units_with_prs
         )
-        issue_open = contributes and (
-            (gh.issue(number).get("state") or "").upper() == "OPEN"
-        )
-        # Tasks and blocked questions from closed/cancelled issues must
-        # not haunt the queue forever.
-        if issue_open and contract.human_tasks:
-            add_tasks(number, list(contract.human_tasks))
-        if contract.status == "blocked" and issue_open and question:
-            blocked[number] = question
-        if number in units_with_prs:
-            continue  # represented by its PR row(s) above
-        detail = contract.summary.strip().splitlines()[0] if contract.summary else ""
-        candidates.append((sort_key, number, f"agent:{contract.status}", detail))
+        if run is None:
+            continue
+        # Tasks and blocked questions from closed/cancelled issues must not
+        # haunt the queue forever — the helper already gated on issue-open.
+        add_tasks(number, run.human_tasks)
+        if run.blocked_question:
+            blocked[number] = run.blocked_question
+        if run.state is None:
+            continue
+        if run.terminal:
+            candidates.append((run.started_at, number, run.state, run.detail))
+        else:
+            statuses.append(
+                report.UnitStatus(
+                    unit=_unit_from_issue(gh.issue(number)),
+                    state=run.state,
+                    detail=run.detail,
+                )
+            )
     # Bounded and recency-ordered: newest run_started first, cap at 10.
     candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
     outcomes = [(n, st, d) for _ts, n, st, d in candidates[:10]]
@@ -497,6 +551,15 @@ def cmd_status(args: argparse.Namespace) -> int:
     if args.milestone is None and args.issue is None:
         return _status_overall(cfg, root, gh)
     target = prepare_target(gh, cfg, milestone=args.milestone, issue=args.issue)
+    return _status_targeted(cfg, root, gh, target)
+
+
+def _status_targeted(cfg: Config, root: Path, gh: GitHub, target: Target) -> int:
+    """Targeted `foreman status --milestone/--issue`: one row per unit. A
+    unit with no open PR folds in the same local-run evidence the overall
+    snapshot reads (via _scan_local_run), so a mid-run unit reports
+    in-flight/agent:<status>/agent:died here too — never a bare 'waiting'
+    while the overall view calls the same unit in-flight (#94)."""
     open_prs = shepherd_mod.open_foreman_prs(gh)
     prs_by_unit = {p["_unit"]: p for p in open_prs}
     statuses: list[report.UnitStatus] = []
@@ -546,23 +609,28 @@ def cmd_status(args: argparse.Namespace) -> int:
                 )
             )
             continue
-        blocked_file = root / cfg.runtime_dir / "units" / str(number) / "result.json"
-        detail = ""
-        if blocked_file.exists():
-            contract, _errors = backend_mod.read_result(
-                blocked_file.parent, worktree.worktree_path(cfg, root, unit)
+        # Fold in the same local-run evidence the overall snapshot reads, so
+        # a mid-run unit reports in-flight/agent:<status>/agent:died here too
+        # instead of a bare "waiting" (#94). Same helper, same guards — the
+        # two views can never diverge.
+        run = _scan_local_run(cfg, root, gh, number, has_open_pr=False)
+        if run and run.human_tasks:
+            existing = human_tasks.setdefault(number, [])
+            existing.extend(t for t in run.human_tasks if t not in existing)
+        if run and run.blocked_question:
+            blocked[number] = run.blocked_question
+        if run and run.state:
+            statuses.append(
+                report.UnitStatus(unit=unit, state=run.state, detail=run.detail)
             )
-            if contract and contract.status == "blocked" and contract.blocked_question:
-                blocked[number] = contract.blocked_question
-                detail = "blocked on a question"
+            continue
+        # No local run in progress — fall back to the scheduling state.
         outcome_state = "waiting"
         if unit.inputs and unit.inputs.hold:
             outcome_state = "held"
         elif unit.inputs and not unit.inputs.armed:
             outcome_state = "not-armed"
-        statuses.append(
-            report.UnitStatus(unit=unit, state=outcome_state, detail=detail)
-        )
+        statuses.append(report.UnitStatus(unit=unit, state=outcome_state))
     print(report.summary_table(statuses))
     print()
     print(
