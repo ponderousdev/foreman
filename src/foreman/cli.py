@@ -352,8 +352,12 @@ def _status_overall(cfg: Config, root: Path, gh: GitHub) -> int:
             status.get("statusCheckRollup")
         )
         labels = [label["name"] for label in status.get("labels") or []]
-        state = "ready-to-merge" if "ready-to-merge" in labels else "pr-open"
-        if state == "ready-to-merge":
+        # A ready-to-merge label can go stale (new commits, regressed
+        # checks) — readiness requires the label AND currently-green
+        # checks; the checks state renders either way.
+        ready_now = "ready-to-merge" in labels and checks_state == "green"
+        state = "ready-to-merge" if ready_now else f"pr-open ({checks_state})"
+        if ready_now:
             ready.append(
                 shepherd_mod.PrWork(
                     number=pr["number"],
@@ -374,29 +378,47 @@ def _status_overall(cfg: Config, root: Path, gh: GitHub) -> int:
             )
         )
 
-    # In-flight-without-a-PR and terminal outcomes come from local run dirs.
-    # A unit that still has an open PR is represented by that PR above.
-    outcomes: list[tuple[int, str, str]] = []
+    # In-flight-without-a-PR and recent outcomes come from local run dirs.
+    # A unit with an open PR is represented by that PR above. Sidecar data
+    # is AGENT-REPORTED and display-only: a "completed" contract does not
+    # prove the supervisor's post-agent gates passed (no PR here says
+    # otherwise), so it renders as agent:<status>, never as terminal truth.
+    candidates: list[tuple[float, int, str, str]] = []
     units_root = root / cfg.runtime_dir / "units"
-    for unit_dir in sorted(
-        (d for d in units_root.glob("*") if d.name.isdigit()),
-        key=lambda d: int(d.name),
-    ):
+    for unit_dir in (d for d in units_root.glob("*") if d.name.isdigit()):
         number = int(unit_dir.name)
         if number in prs_by_unit:
             continue
+        started = _read_local_result(unit_dir / "run_started.json") or {}
+        started_at = started.get("started_at")
+        sort_key = str(started_at) if isinstance(started_at, str) else ""
         result = _read_local_result(unit_dir / "result.json")
         if result is None:
+            # No contract: an active or died-before-contract run — still
+            # worth showing, derived from the run record alone.
+            if started:
+                candidates.append((0, number, "agent:running/no-contract", sort_key))
             continue
-        result_status = result.get("status") or "unknown"
+        result_status = result.get("status")
+        if not isinstance(result_status, str):
+            continue  # malformed contract: best-effort display skips it
         if result_status == "blocked":
-            question = (result.get("blocked_question") or "").strip()
-            if question:
-                blocked[number] = question
-            continue
-        summary = (result.get("summary") or "").strip()
-        detail = summary.splitlines()[0] if summary else ""
-        outcomes.append((number, result_status, detail))
+            question = result.get("blocked_question")
+            if isinstance(question, str) and question.strip():
+                blocked[number] = question.strip()
+        summary = result.get("summary")
+        detail = ""
+        if isinstance(summary, str) and summary.strip():
+            detail = summary.strip().splitlines()[0]
+        contract_tasks = result.get("human_tasks")
+        if isinstance(contract_tasks, list):
+            valid = [t for t in contract_tasks if isinstance(t, str) and t.strip()]
+            if valid:
+                human_tasks.setdefault(number, []).extend(valid)
+        candidates.append((0, number, f"agent:{result_status}", detail or sort_key))
+    # Bounded and recency-ordered: newest run_started first, cap at 10.
+    candidates.sort(key=lambda c: (c[3], c[1]), reverse=True)
+    outcomes = [(n, st, d) for _z, n, st, d in candidates[:10]]
 
     print(
         report.overall_snapshot(
