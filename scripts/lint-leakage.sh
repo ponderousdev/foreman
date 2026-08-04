@@ -67,6 +67,19 @@ while IFS="$(printf '\t')" read -r pattern allowed; do
     head_hits="$({
         git grep -ail -E "$pattern" HEAD -- . 2>/dev/null | sed 's/^HEAD://'
         git ls-tree -r --name-only HEAD | grep -Ei "$pattern" || true
+        # git grep skips symlink blobs, and --name-only sees only their
+        # paths — a committed link TARGET is published content too.
+        git ls-tree -r HEAD | while IFS= read -r entry; do
+            case "$entry" in
+            120000*)
+                blob="$(printf '%s' "$entry" | awk '{print $3}')"
+                path="$(printf '%s' "$entry" | cut -f2)"
+                if git cat-file blob "$blob" 2>/dev/null | grep -aiq -E "$pattern"; then
+                    printf '%s\n' "$path"
+                fi
+                ;;
+            esac
+        done
     } | sort -u | while IFS= read -r f; do
         if ! printf '%s\n' "$f" | grep -Eq "$allowed"; then
             printf '%s (committed on HEAD)\n' "$f"
