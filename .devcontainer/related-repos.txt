@@ -24,6 +24,7 @@
 
 # Public sibling repos. Private siblings are deliberately NOT listed here:
 # this file ships with the public repo, and the private-repo roster must not
-# (#34, lint-leakage). Add private entries in your local checkout only.
+# (#34, lint-leakage). Put private entries in related-repos.local.txt
+# (same format, gitignored, read after this file, never committed).
 evanharmon1/harmon-init
 evanharmon1/harmon-devkit

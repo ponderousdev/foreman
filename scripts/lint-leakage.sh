@@ -20,11 +20,12 @@ self='^scripts/lint-leakage\.sh$'
 # deliberate maintainer decision (see #34). Everything else is denied.
 trust_cfg='^(\.foreman\.toml|tests/test_config\.py)$'
 
+# '-' in the allowed column = no exceptions anywhere.
 rules="
 mowing-bidder-web	${self}
-ponderous-site	${self}
+ponderous-(site|infra|hub|docs)	${self}
 lawnomator	${self}
-[^n]omator	${self}
+(^|[^[:alnum:]])omator	${self}
 harmonops	${self}
 harmon-infra	${self}
 Jessedroptable	${self}|${trust_cfg}
@@ -33,9 +34,11 @@ Jessedroptable	${self}|${trust_cfg}
 fail=0
 while IFS="$(printf '\t')" read -r pattern allowed; do
     [ -z "$pattern" ] && continue
+    # '-' = the documented no-exceptions sentinel, not a path regex.
+    [ "$allowed" = "-" ] && allowed='^$'
     hits="$(git ls-files | grep -Ev '^\.git/' | while IFS= read -r f; do
         [ -f "$f" ] || continue
-        if grep -Iq -E "$pattern" "$f" 2>/dev/null; then
+        if grep -Iiq -E "$pattern" "$f" 2>/dev/null; then
             if ! printf '%s\n' "$f" | grep -Eq "$allowed"; then
                 printf '%s\n' "$f"
             fi

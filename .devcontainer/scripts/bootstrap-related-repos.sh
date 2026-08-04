@@ -26,6 +26,9 @@ unset NODE_OPTIONS
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="${SCRIPT_DIR}/../related-repos.txt"
+# Untracked local additions (gitignored) — private entries live here so the
+# public repo never ships them and lint-leakage never sees them.
+LOCAL_CONFIG_FILE="${SCRIPT_DIR}/../related-repos.local.txt"
 WORKSPACES_DIR="/workspaces"
 
 # --- Pre-flight checks ---
@@ -137,7 +140,10 @@ while IFS= read -r raw_line || [ -n "$raw_line" ]; do
         # Clean up partial clone if gh/git left a stub directory behind.
         [ -d "$target" ] && rm -rf "$target"
     fi
-done <"$CONFIG_FILE"
+done < <(
+    cat "$CONFIG_FILE"
+    if [ -f "$LOCAL_CONFIG_FILE" ]; then cat "$LOCAL_CONFIG_FILE"; fi
+)
 
 # --- Summary ---
 

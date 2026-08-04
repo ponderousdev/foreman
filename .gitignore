@@ -82,3 +82,6 @@ settings.local.json
 .env/
 # ...but keep the committed example (documents required vars; contains no secrets).
 !/.env.example
+
+# Private sibling-repo additions (see .devcontainer/related-repos.txt)
+.devcontainer/related-repos.local.txt
