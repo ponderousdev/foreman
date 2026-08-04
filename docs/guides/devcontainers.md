@@ -79,9 +79,8 @@ What Coder needs is a **workspace template** that clones this repo and builds th
 devcontainer — that template is **org-level infrastructure, not part of this
 repo** (one template serves every repo). To stand this repo up in Coder:
 
-1. Use your org's Coder "devcontainer" template (the canonical example is
-   `terraform/coder/devcontainer/` in
-   [harmonops/harmon-infra](https://github.com/harmonops/harmon-infra)). It uses
+1. Use your org's Coder "devcontainer" template (kept in the operator's
+   private infra repo). It uses
    the Coder `git-clone` + `devcontainers-cli` modules.
 2. Create a workspace from it and set the parameters:
    - **repo** → `https://github.com/ponderousdev/foreman`
@@ -94,7 +93,7 @@ repo** (one template serves every repo). To stand this repo up in Coder:
    package is private, give the Coder builder a read token (or make the package
    public); a cache miss only makes the first build slower.
 
-> Unlike harmon-infra, this repo's `Dockerfile` uses the **public** Microsoft
+> Unlike the operator infra repo, this repo's `Dockerfile` uses the **public** Microsoft
 > base image, so the classic-PAT / private-base-image (`ghcr_read_token`)
 > complication does not apply here — only the repo's own `-devcontainer` cache
 > image matters.

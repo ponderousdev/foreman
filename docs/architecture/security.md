@@ -177,8 +177,9 @@ exceed it. Two independent layers must both allow an operation:
    **uniform across every selected repo**; there is no per-repo matrix.
 
 So a repo where the bot is a `pull` collaborator stays read-only even though the
-PAT carries `contents: write`. That is why the bot has write on `ponderous-site`
-and read on `mowing-bidder-web` under one token — the collaborator grant caps it.
+PAT carries `contents: write`. That is why the bot can hold write on one
+consumer repo and read-only on another under one token — the collaborator
+grant caps it.
 
 Practical consequence — **two levers, different jobs**, and picking the wrong one
 is why this gets confusing:

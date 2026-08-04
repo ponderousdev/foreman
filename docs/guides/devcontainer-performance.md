@@ -23,12 +23,11 @@ machine than you need). **VS Code** warns when the host is under it. **Coder**
 ignores it. Raising these numbers does **not** give the container more resources;
 it only gates startup. For actual headroom, use the two levers below.
 
-## Coder workspace quota (lives in harmon-infra)
+## Coder workspace quota (lives in the operator infra repo)
 
 When the devcontainer runs in a Coder workspace, its CPU/RAM ceiling is the
 **workspace's** quota, set by the Coder template — which is org-level
-infrastructure (the canonical example is `terraform/coder/devcontainer/` in
-[harmonops/harmon-infra](https://github.com/harmonops/harmon-infra)), **not**
+infrastructure in the operator's private infra repo, **not**
 this repo. To give the container more headroom, raise the CPU/memory parameters
 (or the resource limits) on the Coder template / workspace there, then rebuild
 the workspace.

@@ -20,7 +20,8 @@ commit (PR #48), so `git log --follow` crosses the move.
 
 A milestone contains well-specced issues with dependency edges. Working them
 one at a time is safe but slow; working them all at once is chaos. Two real
-milestone runs (omator M3/M4, issue #258's evidence base) showed the failure
+milestone runs in a consumer repo (the evidence base lives in its tracker)
+showed the failure
 modes: stored status fields lie after crashes, stacked PRs create rebase
 cascades, subscription usage windows kill unattended agents, review-bot
 round-trips eat half the effort, and "the agent says it's done" is not a

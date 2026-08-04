@@ -95,6 +95,7 @@ tasks:
       - lint:markdown
       - lint:actions
       - lint:hygiene
+      - lint:leakage
       - lint:python
 
   lint:python:
@@ -139,6 +140,11 @@ tasks:
       SHELLCHECK_OPTS: --exclude=SC2016
     cmds:
       - actionlint
+
+  lint:leakage:
+    desc: "Guard: no personal-identity / private-infrastructure identifiers in shipped content (#34)"
+    cmds:
+      - ./scripts/lint-leakage.sh
 
   lint:hygiene:
     desc: File hygiene (trailing whitespace, EOF newlines, merge markers, etc.)

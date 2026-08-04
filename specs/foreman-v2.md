@@ -440,8 +440,8 @@ loop exercised on the one repo that forces it.
 
 ### D11: Distribution is a git-tag `uvx` invocation, not a package index
 
-**Consumers are not Python projects.** `omator`, `mowing-bidder-web`, and
-`lawnomator-site` all carry `package.json` and no `pyproject.toml`; harmon-init
+**Consumers are not Python projects.** The three consumer repos are all
+React/TypeScript (`package.json`, no `pyproject.toml`); harmon-init
 has none either. Nobody imports Foreman — it is a CLI. So "install a pinned
 Foreman dependency" had no project to be a dependency *of*, and the
 GHCR-vs-PyPI question was answering something nobody asked. Today's invocation

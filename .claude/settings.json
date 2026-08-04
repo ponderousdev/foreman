@@ -17,12 +17,6 @@
       "Bash(git push --force:*)"
     ],
     "additionalDirectories": [
-      "../omator",
-      "../ponderous-infra",
-      "../ponderous-site",
-      "../lawnomator-site",
-      "../ponderous-hub",
-      "../ponderous-docs",
       "../harmon-init",
       "../harmon-devkit"
     ]
@@ -30,12 +24,6 @@
   "sandbox": {
     "filesystem": {
       "allowRead": [
-        "../omator",
-        "../ponderous-infra",
-        "../ponderous-site",
-        "../lawnomator-site",
-        "../ponderous-hub",
-        "../ponderous-docs",
         "../harmon-init",
         "../harmon-devkit"
       ]
