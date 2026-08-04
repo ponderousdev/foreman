@@ -24,8 +24,9 @@ expected_login = "evanharmon1-bot"
 # arm and to author dispatchable content.
 trusted_actors = ["evanharmon1", "evanharmon1-bot", "AdmiralFraggle", "admiralfraggle-bot", "Jessedroptable"]
 
-# Hard requirements: none. The baseline gate runs without special
-# capabilities, so a capability-poor runner is never refused for this repo.
+# DECLARED hard requirements: none — the baseline gate needs no special
+# capabilities. Refusal still happens anyway: D4 injects `untrusted-input`
+# on this public repo regardless of this list (see the runner note above).
 required_capabilities = []
 
 # subscription (default): adapters inherit CLAUDE_CODE_OAUTH_TOKEN; USD
