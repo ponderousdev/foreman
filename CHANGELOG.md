@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are intentional: release-please maintains a rolling release PR from
 conventional commits, and merging it cuts the tag, GitHub release, and this
 changelog (`task release:*` remains as a manual override).
+## [2.1.1](https://github.com/ponderousdev/foreman/compare/v2.1.0...v2.1.1) (2026-08-04)
+
+
+### Bug Fixes
+
+* **ci:** least-privilege workflow hardening for public exposure ([#110](https://github.com/ponderousdev/foreman/issues/110)) ([d8987e2](https://github.com/ponderousdev/foreman/commit/d8987e2eeab15eec265d9dfa590b13ff4a600aad)), closes [#108](https://github.com/ponderousdev/foreman/issues/108)
+* genericize shipped identifiers + permanent leakage guard ([#111](https://github.com/ponderousdev/foreman/issues/111)) ([be18246](https://github.com/ponderousdev/foreman/commit/be1824685253dd3d67dcccecf57b4c15c6fe63d4))
+* relicense under Apache-2.0 ([#117](https://github.com/ponderousdev/foreman/issues/117)) ([2b2a4c3](https://github.com/ponderousdev/foreman/commit/2b2a4c31b1ebc9dcf43a9e73e9fa28b487f39099))
+
+
+### Documentation
+
+* record the D4 public-dispatch refusal in config + README ([#118](https://github.com/ponderousdev/foreman/issues/118)) ([893dc47](https://github.com/ponderousdev/foreman/commit/893dc4738b6c6b81d9d8d4c00328c5cb7c26401e))
+
 ## [2.1.0](https://github.com/ponderousdev/foreman/compare/v2.0.0...v2.1.0) (2026-08-03)
 
 
