@@ -54,12 +54,27 @@ while IFS="$(printf '\t')" read -r pattern allowed; do
             continue
         fi
         [ -f "$f" ] || continue
-        if grep -Iiq -E "$pattern" "$f" 2>/dev/null; then
+        if grep -aiq -E "$pattern" "$f" 2>/dev/null; then
             if ! printf '%s\n' "$f" | grep -Eq "$allowed"; then
                 printf '%s\n' "$f"
             fi
         fi
     done)"
+    # The worktree loop above lints what you are editing; this lints what a
+    # push of the CURRENT branch actually publishes (committed state can
+    # differ from the worktree). Pushing a ref other than the checked-out
+    # HEAD is not covered locally — CI runs this same guard on every PR head.
+    head_hits="$({
+        git grep -ail -E "$pattern" HEAD -- . 2>/dev/null | sed 's/^HEAD://'
+        git ls-tree -r --name-only HEAD | grep -Ei "$pattern" || true
+    } | sort -u | while IFS= read -r f; do
+        if ! printf '%s\n' "$f" | grep -Eq "$allowed"; then
+            printf '%s (committed on HEAD)\n' "$f"
+        fi
+    done)"
+    if [ -n "$head_hits" ]; then
+        hits="$(printf '%s\n%s' "$hits" "$head_hits" | sed '/^$/d' | sort -u)"
+    fi
     if [ -n "$hits" ]; then
         echo "LEAKAGE: pattern '$pattern' found in shipped content:" >&2
         printf '%s\n' "$hits" | sed 's/^/  /' >&2
