@@ -3,7 +3,7 @@
 # package must build from a plain git checkout with a stock PEP 517 backend —
 # no generated files, no exotic build steps.
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
@@ -12,7 +12,8 @@ name = "foreman"
 version = "2.1.0"
 description = "Deterministic supervisor for dispatching agent work across local, Docker, and Sprite runners"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 # Runtime is deliberately stdlib-only; the entire vendor/tool surface is shelled
 # out (gh, git, backends/*.sh). Keep it that way.

@@ -241,6 +241,11 @@ added by a Foreman-dispatched agent working
 [issue #72](https://github.com/ponderousdev/foreman/issues/72) — the end-to-end
 smoke test of the v2.0 dispatch pipeline.
 
+## Support posture
+
+Personal tool, published as-is; issues/PRs may go unanswered. Security
+reports go through [SECURITY.md](.github/SECURITY.md), which is monitored.
+
 ## License
 
-See [LICENSE](LICENSE).
+Apache-2.0 — see [LICENSE](LICENSE).
