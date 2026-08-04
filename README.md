@@ -117,8 +117,9 @@ authorship classifies the unit as `untrusted-input`, which `local` refuses.
 > **Public repositories cannot dispatch under the local runner.** A public
 > repo means the world can create or edit issues, so every unit requires the
 > `untrusted-input` boundary (D4) — `local` never provides it, and dispatch
-> refuses by design (this repo included, since publication). `plan`, `vet`,
-> `status`, and `preflight` work everywhere; dispatch on public repos arrives
+> refuses by design (this repo included, since publication). `plan` still
+> runs and reports the refusal (exiting nonzero); `vet` skips refused units;
+> `status` and `preflight` are unaffected. Dispatch on public repos arrives
 > with the isolated SpriteRunner (#8).
 
 ### 3. Run the loop

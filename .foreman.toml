@@ -9,7 +9,8 @@
 # the world can create or edit issues, so the repo predicate classifies
 # EVERY unit as requiring the `untrusted-input` boundary, which local never
 # provides. Dispatch therefore refuses here BY DESIGN until SpriteRunner
-# (#8) ships; plan / vet / status / preflight are unaffected.
+# (#8) ships. plan still runs and REPORTS the refusal (exiting nonzero);
+# vet skips refused units; status and preflight are unaffected.
 runner = "local"
 
 backend = "claude"
