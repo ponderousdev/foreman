@@ -3,7 +3,7 @@
 # package must build from a plain git checkout with a stock PEP 517 backend —
 # no generated files, no exotic build steps.
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
