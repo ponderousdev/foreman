@@ -37,6 +37,22 @@ while IFS="$(printf '\t')" read -r pattern allowed; do
     # '-' = the documented no-exceptions sentinel, not a path regex.
     [ "$allowed" = "-" ] && allowed='^$'
     hits="$(git ls-files | grep -Ev '^\.git/' | while IFS= read -r f; do
+        # The pathname itself is shipped content (a denied name can leak as a
+        # filename), and so is a symlink's stored target — neither is covered
+        # by a content grep.
+        if printf '%s\n' "$f" | grep -Eiq "$pattern"; then
+            if ! printf '%s\n' "$f" | grep -Eq "$allowed"; then
+                printf '%s (pathname)\n' "$f"
+                continue
+            fi
+        fi
+        if [ -L "$f" ]; then
+            if readlink "$f" | grep -Eiq "$pattern" &&
+                ! printf '%s\n' "$f" | grep -Eq "$allowed"; then
+                printf '%s (symlink target)\n' "$f"
+            fi
+            continue
+        fi
         [ -f "$f" ] || continue
         if grep -Iiq -E "$pattern" "$f" 2>/dev/null; then
             if ! printf '%s\n' "$f" | grep -Eq "$allowed"; then

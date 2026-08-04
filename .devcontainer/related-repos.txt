@@ -13,10 +13,11 @@
 # Lines starting with # are comments; blank lines are ignored. Existing
 # /workspaces/<repo> dirs are never clobbered (no pull, no checkout, no reset).
 #
-# To let Claude read/search the cloned siblings, also list them in
-# .claude/settings.json under permissions.additionalDirectories (Claude's file
-# tools) AND sandbox.filesystem.allowRead (the Bash sandbox). See
-# docs/guides/devcontainers.md.
+# To let Claude read/search the cloned siblings, also list them under
+# permissions.additionalDirectories (Claude's file tools) AND
+# sandbox.filesystem.allowRead (the Bash sandbox) — PUBLIC siblings in the
+# tracked .claude/settings.json, PRIVATE siblings in .claude/settings.local.json
+# (gitignored) so their names never ship. See docs/guides/devcontainers.md.
 #
 # Examples — uncomment and edit:
 #   your-org/shared-libs
