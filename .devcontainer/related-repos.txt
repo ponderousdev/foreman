@@ -13,22 +13,19 @@
 # Lines starting with # are comments; blank lines are ignored. Existing
 # /workspaces/<repo> dirs are never clobbered (no pull, no checkout, no reset).
 #
-# To let Claude read/search the cloned siblings, also list them in
-# .claude/settings.json under permissions.additionalDirectories (Claude's file
-# tools) AND sandbox.filesystem.allowRead (the Bash sandbox). See
-# docs/guides/devcontainers.md.
+# To let Claude read/search the cloned siblings, also list them under
+# permissions.additionalDirectories (Claude's file tools) AND
+# sandbox.filesystem.allowRead (the Bash sandbox) — PUBLIC siblings in the
+# tracked .claude/settings.json, PRIVATE siblings in .claude/settings.local.json
+# (gitignored) so their names never ship. See docs/guides/devcontainers.md.
 #
 # Examples — uncomment and edit:
 #   your-org/shared-libs
 #   your-org/api@main
 
-# Ponderous sibling repos (cloned via the authenticated gh CLI; owner/repo form
-# so the private repos clone with the gh token rather than a bare git URL).
-ponderousdev/omator
-ponderousdev/ponderous-infra
-ponderousdev/ponderous-site
-ponderousdev/lawnomator-site
-ponderousdev/ponderous-hub
-ponderousdev/ponderous-docs
+# Public sibling repos. Private siblings are deliberately NOT listed here:
+# this file ships with the public repo, and the private-repo roster must not
+# (#34, lint-leakage). Put private entries in related-repos.local.txt
+# (same format, gitignored, read after this file, never committed).
 evanharmon1/harmon-init
 evanharmon1/harmon-devkit
