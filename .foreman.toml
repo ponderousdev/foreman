@@ -5,8 +5,11 @@
 # from a dispatched branch — an agent must not edit its own trust or gate.
 
 # v2.0 ships only the local runner. sprite (v2.1) is what makes untrusted
-# dogfooding safe; until then this repo dispatches only trusted-authored
-# issues (D4/D13), which the trust gate enforces.
+# dogfooding safe. NOTE (D4): this repository is PUBLIC as of 2026-08-04 —
+# the world can create or edit issues, so the repo predicate classifies
+# EVERY unit as requiring the `untrusted-input` boundary, which local never
+# provides. Dispatch therefore refuses here BY DESIGN until SpriteRunner
+# (#8) ships; plan / vet / status / preflight are unaffected.
 runner = "local"
 
 backend = "claude"

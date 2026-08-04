@@ -114,6 +114,13 @@ Every dispatchable issue needs an `## Acceptance Criteria` section; items
 tagged `[HUMAN]` are surfaced for a human and never attempted. Untrusted
 authorship classifies the unit as `untrusted-input`, which `local` refuses.
 
+> **Public repositories cannot dispatch under the local runner.** A public
+> repo means the world can create or edit issues, so every unit requires the
+> `untrusted-input` boundary (D4) — `local` never provides it, and dispatch
+> refuses by design (this repo included, since publication). `plan`, `vet`,
+> `status`, and `preflight` work everywhere; dispatch on public repos arrives
+> with the isolated SpriteRunner (#8).
+
 ### 3. Run the loop
 
 ```bash
