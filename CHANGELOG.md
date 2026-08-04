@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are intentional: release-please maintains a rolling release PR from
 conventional commits, and merging it cuts the tag, GitHub release, and this
 changelog (`task release:*` remains as a manual override).
+## [2.1.0](https://github.com/ponderousdev/foreman/compare/v2.0.0...v2.1.0) (2026-08-03)
+
+
+### Features
+
+* **status:** print an overall snapshot when no target is given ([#88](https://github.com/ponderousdev/foreman/issues/88)) ([af372e6](https://github.com/ponderousdev/foreman/commit/af372e62ad81aa842d89a59edcc104973755a6cc))
+
+
+### Bug Fixes
+
+* **ci:** refresh uv.lock on the release PR automatically ([#62](https://github.com/ponderousdev/foreman/issues/62)) ([90df8b3](https://github.com/ponderousdev/foreman/commit/90df8b3649d4c8e4de62bb593ccd21a7f6492a53))
+* **config:** keep dogfood top-level keys above the [verify] section ([#67](https://github.com/ponderousdev/foreman/issues/67)) ([2654158](https://github.com/ponderousdev/foreman/commit/26541584dbd53a941fc1a63e796f135ba8462273))
+* **github:** derive CI state from PAT-readable sources ([#89](https://github.com/ponderousdev/foreman/issues/89)) ([#97](https://github.com/ponderousdev/foreman/issues/97)) ([a20f518](https://github.com/ponderousdev/foreman/commit/a20f5185b7289ca44fc85daaebaa6653275abd2b))
+* **github:** derive PR merged-ness — gh dropped the boolean field ([#86](https://github.com/ponderousdev/foreman/issues/86)) ([2706c85](https://github.com/ponderousdev/foreman/commit/2706c85531113d66c4a754d5defb7bbdda89fc48))
+* **github:** read comment body from stdin, not literal '@-' ([#90](https://github.com/ponderousdev/foreman/issues/90)) ([#93](https://github.com/ponderousdev/foreman/issues/93)) ([8f6d722](https://github.com/ponderousdev/foreman/commit/8f6d7225644e814ff08a5172926b5f4c7807bde0))
+* **graph:** normalize every gh relational field, not just subIssues ([#78](https://github.com/ponderousdev/foreman/issues/78)) ([568901f](https://github.com/ponderousdev/foreman/commit/568901f32943a73b400ae641b26edf56bc4290c1))
+* **graph:** normalize gh's subIssues connection-object shape ([#74](https://github.com/ponderousdev/foreman/issues/74)) ([df492ca](https://github.com/ponderousdev/foreman/commit/df492ca837035d257499e31a93758beb26592597))
+* **inputs:** close the vet/status-comment/title gaps and correct the input-surface table ([#64](https://github.com/ponderousdev/foreman/issues/64)) ([0a290dd](https://github.com/ponderousdev/foreman/commit/0a290dd88e1e7cfed3f85bb3e810d0643acd2f9a))
+* **shepherd:** pick off the security-first [#54](https://github.com/ponderousdev/foreman/issues/54) hardening items ([#70](https://github.com/ponderousdev/foreman/issues/70)) ([fe5f281](https://github.com/ponderousdev/foreman/commit/fe5f28132dd79153feea962573ed7e8f2475f485))
+* **signatures:** classify docker-daemon failures as environmental ([#65](https://github.com/ponderousdev/foreman/issues/65)) ([5914bfb](https://github.com/ponderousdev/foreman/commit/5914bfb156a178201c7786efdd162b7098776b4f))
+* **status:** fold local-run evidence into targeted status ([#94](https://github.com/ponderousdev/foreman/issues/94)) ([#96](https://github.com/ponderousdev/foreman/issues/96)) ([c146217](https://github.com/ponderousdev/foreman/commit/c146217bac859939eb340e836f19c0ffb7b9c016))
+
 ## 2.0.0 (2026-08-01)
 
 
