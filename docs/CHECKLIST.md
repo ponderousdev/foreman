@@ -43,6 +43,10 @@ config, toolchain, devcontainer, and dev environment — against the items below
       resource owner, so a **new owner needs a new PAT**. Both layers are required —
       the collaborator grant above sets the ceiling, the PAT's repo list reaches it.
       Procedure: [guides/bot-account.md](guides/bot-account.md).
+- [ ] **Sanitized an issue, PR body, or comment?** Delete its superseded
+      revisions via the item's edit-history menu ("edited" dropdown) — GitHub
+      keeps prior versions publicly viewable on public repos, so an edit
+      without revision deletion hides nothing.
 - [ ] Import the branch ruleset (see [architecture/branch-protection.md](architecture/branch-protection.md)) — do this once `build.yml` is on `main` so the required `verify`/`security` checks resolve. **Use the UI import:** Settings → Rules → Rulesets → **New ruleset ▸ Import a ruleset** → select `.github/Branch Protection Ruleset - Protect Main.json`. (Prefer the UI over `gh api … rulesets`: the API `POST` is not idempotent — re-running creates a duplicate ruleset — and currently rejects the `merge_queue` rule. To later change the ruleset, edit the existing one in the UI rather than re-importing.)
 
 - [ ] Install the [Renovate app](https://github.com/apps/renovate) on the repo
