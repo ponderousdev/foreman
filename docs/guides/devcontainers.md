@@ -102,7 +102,10 @@ repo** (one template serves every repo). To stand this repo up in Coder:
 
 To work across several repos in one container, list them in
 `.devcontainer/related-repos.txt` (one `owner/repo` per line; `@branch`, full
-URLs, and ssh URLs also work). They are:
+URLs, and ssh URLs also work). **Private siblings go in
+`.devcontainer/related-repos.local.txt`** — same format, gitignored, read
+after the tracked file — so their names never ship with the public repo
+(`task lint:leakage` enforces this). They are:
 
 - **cloned** into `/workspaces/`, beside this repo, on container **create**
   (`scripts/bootstrap-related-repos.sh`) — so a rebuilt or persistence-lost
@@ -115,10 +118,12 @@ clone skips it, and start runs `git fetch` only (never pull / merge / checkout),
 so uncommitted work, local commits, and the checked-out branch stay put. The
 list is preserved across `copier update` (an empty list is a no-op).
 
-To let Claude read and search the cloned siblings, add them to
-`.claude/settings.json` in **two** places — `permissions.additionalDirectories`
-(Claude's own Read/Grep/Glob tools) and `sandbox.filesystem.allowRead` (the Bash
-sandbox):
+To let Claude read and search the cloned siblings, add them in **two**
+places — `permissions.additionalDirectories` (Claude's own Read/Grep/Glob
+tools) and `sandbox.filesystem.allowRead` (the Bash sandbox). Public siblings
+belong in the tracked `.claude/settings.json`; **private siblings belong in
+gitignored `.claude/settings.local.json`** (same shape, merged by Claude
+Code), for the same never-ship reason:
 
 ```json
 {
