@@ -11,6 +11,7 @@ from foreman.github import STATUS_MARKER
 from foreman.graph import Unit
 from foreman.report import (
     EVENT_LOG_MARKER,
+    MAX_EVENT_CHARS,
     MAX_EVENTS,
     MAX_LOG_CHARS,
     UnitStatus,
@@ -126,6 +127,19 @@ class EventAppend(unittest.TestCase):
         self.assertEqual(len(events), MAX_EVENTS)
         self.assertIn(f"event {MAX_EVENTS + 9}", events[0])
         self.assertNotIn("event 0", "\n".join(events))
+
+    def test_single_oversized_event_is_clamped(self):
+        # An event bigger than the whole log budget must not survive intact:
+        # the write would exceed GitHub's comment cap, fail, be swallowed —
+        # and the failure it carries would never be recorded.
+        events = append_event([], "failed: " + "x" * (MAX_LOG_CHARS * 2))
+        self.assertEqual(len(events), 1)
+        self.assertLess(len(events[0]), MAX_EVENT_CHARS + 40)
+        self.assertTrue(events[0].endswith("…"))
+        # Clamped text still dedups against a re-send of the full text.
+        self.assertEqual(
+            append_event(events, "failed: " + "x" * (MAX_LOG_CHARS * 2)), events
+        )
 
     def test_oversize_log_drops_oldest_until_it_fits(self):
         big = "x" * 6000

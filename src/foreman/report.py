@@ -74,6 +74,10 @@ MAX_EVENTS = 50
 # GitHub's comment cap is 65,536 chars; the snapshot section is bounded by
 # blockers/human tasks, so capping the log alone leaves ample headroom.
 MAX_LOG_CHARS = 50_000
+# One entry can never eat the budget: an oversized failure detail must not
+# make the whole write exceed GitHub's cap — a swallowed write failure would
+# drop the very event (usually a failure) most worth recording.
+MAX_EVENT_CHARS = 2_000
 _EVENT_RE = re.compile(r"^- \S+ — .+$")
 _EVENT_SEP = " — "
 
@@ -103,6 +107,8 @@ def append_event(events: list[str], text: str) -> list[str]:
     # exceptions), which would break the line grammar — and with it the
     # dedup that keeps repeated ticks from re-appending the same fact.
     text = " ".join(text.split())
+    if len(text) > MAX_EVENT_CHARS:
+        text = text[: MAX_EVENT_CHARS - 1] + "…"
     if events and _event_text(events[0]) == text:
         return events
     out = [f"- {utc_now_iso()}{_EVENT_SEP}{text}", *events][:MAX_EVENTS]
