@@ -237,6 +237,12 @@ def dispatch_unit(
         )
     try:
         outcome = _dispatch_locked(gh, cfg, root, selection, unit, mode=mode)
+    except Exception as exc:
+        # #82: the initiation write has already advertised `dispatched` on the
+        # issue — a setup failure after it must not strand that as the last
+        # word. Record the failure, then let run_dispatch see the raise.
+        _post_status(gh, unit, Outcome(unit, "failed", detail=str(exc)))
+        raise
     finally:
         lock.release()
     outcome.duration_s = time.monotonic() - started

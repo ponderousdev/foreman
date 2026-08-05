@@ -17,6 +17,7 @@ from foreman.graph import Unit, _unit_from_issue
 from foreman.handoff import WORKFLOW_HUMAN_ONLY
 from foreman.inputs import UnitInputs
 from foreman.runner import Selection
+from foreman.util import ForemanError
 from tests.fakes import (
     issue_json,
     make_github,
@@ -322,6 +323,40 @@ class ConcludeClassifications(unittest.TestCase):
         self.assertEqual(outcome.status, "failed")
         self.assertIn("verification failed", outcome.detail)
         self.assertEqual(ho.pushed, [])
+
+
+class SetupFailureStillPostsStatus(unittest.TestCase):
+    def test_a_raise_after_initiation_records_the_failure(self):
+        # #82: the initiation write advertises `dispatched` on the issue; a
+        # setup raise before _post_status must not strand it as the last word.
+        gh, runner = make_github()
+        runner.when(
+            ["api", "repos/owner/repo/issues/5/comments", "--paginate", "--slurp"],
+            [[]],
+        )
+        runner.when(["api", "--method", "POST"], "{}")
+
+        def boom(*args, **kwargs):
+            raise ForemanError("boom")
+
+        original = dispatch_mod._dispatch_locked
+        dispatch_mod._dispatch_locked = boom
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaises(ForemanError):
+                    dispatch_mod.dispatch_unit(
+                        gh, Config(), Path(tmp), local_selection(), make_unit()
+                    )
+        finally:
+            dispatch_mod._dispatch_locked = original
+        posted = [
+            text
+            for argv, text in runner.calls
+            if argv[:3] == ["api", "--method", "POST"] and text is not None
+        ]
+        self.assertEqual(len(posted), 1)
+        self.assertIn("failed", posted[0])
+        self.assertIn("boom", posted[0])
 
 
 if __name__ == "__main__":
