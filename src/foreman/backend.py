@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from foreman import progress as progress_mod
 from foreman import runner as runner_mod
 from foreman import signatures as signatures_mod
 from foreman.config import Config
@@ -185,6 +186,7 @@ def run_backend(
     timeout_min: int,
     resume_ref: str | None = None,
     gate_cmds: list[list[str]] | None = None,
+    reporter: progress_mod.UnitProgress | None = None,
 ) -> BackendResult:
     session_file = unit_run_dir / "session"
     log_file = unit_run_dir / "agent.log"
@@ -232,11 +234,27 @@ def run_backend(
 
     timed_out = False
     try:
-        status = runner.wait(handle, spec.timeout_s)
+        if reporter is not None:
+            # Slice the otherwise-silent wait so a liveness indicator fires
+            # while the agent runs (#83). The kill-on-timeout path below is
+            # unchanged: wait_with_heartbeat raises WaitTimeout at the same
+            # deadline runner.wait would have.
+            rep = reporter
+            status = progress_mod.wait_with_heartbeat(
+                lambda s: runner.wait(handle, s),
+                spec.timeout_s,
+                lambda elapsed: rep.heartbeat(elapsed, spec.timeout_s),
+                now=rep.now,
+            )
+        else:
+            status = runner.wait(handle, spec.timeout_s)
     except WaitTimeout:
         timed_out = True
         runner.kill(handle)
         status = runner.wait(handle, KILL_REAP_S)
+    finally:
+        if reporter is not None:
+            reporter.settle()
 
     return result_from_wait(
         unit_run_dir, status, timed_out=timed_out, session_offset=session_offset

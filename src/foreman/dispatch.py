@@ -23,6 +23,7 @@ from foreman import backend as backend_mod
 from foreman import gate, report, spec, verify, worktree
 from foreman import handoff as handoff_mod
 from foreman import pr as pr_mod
+from foreman import progress as progress_mod
 from foreman import runner as runner_mod
 from foreman import signatures as signatures_mod
 from foreman import trust as trust_mod
@@ -226,17 +227,27 @@ def dispatch_unit(
     unit: Unit,
     *,
     mode: str | None = None,
+    progress: progress_mod.UnitProgress | None = None,
 ) -> Outcome:
     started = time.monotonic()
+    # A standalone single-unit reporter when none was supplied (e.g. `foreman
+    # retry`), so a direct dispatch narrates too. run_dispatch supplies its own
+    # workers-aware reporter for the concurrent case.
+    if progress is None:
+        progress = progress_mod.DispatchReporter(workers=1).unit(unit.number)
     lock = runner_mod.UnitLock(cfg, root, unit.number)
     if not lock.acquire():
+        # Lock held: another process is driving this unit — we did not start
+        # it, so we do not acknowledge it (start() is post-lock, always).
         return Outcome(
             unit,
             "skipped",
             detail="unit lock held — another foreman process is driving this unit",
         )
     try:
-        outcome = _dispatch_locked(gh, cfg, root, selection, unit, mode=mode)
+        outcome = _dispatch_locked(
+            gh, cfg, root, selection, unit, mode=mode, progress=progress
+        )
     except Exception as exc:
         # #82: the initiation write has already advertised `dispatched` on the
         # issue — a setup failure after it must not strand that as the last
@@ -277,6 +288,7 @@ def _dispatch_locked(
     unit: Unit,
     *,
     mode: str | None,
+    progress: progress_mod.UnitProgress,
 ) -> Outcome:
     remote_name = worktree.remote(cfg)
     default_branch = gh.default_branch()
@@ -298,6 +310,7 @@ def _dispatch_locked(
                 handle,
                 base=base,
                 mode=mode,
+                progress=progress,
             )
         return Outcome(
             unit,
@@ -316,6 +329,10 @@ def _dispatch_locked(
     existing = worktree.attempt_branches(cfg, remote_name, unit.number)
     branch = worktree.next_attempt_branch(worktree.branch_name(cfg, unit), existing)
 
+    # Immediate acknowledgment (#83 AC1): branch + live log path, emitted
+    # post-lock and post-drift, before the GitHub-bound prompt assembly.
+    progress.start(branch, run_dir / "agent.log")
+    progress.phase("assembling prompt")
     comments, excluded = spec.trusted_comments(gh, cfg, unit.number)
     recorded_hash = spec.spec_hash(unit, comments)
     base_sha = worktree.base_sha(remote_name, default_branch)
@@ -355,12 +372,14 @@ def _dispatch_locked(
     prompt_file = run_dir / "prompt.md"
     write_text(prompt_file, prompt_text)
 
+    progress.phase("preparing worktree")
     worktree.add(wt_path, branch, base)
 
     inp = unit.inputs
     backend_name = inp.backend if inp and inp.backend else cfg.backend
     adapter = backend_mod.adapter_path(backend_name)
     timeout_min = _timeout_min(cfg, unit)
+    progress.phase("agent running")
     result = backend_mod.run_backend(
         cfg,
         root,
@@ -372,6 +391,7 @@ def _dispatch_locked(
         prompt_file=prompt_file,
         timeout_min=timeout_min,
         gate_cmds=gate_cmds,
+        reporter=progress,
     )
     return _conclude(
         gh,
@@ -388,6 +408,7 @@ def _dispatch_locked(
         base_sha=base_sha,
         timeout_min=timeout_min,
         mode=mode,
+        progress=progress,
     )
 
 
@@ -403,6 +424,7 @@ def _reattach_unit(
     *,
     base: str,
     mode: str | None,
+    progress: progress_mod.UnitProgress,
 ) -> Outcome:
     """A worktree plus a persisted handle: adopt the unit instead of
     redispatching (#22). Live → wait for it; dead → read the recorded
@@ -422,28 +444,39 @@ def _reattach_unit(
             ),
         )
     timeout_min = _timeout_min(cfg, unit)
+    progress.start(meta["branch"], run_dir / "agent.log")
     runner = selection.runner
     timed_out = False
     try:
         status = runner.wait(handle, 0)
-        info(f"#{unit.number}: reattached — unit already exited")
+        progress.phase("reattached — unit already exited")
     except WaitTimeout:
         # Honor the ORIGINAL deadline across reattachment: a live agent gets
         # only the time remaining from its first dispatch, so repeated
         # Foreman crashes cannot extend a unit's run indefinitely (#22).
         remaining_s = backend_mod.remaining_timeout_s(run_dir, timeout_min * 60)
-        info(
-            f"#{unit.number}: reattached to live unit; {remaining_s // 60}m "
+        progress.phase(
+            f"reattached to live unit; {remaining_s // 60}m "
             "left on the original deadline"
         )
         try:
             if remaining_s <= 0:
                 raise WaitTimeout("original deadline already elapsed")
-            status = runner.wait(handle, remaining_s)
+            # Wrap the adopted-unit wait the same way run_backend does, so a
+            # reattached live agent is not silent for up to the full remaining
+            # deadline (#83).
+            status = progress_mod.wait_with_heartbeat(
+                lambda s: runner.wait(handle, s),
+                remaining_s,
+                lambda elapsed: progress.heartbeat(elapsed, remaining_s),
+                now=progress.now,
+            )
         except WaitTimeout:
             timed_out = True
             runner.kill(handle)
             status = runner.wait(handle, backend_mod.KILL_REAP_S)
+        finally:
+            progress.settle()
     result = backend_mod.result_from_wait(run_dir, status, timed_out=timed_out)
     return _conclude(
         gh,
@@ -460,6 +493,7 @@ def _reattach_unit(
         base_sha=meta["base_sha"],
         timeout_min=timeout_min,
         mode=mode,
+        progress=progress,
     )
 
 
@@ -479,11 +513,19 @@ def _conclude(
     base_sha: str,
     timeout_min: int,
     mode: str | None,
+    progress: progress_mod.UnitProgress,
 ) -> Outcome:
     handle = runner_mod.load_handle(cfg, root, unit.number)
     runner = selection.runner
+    # Close any spinner left open by the reattach path; run_backend already
+    # settled its own. Idempotent, so this is harmless on the normal path.
+    progress.settle()
 
     def preserved(status: str, note: str, detail: str) -> Outcome:
+        # Every non-success return funnels through here, so this is the single
+        # honest place to narrate a terminal outcome — and it can never announce
+        # a stage (verify/push/PR) that has not run yet (#83 AC2).
+        progress.terminal(status, detail)
         backend_mod.write_resume_state(run_dir, wt_path, note)
         if handle is not None:
             runner.preserve(handle)
@@ -564,6 +606,7 @@ def _conclude(
         )
 
     gate_cmds = gate.compose(cfg, runner.capabilities())
+    progress.phase("verifying: " + " && ".join(" ".join(c) for c in gate_cmds))
     ok, verify_tail, failed_cmd = verify.run_gate(gate_cmds, wt_path, run_dir)
     if not ok:
         failed_display = " ".join(failed_cmd or gate_cmds[0])
@@ -616,7 +659,9 @@ def _conclude(
     spec_info = spec.validate(unit)
     human_tasks = spec.human_only_tasks(unit, spec_info)
     remote_name = worktree.remote(cfg)
+    progress.phase(f"pushing {branch}")
     ho.push(remote_name, branch, first=True)
+    progress.phase("opening PR")
     title = pr_mod.pr_title(cfg, unit, contract)
     body = pr_mod.pr_body(
         cfg,
@@ -630,6 +675,7 @@ def _conclude(
     url = pr_mod.open_pr(
         gh, cfg, unit, title=title, body=body, branch=branch, base=gh.default_branch()
     )
+    progress.terminal("pr-open", url)
     return Outcome(
         unit,
         "pr-open",
@@ -685,11 +731,22 @@ def run_dispatch(
             f"dispatching {len(ready)} unit(s): {', '.join('#' + str(u.number) for u in ready)}"
         )
     workers = max(1, max_parallel or cfg.max_parallel)
+    # One reporter owns stdout for the whole fan-out; it decides spinner vs
+    # plain per-unit lines from `workers` (spinner only when a single worker
+    # owns a TTY). Each unit narrates under its own #N: prefix (#83).
+    reporter = progress_mod.DispatchReporter(workers=workers)
     if ready:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
                 pool.submit(
-                    dispatch_unit, gh, cfg, root, selection, unit, mode=target.mode
+                    dispatch_unit,
+                    gh,
+                    cfg,
+                    root,
+                    selection,
+                    unit,
+                    mode=target.mode,
+                    progress=reporter.unit(unit.number),
                 ): unit
                 for unit in ready
             }
@@ -697,6 +754,7 @@ def run_dispatch(
                 try:
                     outcomes.append(future.result())
                 except ForemanError as exc:
+                    reporter.unit(unit.number).terminal("failed", str(exc))
                     outcomes.append(Outcome(unit, "failed", detail=str(exc)))
     outcomes.sort(key=lambda o: o.unit.number)
     return outcomes

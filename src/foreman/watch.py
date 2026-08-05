@@ -73,6 +73,15 @@ def format_tick(
     )
 
 
+def format_tick_begin(*, target_label: str, open_units: int) -> str:
+    """The tick-START heartbeat body (#83 comment). Emitted BEFORE dispatch so a
+    long tick — one whose dispatch ran an agent for minutes — is self-evidently
+    work-in-progress in .foreman/watch.log rather than looking like a stall.
+    Numeric `open=` leads and the free-text target label trails, so the line
+    stays grep-parseable even though the label contains spaces."""
+    return f"begin open={open_units} target={target_label}"
+
+
 def run_watch(
     cfg: Config,
     root: Path,
@@ -116,6 +125,12 @@ def run_watch(
                 heartbeat("milestone complete — all units closed")
                 return 0
 
+            # Tick-START heartbeat (#83): a tick that dispatches an agent can run
+            # for many minutes; without this, the only heartbeat is at tick END
+            # and the gap reads as a stall.
+            heartbeat(
+                format_tick_begin(target_label=target.label, open_units=len(open_units))
+            )
             outcomes = dispatch_mod.run_dispatch(gh, cfg, root, selection, target)
             shep = shepherd_mod.run_shepherd(gh, cfg, root, selection)
             tick_cost = sum(o.cost_usd or 0.0 for o in outcomes) + shep.cost_usd
