@@ -87,6 +87,11 @@ These are what the specs and acceptance criteria enforce
   time via the `untrusted-input` capability, which `local` never advertises.
 - **Inputs are stored; derived state is never stored.** Handles under
   `.foreman/` are a reattachment cache, not the truth.
+- **One status comment per unit: snapshot + append-only event log.** Foreman
+  edits a single marker-identified comment in place; below a second marker it
+  appends time-stamped, immutable past facts (initiated, PR opened, failed,
+  blocked, escalated, ready) newest-first. Provenance, not state — display
+  only, never read back for decisions, and nothing a crash can falsify.
 - **Doneness is hardened.** A foreman-managed dependency is satisfied only when
   its issue is closed *and* a marker-carrying foreman PR merged into the default
   branch; an external dependency must be closed as *completed*.

@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from foreman import backend as backend_mod
-from foreman import gate, gitops, spec, verify, worktree
+from foreman import gate, gitops, report, spec, verify, worktree
 from foreman import signatures as signatures_mod
 from foreman import trust as trust_mod
 from foreman.config import Config
@@ -604,6 +604,15 @@ def run_shepherd(
         out.cost_usd += work.cost_usd
         if work.state == "escalated":
             out.environmental[work.unit_number] = work.detail
+            # #82: shepherd holds no Unit to re-render a snapshot from, so it
+            # only appends the fact. Dedup makes repeated ticks no-ops.
+            report.append_status_event(
+                gh, work.unit_number, f"escalated: {work.detail}"
+            )
+        if work.state == "ready":
+            report.append_status_event(
+                gh, work.unit_number, "ready to merge — awaiting human"
+            )
         if work.state == "waiting":
             out.waiting[work.unit_number] = work.detail
     ready = [w for w in out.worked if w.state == "ready"]

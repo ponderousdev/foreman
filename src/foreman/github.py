@@ -217,6 +217,17 @@ class GitHub:
             comments.extend(page)
         return comments
 
+    def find_status_comment(self, issue_number: int) -> dict | None:
+        """The one comment foreman itself authored AND marked, if any — a
+        READ (no write contract implications). A marker in anyone else's
+        comment is forged or quoted, never foreman's status comment."""
+        me = self.viewer()
+        for comment in self.issue_comments(issue_number):
+            author = (comment.get("user") or {}).get("login", "")
+            if STATUS_MARKER in (comment.get("body") or "") and author == me:
+                return comment
+        return None
+
     def collaborator_logins(self) -> list[str]:
         """Every account with repository access (affiliation=all: direct,
         outside, and via org or team) — the D4 predicate's enumeration.
@@ -807,23 +818,21 @@ class GitHub:
         self._assert_writable("upsert status comment")
         if STATUS_MARKER not in body:
             raise ForemanError("status comment body must carry the foreman marker")
-        me = self.viewer()
-        for comment in self.issue_comments(issue_number):
-            author = (comment.get("user") or {}).get("login", "")
-            # Only ever edit a comment foreman itself authored AND marked.
-            if STATUS_MARKER in (comment.get("body") or "") and author == me:
-                self.gh.call(
-                    [
-                        "api",
-                        "--method",
-                        "PATCH",
-                        f"repos/{self.repo_slug()}/issues/comments/{comment['id']}",
-                        "-F",
-                        "body=@-",
-                    ],
-                    input_text=body,
-                )
-                return
+        # Only ever edit a comment foreman itself authored AND marked.
+        comment = self.find_status_comment(issue_number)
+        if comment is not None:
+            self.gh.call(
+                [
+                    "api",
+                    "--method",
+                    "PATCH",
+                    f"repos/{self.repo_slug()}/issues/comments/{comment['id']}",
+                    "-F",
+                    "body=@-",
+                ],
+                input_text=body,
+            )
+            return
         self.gh.call(
             [
                 "api",

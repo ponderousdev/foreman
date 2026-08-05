@@ -1,10 +1,13 @@
 """Human-facing output: summary tables, the per-unit status comment
-(single, marker-identified, edited in place), and the consolidated
-human-action queue. Display only — never read back for decisions.
+(single, marker-identified, edited in place, carrying a snapshot plus an
+append-only event log), and the consolidated human-action queue. Display
+only — the comment body is read back solely to preserve its own display
+text across re-renders; no decision path ever consumes it.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from foreman.github import STATUS_MARKER, GitHub
@@ -59,7 +62,56 @@ STATE_ICONS = {
 }
 
 
-def status_comment_body(status: UnitStatus) -> str:
+# ── event log (#82) ──────────────────────────────────────────────────
+#
+# The status comment's second section: time-stamped, immutable past facts
+# (provenance, like the foreman-dispatched PR label), newest first. The log
+# is parsed back out of the prior body only so a re-render preserves it —
+# never to decide anything.
+
+EVENT_LOG_MARKER = "<!-- foreman:event-log -->"
+MAX_EVENTS = 50
+# GitHub's comment cap is 65,536 chars; the snapshot section is bounded by
+# blockers/human tasks, so capping the log alone leaves ample headroom.
+MAX_LOG_CHARS = 50_000
+_EVENT_RE = re.compile(r"^- \S+ — .+$")
+_EVENT_SEP = " — "
+
+
+def parse_event_log(prior_body: str | None) -> list[str]:
+    """Event lines (newest first) from a prior comment body. A missing
+    marker or malformed content yields an empty log — never raises, because
+    a display-only read must not be able to fail a run."""
+    try:
+        if not prior_body or EVENT_LOG_MARKER not in prior_body:
+            return []
+        tail = prior_body.split(EVENT_LOG_MARKER, 1)[1]
+        return [line for line in tail.splitlines() if _EVENT_RE.match(line)]
+    except Exception:  # pragma: no cover — defensive: parsing never fails a run
+        return []
+
+
+def _event_text(line: str) -> str:
+    return line.split(_EVENT_SEP, 1)[1] if _EVENT_SEP in line else line
+
+
+def append_event(events: list[str], text: str) -> list[str]:
+    """Prepend a time-stamped event unless the newest one already says the
+    same thing (timestamp ignored) — that dedup is what keeps per-tick
+    shepherd appends spam-free. Oldest entries drop past the caps."""
+    if events and _event_text(events[0]) == text:
+        return events
+    out = [f"- {utc_now_iso()}{_EVENT_SEP}{text}", *events][:MAX_EVENTS]
+    while len(out) > 1 and len("\n".join(out)) > MAX_LOG_CHARS:
+        out.pop()
+    return out
+
+
+def _render_log(events: list[str]) -> list[str]:
+    return ["", EVENT_LOG_MARKER, "## Event log", "", *events]
+
+
+def status_comment_body(status: UnitStatus, events: list[str] | None = None) -> str:
     icon = STATE_ICONS.get(status.state, "•")
     lines = [
         STATUS_MARKER,
@@ -94,14 +146,45 @@ def status_comment_body(status: UnitStatus) -> str:
         f"_Updated {utc_now_iso()} — this comment is edited in place by foreman; "
         "it is display-only and never read back for decisions._"
     )
+    if events:
+        lines.extend(_render_log(events))
     return "\n".join(lines) + "\n"
 
 
-def update_status_comment(gh: GitHub, status: UnitStatus) -> None:
+def update_status_comment(
+    gh: GitHub, status: UnitStatus, event: str | None = None
+) -> None:
+    """Rewrite the snapshot, optionally recording one event. The prior log is
+    carried forward unconditionally — an event-less refresh (the dispatch
+    conclusion) must never wipe the initiation entry."""
     try:
-        gh.upsert_status_comment(status.unit.number, status_comment_body(status))
+        prior = gh.find_status_comment(status.unit.number)
+        events = parse_event_log((prior or {}).get("body"))
+        if event:
+            events = append_event(events, event)
+        gh.upsert_status_comment(
+            status.unit.number, status_comment_body(status, events)
+        )
     except Exception as exc:  # display-only: never fail a run over a comment
         warn(f"#{status.unit.number}: status comment update failed: {exc}")
+
+
+def append_status_event(gh: GitHub, issue_number: int, event: str) -> None:
+    """Record an event without touching the snapshot — for callers that hold
+    no `Unit` to re-render one (shepherd). The snapshot section is preserved
+    verbatim; a missing comment gets a log-only one."""
+    try:
+        prior = gh.find_status_comment(issue_number)
+        body = (prior or {}).get("body") or ""
+        events = append_event(parse_event_log(body), event)
+        snapshot = (
+            body.split(EVENT_LOG_MARKER, 1)[0].rstrip("\n") if body else STATUS_MARKER
+        )
+        gh.upsert_status_comment(
+            issue_number, "\n".join([snapshot, *_render_log(events)]) + "\n"
+        )
+    except Exception as exc:  # display-only: never fail a run over a comment
+        warn(f"#{issue_number}: status event append failed: {exc}")
 
 
 def summary_table(statuses: list[UnitStatus]) -> str:

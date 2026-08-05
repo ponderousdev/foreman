@@ -72,6 +72,16 @@ def next_attempt_branch(base_name: str, existing: list[str]) -> str:
     return f"{base_name}-r{attempt}"
 
 
+def attempt_number(base_name: str, branch: str) -> int:
+    """The attempt N a branch name implies — bare = 1, `-rN` suffix = N.
+    Inverse of `next_attempt_branch`; anchoring the suffix on `base_name`
+    keeps a slug that itself ends in `-r2` from misparsing. Never stored."""
+    if branch == base_name:
+        return 1
+    match = re.fullmatch(rf"{re.escape(base_name)}-r(\d+)", branch)
+    return int(match.group(1)) if match else 1
+
+
 def worktree_path(cfg: Config, root: Path, unit: Unit) -> Path:
     return root / cfg.worktrees_dir / f"{unit.number}-{slugify(unit.title)}"
 

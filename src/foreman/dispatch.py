@@ -317,6 +317,16 @@ def _dispatch_locked(
         run_dir, recorded_hash=recorded_hash, base_sha=base_sha, branch=branch
     )
 
+    # #82: the issue shows foreman has taken it the moment work starts —
+    # a time-stamped past fact in the status comment's event log, not stored
+    # state (nothing here can be falsified by a crash).
+    attempt = worktree.attempt_number(worktree.branch_name(cfg, unit), branch)
+    report.update_status_comment(
+        gh,
+        report.UnitStatus(unit=unit, state="dispatched", branch=branch),
+        event=f"initiated (attempt {attempt}, branch `{branch}`)",
+    )
+
     advertised = selection.runner.capabilities()
     gate_cmds = gate.compose(cfg, advertised)
     handoffs, withheld_handoffs = _gate_handoffs(
@@ -637,7 +647,21 @@ def _post_status(gh: GitHub, unit: Unit, outcome: Outcome) -> None:
         ),
         blocked_question=outcome.detail if outcome.status == "blocked" else "",
     )
-    report.update_status_comment(gh, status)
+    report.update_status_comment(gh, status, event=_conclusion_event(outcome))
+
+
+def _conclusion_event(outcome: Outcome) -> str | None:
+    """The past fact this conclusion records, if any. Non-terminal outcomes
+    (waiting/skipped/held/…) refresh the snapshot without logging an event."""
+    if outcome.status == "pr-open":
+        return f"PR opened: {outcome.pr_url}"
+    if outcome.status in ("failed", "stale"):
+        return f"failed: {outcome.detail}"
+    if outcome.status == "blocked":
+        return "blocked — awaiting human answer"
+    if outcome.status == "refused":
+        return f"refused: {outcome.detail}"
+    return None
 
 
 def run_dispatch(
