@@ -70,6 +70,12 @@ class FirstWriteCreatesTheComment(unittest.TestCase):
         self.assertIn(EVENT_LOG_MARKER, posts[0])
         self.assertIn("initiated (attempt 1)", posts[0])
         self.assertEqual(runner.called_with_prefix(["api", "--method", "PATCH"]), [])
+        # Known-absent goes straight to POST: the first read already proved
+        # there is no comment, so no second lookup happens on the create path.
+        reads = runner.called_with_prefix(
+            ["api", f"repos/owner/repo/issues/{UNIT}/comments"]
+        )
+        self.assertEqual(len(reads), 1)
 
 
 class SubsequentWritesEditInPlace(unittest.TestCase):
