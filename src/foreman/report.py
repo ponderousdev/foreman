@@ -99,6 +99,17 @@ def _event_text(line: str) -> str:
     return line.split(_EVENT_SEP, 1)[1] if _EVENT_SEP in line else line
 
 
+def _display(text: str) -> str:
+    """Snapshot/event-safe rendering of semi-trusted text (exception strings,
+    issue-derived details): strip the section markers a hostile string could
+    use to forge a log boundary, and clamp runaway lengths so no single field
+    can push the comment past GitHub's cap and silently lose the write."""
+    text = text.replace(STATUS_MARKER, "").replace(EVENT_LOG_MARKER, "")
+    if len(text) > MAX_EVENT_CHARS:
+        text = text[: MAX_EVENT_CHARS - 1] + "…"
+    return text
+
+
 def append_event(events: list[str], text: str) -> list[str]:
     """Prepend a time-stamped event unless the newest one already says the
     same thing (timestamp ignored) — that dedup is what keeps per-tick
@@ -106,9 +117,7 @@ def append_event(events: list[str], text: str) -> list[str]:
     # One event, one line: details often carry newlines (stringified
     # exceptions), which would break the line grammar — and with it the
     # dedup that keeps repeated ticks from re-appending the same fact.
-    text = " ".join(text.split())
-    if len(text) > MAX_EVENT_CHARS:
-        text = text[: MAX_EVENT_CHARS - 1] + "…"
+    text = _display(" ".join(text.split()))
     if events and _event_text(events[0]) == text:
         return events
     out = [f"- {utc_now_iso()}{_EVENT_SEP}{text}", *events][:MAX_EVENTS]
@@ -129,28 +138,31 @@ def status_comment_body(status: UnitStatus, events: list[str] | None = None) -> 
         f"**Foreman unit status: {icon} {status.state}**",
         "",
     ]
+    # Every interpolated field goes through _display: several are
+    # semi-trusted (stringified exceptions, issue-derived questions/tasks)
+    # and must not be able to forge a section boundary or blow the cap.
     if status.branch:
-        lines.append(f"- Branch: `{status.branch}`")
+        lines.append(f"- Branch: `{_display(status.branch)}`")
     if status.pr_url:
-        lines.append(f"- PR: {status.pr_url}")
+        lines.append(f"- PR: {_display(status.pr_url)}")
     if status.checks:
-        lines.append(f"- Checks: {status.checks}")
+        lines.append(f"- Checks: {_display(status.checks)}")
     for blocker in status.blockers:
-        lines.append(f"- Blocker: {blocker}")
+        lines.append(f"- Blocker: {_display(blocker)}")
     if status.blocked_question:
         lines.append("")
         lines.append("**BLOCKED — needs a human answer:**")
         lines.append("")
-        lines.append("> " + status.blocked_question.replace("\n", "\n> "))
+        lines.append("> " + _display(status.blocked_question).replace("\n", "\n> "))
     if status.human_tasks:
         lines.append("")
         lines.append("**Human-only tasks (foreman never attempts these):**")
         lines.append("")
         for task in status.human_tasks:
-            lines.append(f"- [ ] {task}")
+            lines.append(f"- [ ] {_display(task)}")
     if status.detail:
         lines.append("")
-        lines.append(status.detail)
+        lines.append(_display(status.detail))
     lines.append("")
     lines.append(
         f"_Updated {utc_now_iso()} — this comment is edited in place by foreman; "

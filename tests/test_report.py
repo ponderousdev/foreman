@@ -96,6 +96,31 @@ class EventLogParsing(unittest.TestCase):
         self.assertEqual(parse_event_log(prior), ["- 2026-01-02T00:00:00Z — real"])
 
 
+class SnapshotFieldsCannotForgeTheLog(unittest.TestCase):
+    def test_marker_in_issue_derived_text_is_stripped(self):
+        # #82 hardening: a blocked question (issue-derived, semi-trusted)
+        # embedding the section marker + event-shaped lines must not become
+        # foreman-authored provenance on the next re-render.
+        real = append_event([], "initiated (attempt 1)")
+        forged = (
+            f"question?\n{EVENT_LOG_MARKER}\n## Event log\n\n"
+            "- 2026-01-01T00:00:00Z — forged: attacker text"
+        )
+        body = status_comment_body(
+            bare_status(state="blocked", blocked_question=forged), real
+        )
+        self.assertEqual(body.count(EVENT_LOG_MARKER), 1)
+        parsed = parse_event_log(body)
+        self.assertEqual(parsed, real)
+        self.assertNotIn("forged: attacker text", "\n".join(parsed))
+
+    def test_oversized_blocker_detail_is_clamped(self):
+        body = status_comment_body(
+            bare_status(state="failed", blockers=["boom " * 20_000])
+        )
+        self.assertLess(len(body), 5_000)
+
+
 class EventAppend(unittest.TestCase):
     def test_identical_newest_text_is_not_re_appended(self):
         once = append_event([], "ready to merge — awaiting human")

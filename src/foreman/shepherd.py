@@ -602,14 +602,19 @@ def run_shepherd(
         # #54: shepherd spend was never accumulated — ShepherdReport.cost_usd
         # stayed 0 and watch's --budget-usd systematically undercounted.
         out.cost_usd += work.cost_usd
+        # #82: only PRs foreman itself authored may leave provenance on the
+        # issue — a foreign PR wearing the label + a forged marker names an
+        # attacker-chosen unit number, and open_foreman_prs admits it.
+        own = ((pr.get("author") or {}).get("login") or "") == gh.viewer()
         if work.state == "escalated":
             out.environmental[work.unit_number] = work.detail
-            # #82: shepherd holds no Unit to re-render a snapshot from, so it
+            # Shepherd holds no Unit to re-render a snapshot from, so it
             # only appends the fact. Dedup makes repeated ticks no-ops.
-            report.append_status_event(
-                gh, work.unit_number, f"escalated: {work.detail}"
-            )
-        if work.state == "ready":
+            if own:
+                report.append_status_event(
+                    gh, work.unit_number, f"escalated: {work.detail}"
+                )
+        if work.state == "ready" and own:
             report.append_status_event(
                 gh, work.unit_number, "ready to merge — awaiting human"
             )
