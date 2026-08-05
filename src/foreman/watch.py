@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections import Counter
 from pathlib import Path
 
 from foreman import dispatch as dispatch_mod
@@ -36,6 +37,40 @@ def parse_interval(text: str) -> int:
     if seconds <= 0:
         raise ForemanError(f"--interval must be positive, got '{text}'")
     return seconds
+
+
+# PR states surfaced in every heartbeat's per-state breakdown. Always emitted
+# (even at zero) so the line keeps stable columns for grep; ready and escalated
+# are the states a human acts on. Namespaced with a `prs-` prefix so each token
+# stays a unique key=value — the bare `open=`/`waiting=` keys already appear
+# earlier on the line for dispatch-side counts.
+HEARTBEAT_PR_STATES = ("ready", "escalated")
+
+
+def format_tick(
+    *,
+    open_units: int,
+    dispatched: int,
+    waiting: int,
+    failed: int,
+    worked: list[shepherd_mod.PrWork],
+    total_cost: float,
+) -> str:
+    """One tick's heartbeat body: a single grep-friendly line. Extends the
+    dispatch-side counts with a shepherd-side PR breakdown drawn from
+    ShepherdReport.worked (#98) — total open foreman PRs plus per-state counts
+    — so an escalated shepherd pass is no longer invisible between 'dispatched'
+    and 'ready'. Pure, so the log format is unit-tested without the watch loop.
+    """
+    counts = Counter(work.state for work in worked)
+    breakdown = " ".join(
+        f"prs-{state}={counts.get(state, 0)}" for state in HEARTBEAT_PR_STATES
+    )
+    return (
+        f"open={open_units} dispatched={dispatched} waiting={waiting} "
+        f"failed={failed} prs-open={len(worked)} {breakdown} "
+        f"cost=${total_cost:.2f}"
+    )
 
 
 def run_watch(
@@ -89,10 +124,15 @@ def run_watch(
             dispatched = sum(1 for o in outcomes if o.dispatched)
             waiting = sum(1 for o in outcomes if o.status == "waiting")
             failed = sum(1 for o in outcomes if o.status in ("failed", "blocked"))
-            ready = len(shep.ready_order)
             heartbeat(
-                f"open={len(open_units)} dispatched={dispatched} waiting={waiting} "
-                f"failed={failed} prs-ready={ready} cost=${total_cost:.2f}"
+                format_tick(
+                    open_units=len(open_units),
+                    dispatched=dispatched,
+                    waiting=waiting,
+                    failed=failed,
+                    worked=shep.worked,
+                    total_cost=total_cost,
+                )
             )
             if shep.ready_order and dispatched == 0 and not failed:
                 if not idle_notified:
