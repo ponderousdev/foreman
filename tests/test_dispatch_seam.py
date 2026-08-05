@@ -4,12 +4,14 @@ runner and a stub handoff — process mechanics belong to test_local_runner."""
 
 from __future__ import annotations
 
+import io
 import tempfile
 import unittest
 from pathlib import Path
 
 from foreman import capabilities as capabilities_mod
 from foreman import dispatch as dispatch_mod
+from foreman import progress as progress_mod
 from foreman import runner as runner_mod
 from foreman.backend import BackendResult
 from foreman.config import Config
@@ -191,6 +193,10 @@ class ConcludeClassifications(unittest.TestCase):
         if verify_cmd:
             cfg.verify = {"default": verify_cmd}
         ho = handoff or StubHandoff()
+        # Capture narration so the honesty property is assertable: a terminal
+        # outcome never announces a stage that did not run (#83 AC2).
+        self.narration = io.StringIO()
+        progress = progress_mod.DispatchReporter(stream=self.narration).unit(5)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             wt = root / "wt"
@@ -217,6 +223,7 @@ class ConcludeClassifications(unittest.TestCase):
                 base_sha="sha",
                 timeout_min=90,
                 mode="labels",
+                progress=progress,
             )
 
     def test_quota_wait_is_waiting_not_failed(self):
@@ -239,6 +246,17 @@ class ConcludeClassifications(unittest.TestCase):
         outcome = self.run_conclude(BackendResult(returncode=7))
         self.assertEqual(outcome.status, "failed")
         self.assertIn("agent exited 7", outcome.detail)
+
+    def test_early_return_narrates_terminal_without_later_stages(self):
+        # AC2 honesty: a unit that ends before verify narrates its terminal
+        # outcome and never announces verify/push/PR — stages that never ran.
+        outcome = self.run_conclude(BackendResult(returncode=143, timed_out=True))
+        self.assertEqual(outcome.status, "failed")
+        narration = self.narration.getvalue()
+        self.assertIn("foreman: #5: failed —", narration)
+        self.assertIn("timed out", narration)
+        for stage in ("verifying", "pushing", "opening PR"):
+            self.assertNotIn(stage, narration)
 
     def test_missing_contract_fails(self):
         outcome = self.run_conclude(BackendResult(returncode=0))
@@ -282,6 +300,7 @@ class ConcludeClassifications(unittest.TestCase):
                 base_sha="sha",
                 timeout_min=90,
                 mode="labels",
+                progress=progress_mod.DispatchReporter(stream=io.StringIO()).unit(5),
             )
         self.assertEqual(outcome.status, "failed")
         self.assertIn(WORKFLOW_HUMAN_ONLY.split(" — ")[0], outcome.detail)
@@ -304,6 +323,7 @@ class ConcludeClassifications(unittest.TestCase):
                 make_handoff=lambda workdir, handle: ho,
                 refusal=lambda required: None,
             )
+            narration = io.StringIO()
             outcome = dispatch_mod._conclude(
                 None,  # type: ignore[arg-type]
                 cfg,
@@ -319,10 +339,17 @@ class ConcludeClassifications(unittest.TestCase):
                 base_sha="sha",
                 timeout_min=90,
                 mode="labels",
+                progress=progress_mod.DispatchReporter(stream=narration).unit(5),
             )
         self.assertEqual(outcome.status, "failed")
         self.assertIn("verification failed", outcome.detail)
         self.assertEqual(ho.pushed, [])
+        # AC2: verify was announced as it ran; push/PR — which never happened —
+        # were not.
+        text = narration.getvalue()
+        self.assertIn("verifying", text)
+        self.assertNotIn("pushing", text)
+        self.assertNotIn("opening PR", text)
 
 
 class SetupFailureStillPostsStatus(unittest.TestCase):

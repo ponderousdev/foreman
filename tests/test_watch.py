@@ -8,7 +8,7 @@ import unittest
 
 from foreman.shepherd import PrWork
 from foreman.util import ForemanError
-from foreman.watch import format_tick, parse_interval
+from foreman.watch import format_tick, format_tick_begin, parse_interval
 
 
 class ParseInterval(unittest.TestCase):
@@ -86,6 +86,20 @@ class FormatTick(unittest.TestCase):
             r"^open=\d+ dispatched=\d+ waiting=\d+ failed=\d+ "
             r"prs-open=\d+ prs-ready=\d+ prs-escalated=\d+ cost=\$\d+\.\d{2}$",
         )
+
+
+class FormatTickBegin(unittest.TestCase):
+    def test_leads_with_open_and_trails_the_free_text_label(self):
+        # #83 comment: emitted at tick START so a long (agent-running) tick is
+        # not mistaken for a stall. Numeric open= leads; the space-bearing label
+        # trails, so the line stays grep-parseable.
+        line = format_tick_begin(target_label="milestone 'M4' (#5)", open_units=4)
+        self.assertEqual(line, "begin open=4 target=milestone 'M4' (#5)")
+
+    def test_single_line_and_open_is_greppable(self):
+        line = format_tick_begin(target_label="issue #83", open_units=1)
+        self.assertNotIn("\n", line)
+        self.assertRegex(line, r"^begin open=\d+ target=")
 
 
 if __name__ == "__main__":
