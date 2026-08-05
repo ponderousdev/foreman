@@ -101,6 +101,19 @@ class EventAppend(unittest.TestCase):
         twice = append_event(once, "ready to merge — awaiting human")
         self.assertEqual(twice, once)
 
+    def test_multiline_text_is_flattened_and_still_dedups(self):
+        # A stringified exception in `detail` carries newlines; unflattened
+        # it would break the one-line grammar, survive parse as its first
+        # line only, and re-append every tick.
+        text = "escalated: Traceback\n  boom\n  line two"
+        events = append_event([], text)
+        self.assertEqual(len(events), 1)
+        self.assertNotIn("\n", events[0])
+        body = status_comment_body(bare_status(), events)
+        reparsed = parse_event_log(body)
+        self.assertEqual(reparsed, events)
+        self.assertEqual(append_event(reparsed, text), reparsed)
+
     def test_distinct_text_appends_on_top(self):
         events = append_event(append_event([], "first"), "second")
         self.assertEqual(len(events), 2)

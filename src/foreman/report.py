@@ -99,6 +99,10 @@ def append_event(events: list[str], text: str) -> list[str]:
     """Prepend a time-stamped event unless the newest one already says the
     same thing (timestamp ignored) — that dedup is what keeps per-tick
     shepherd appends spam-free. Oldest entries drop past the caps."""
+    # One event, one line: details often carry newlines (stringified
+    # exceptions), which would break the line grammar — and with it the
+    # dedup that keeps repeated ticks from re-appending the same fact.
+    text = " ".join(text.split())
     if events and _event_text(events[0]) == text:
         return events
     out = [f"- {utc_now_iso()}{_EVENT_SEP}{text}", *events][:MAX_EVENTS]
