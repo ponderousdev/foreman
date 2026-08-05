@@ -573,6 +573,18 @@ def merge_order(gh: GitHub, ready: list[PrWork]) -> list[tuple[int, str]]:
     return [(n, by_unit[n].url) for n in ordered]
 
 
+def _own_pr(gh: GitHub, pr: dict) -> bool:
+    """#82: only PRs foreman itself authored may leave provenance on the
+    issue — a foreign PR wearing the label + a forged marker names an
+    attacker-chosen unit number, and open_foreman_prs admits it. Provenance
+    is optional display: a flaky viewer read fails toward not writing,
+    never toward aborting the shepherd loop."""
+    try:
+        return ((pr.get("author") or {}).get("login") or "") == gh.viewer()
+    except Exception:
+        return False
+
+
 def run_shepherd(
     gh: GitHub, cfg: Config, root: Path, selection: Selection
 ) -> ShepherdReport:
@@ -602,19 +614,15 @@ def run_shepherd(
         # #54: shepherd spend was never accumulated — ShepherdReport.cost_usd
         # stayed 0 and watch's --budget-usd systematically undercounted.
         out.cost_usd += work.cost_usd
-        # #82: only PRs foreman itself authored may leave provenance on the
-        # issue — a foreign PR wearing the label + a forged marker names an
-        # attacker-chosen unit number, and open_foreman_prs admits it.
-        own = ((pr.get("author") or {}).get("login") or "") == gh.viewer()
         if work.state == "escalated":
             out.environmental[work.unit_number] = work.detail
             # Shepherd holds no Unit to re-render a snapshot from, so it
             # only appends the fact. Dedup makes repeated ticks no-ops.
-            if own:
+            if _own_pr(gh, pr):
                 report.append_status_event(
                     gh, work.unit_number, f"escalated: {work.detail}"
                 )
-        if work.state == "ready" and own:
+        if work.state == "ready" and _own_pr(gh, pr):
             report.append_status_event(
                 gh, work.unit_number, "ready to merge — awaiting human"
             )

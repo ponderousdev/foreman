@@ -109,15 +109,28 @@ class SubsequentWritesEditInPlace(unittest.TestCase):
         self.assertIn(EVENT_LOG_MARKER, body)
         self.assertIn("initiated (attempt 1)", body)
 
-    def test_same_event_twice_stays_one_entry(self):
+    def test_same_event_twice_skips_the_write_entirely(self):
+        # Dedup is a true no-op: a PR sitting escalated/ready across many
+        # watch ticks must not PATCH identical content every tick.
         gh, runner = make_github()
         stub_comments(runner, [own_comment(self._prior("escalated: boom"))])
+        report.append_status_event(gh, UNIT, "escalated: boom")
+        self.assertEqual(runner.called_with_prefix(["api", "--method"]), [])
+
+    def test_each_write_reads_comments_exactly_once(self):
+        # The found comment id is threaded into the upsert: a duplicate
+        # lookup could flake after the first read succeeded and silently
+        # drop the event.
+        gh, runner = make_github()
+        stub_comments(runner, [own_comment(self._prior("initiated (attempt 1)"))])
         runner.when(
             ["api", "--method", "PATCH", "repos/owner/repo/issues/comments/2"], "{}"
         )
-        report.append_status_event(gh, UNIT, "escalated: boom")
-        body = written(runner, "PATCH")[0]
-        self.assertEqual(body.count("escalated: boom"), 1)
+        report.update_status_comment(gh, status("pr-open"), event="PR opened: u")
+        reads = runner.called_with_prefix(
+            ["api", f"repos/owner/repo/issues/{UNIT}/comments"]
+        )
+        self.assertEqual(len(reads), 1)
 
 
 class ShepherdAppendPreservesSnapshot(unittest.TestCase):

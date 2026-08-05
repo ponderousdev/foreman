@@ -813,13 +813,22 @@ class GitHub:
             ["pr", "comment", str(number), "--body-file", "-"], input_text=body
         )
 
-    def upsert_status_comment(self, issue_number: int, body: str) -> None:
-        """Create or edit-in-place the single foreman status comment per unit."""
+    def upsert_status_comment(
+        self, issue_number: int, body: str, *, comment_id: int | None = None
+    ) -> None:
+        """Create or edit-in-place the single foreman status comment per unit.
+        `comment_id` lets a caller that already ran `find_status_comment`
+        skip the second lookup — a transient failure on a duplicate read
+        must not lose a write the first read already earned."""
         self._assert_writable("upsert status comment")
         if STATUS_MARKER not in body:
             raise ForemanError("status comment body must carry the foreman marker")
         # Only ever edit a comment foreman itself authored AND marked.
-        comment = self.find_status_comment(issue_number)
+        comment = (
+            {"id": comment_id}
+            if comment_id is not None
+            else self.find_status_comment(issue_number)
+        )
         if comment is not None:
             self.gh.call(
                 [

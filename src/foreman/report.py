@@ -184,8 +184,12 @@ def update_status_comment(
         events = parse_event_log((prior or {}).get("body"))
         if event:
             events = append_event(events, event)
+        # Thread the found id through: a second lookup inside the upsert
+        # could flake after this read succeeded and silently drop the event.
         gh.upsert_status_comment(
-            status.unit.number, status_comment_body(status, events)
+            status.unit.number,
+            status_comment_body(status, events),
+            comment_id=(prior or {}).get("id"),
         )
     except Exception as exc:  # display-only: never fail a run over a comment
         warn(f"#{status.unit.number}: status comment update failed: {exc}")
@@ -198,12 +202,18 @@ def append_status_event(gh: GitHub, issue_number: int, event: str) -> None:
     try:
         prior = gh.find_status_comment(issue_number)
         body = (prior or {}).get("body") or ""
-        events = append_event(parse_event_log(body), event)
+        events = parse_event_log(body)
+        appended = append_event(events, event)
+        if prior is not None and appended == events:
+            # Deduped: identical content — don't burn a PATCH per tick.
+            return
         snapshot = (
             body.split(EVENT_LOG_MARKER, 1)[0].rstrip("\n") if body else STATUS_MARKER
         )
         gh.upsert_status_comment(
-            issue_number, "\n".join([snapshot, *_render_log(events)]) + "\n"
+            issue_number,
+            "\n".join([snapshot, *_render_log(appended)]) + "\n",
+            comment_id=(prior or {}).get("id"),
         )
     except Exception as exc:  # display-only: never fail a run over a comment
         warn(f"#{issue_number}: status event append failed: {exc}")
