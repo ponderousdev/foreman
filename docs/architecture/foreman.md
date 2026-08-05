@@ -148,7 +148,14 @@ task foreman:cleanup   # prune worktrees/branches for closed units
    a generated resume-state are preserved; the issue stays open so
    dependents stay blocked.
 9. **Status comment** — exactly one foreman-owned comment per unit, found by
-   marker and edited in place. Display only; never read back for decisions.
+   marker and edited in place. Two sections split by a second marker
+   (`<!-- foreman:event-log -->`): the regenerated **snapshot** (state,
+   branch, PR, blockers, human tasks) and an **append-only event log** of
+   time-stamped past facts, newest first — `initiated` at dispatch, then the
+   conclusion and shepherd milestones (#82). Display only; the body is read
+   back solely to carry its own log across re-renders, never for decisions,
+   and repeated identical events dedup so per-tick shepherd appends do not
+   spam the issue.
 
 ## Shepherd
 
@@ -211,7 +218,8 @@ USD budgets bind. Switching is a config flip plus one secret.
   `src/foreman/github.py` and nowhere else. Foreman may create/push its
   own branches, open non-draft PRs, edit its own PRs and their
   foreman-namespace labels, upsert one marker-identified status comment per
-  unit, resolve threads it dispositioned, post human-approved vet
+  unit (snapshot + append-only event log — one write primitive, still one
+  comment), resolve threads it dispositioned, post human-approved vet
   corrections, and ensure its label definitions. It must never merge, close
   or reopen issues, edit issue bodies/titles, touch human comments, or write
   fields/types/dependency edges — those operations do not exist in the

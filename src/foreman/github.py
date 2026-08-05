@@ -29,6 +29,9 @@ from foreman.util import ForemanError, run
 Runner = Callable[[list[str], str | None], tuple[int, str, str]]
 
 STATUS_MARKER = "<!-- foreman:unit-status -->"
+# upsert_status_comment sentinel: "caller doesn't know" is distinct from
+# "caller proved absent" — only the former may trigger a second lookup.
+_UNKNOWN_COMMENT = object()
 
 # GitHub Actions' own App id — stable and public. Required checks bound to
 # this integration are satisfiable only by Actions job observations.
@@ -216,6 +219,17 @@ class GitHub:
         for page in out or []:
             comments.extend(page)
         return comments
+
+    def find_status_comment(self, issue_number: int) -> dict | None:
+        """The one comment foreman itself authored AND marked, if any — a
+        READ (no write contract implications). A marker in anyone else's
+        comment is forged or quoted, never foreman's status comment."""
+        me = self.viewer()
+        for comment in self.issue_comments(issue_number):
+            author = (comment.get("user") or {}).get("login", "")
+            if STATUS_MARKER in (comment.get("body") or "") and author == me:
+                return comment
+        return None
 
     def collaborator_logins(self) -> list[str]:
         """Every account with repository access (affiliation=all: direct,
@@ -802,28 +816,42 @@ class GitHub:
             ["pr", "comment", str(number), "--body-file", "-"], input_text=body
         )
 
-    def upsert_status_comment(self, issue_number: int, body: str) -> None:
-        """Create or edit-in-place the single foreman status comment per unit."""
+    def upsert_status_comment(
+        self,
+        issue_number: int,
+        body: str,
+        *,
+        comment_id: int | None | object = _UNKNOWN_COMMENT,
+    ) -> None:
+        """Create or edit-in-place the single foreman status comment per unit.
+        `comment_id` lets a caller that already ran `find_status_comment`
+        skip the second lookup — a transient failure on a duplicate read
+        must not lose a write the first read already earned. An explicit
+        None means the caller proved no comment exists (straight to POST);
+        omitting it means unknown (look it up here)."""
         self._assert_writable("upsert status comment")
         if STATUS_MARKER not in body:
             raise ForemanError("status comment body must carry the foreman marker")
-        me = self.viewer()
-        for comment in self.issue_comments(issue_number):
-            author = (comment.get("user") or {}).get("login", "")
-            # Only ever edit a comment foreman itself authored AND marked.
-            if STATUS_MARKER in (comment.get("body") or "") and author == me:
-                self.gh.call(
-                    [
-                        "api",
-                        "--method",
-                        "PATCH",
-                        f"repos/{self.repo_slug()}/issues/comments/{comment['id']}",
-                        "-F",
-                        "body=@-",
-                    ],
-                    input_text=body,
-                )
-                return
+        # Only ever edit a comment foreman itself authored AND marked.
+        if comment_id is _UNKNOWN_COMMENT:
+            comment = self.find_status_comment(issue_number)
+        elif comment_id is None:
+            comment = None
+        else:
+            comment = {"id": comment_id}
+        if comment is not None:
+            self.gh.call(
+                [
+                    "api",
+                    "--method",
+                    "PATCH",
+                    f"repos/{self.repo_slug()}/issues/comments/{comment['id']}",
+                    "-F",
+                    "body=@-",
+                ],
+                input_text=body,
+            )
+            return
         self.gh.call(
             [
                 "api",

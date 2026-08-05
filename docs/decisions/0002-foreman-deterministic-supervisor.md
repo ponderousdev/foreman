@@ -16,6 +16,34 @@ subdirectory extraction (paths rewritten `scripts/foreman/` →
 `src/foreman/`), merged with `--allow-unrelated-histories` as a merge
 commit (PR #48), so `git log --follow` crosses the move.
 
+Amended (2026-08-04, issue #82, option 3): the per-unit status comment
+becomes a **snapshot plus an append-only event log**. Issue #82 asked for a
+visible "claimed by foreman" sign on dispatched issues. A status *label* was
+rejected for the reasons this ADR already gives — stored state lies after
+crashes, and every terminal path inherits a cleanup obligation. Option 3
+converts the ask from *status* to *provenance*: foreman writes time-stamped,
+immutable past facts (`initiated (attempt N, branch …)` at dispatch, then
+`PR opened: …`, `failed: …`, `blocked …`, `refused: …`, `escalated: …`,
+`ready to merge …`) into the same single marker-identified comment, below a
+second marker (`<!-- foreman:event-log -->`).
+
+This does not weaken "derived state is never stored". The comment body is
+read back **only to preserve its own display text across re-renders** — the
+same reason foreman finds the comment to edit it in place at all. Events are
+provenance, like the `foreman-dispatched` PR label: no eligibility, doneness,
+freshness, or shepherd decision consumes them, and `spec.trusted_comments`
+keeps foreman's own marked comment out of every prompt, so the log cannot
+re-enter an agent's input as specification. Nothing a crash could falsify is
+recorded — an interrupted run leaves a true statement that it started, and
+the next attempt appends its own. There is no cleanup obligation on any
+terminal path.
+
+`merged` is deliberately **unrecorded**: no foreman loop observes the merge
+(humans merge, and foreman never polls after the PR closes), and GitHub's own
+timeline already records it permanently. Logging it would require either a
+new watcher or a stored guess — both worse than the timeline that exists.
+This amendment is the recorded decision issue #82 asks for.
+
 ## Context
 
 A milestone contains well-specced issues with dependency edges. Working them

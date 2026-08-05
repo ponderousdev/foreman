@@ -600,3 +600,72 @@ class MergeStateAndBranchEncoding(unittest.TestCase):
             [[]],
         )
         self.assertEqual(gh._required_contexts("release/2.x"), [])
+
+
+class ProvenanceGate(unittest.TestCase):
+    def test_foreign_pr_escalation_leaves_no_issue_provenance(self):
+        # #82: a foreign PR wearing the label + a forged unit marker names an
+        # attacker-chosen issue; its escalation must not write status events.
+        import tempfile
+        from pathlib import Path
+
+        from foreman import shepherd as shepherd_mod
+        from foreman.config import Config
+
+        gh, runner = make_github()
+        pr_fields = {
+            "state": "OPEN",
+            "isDraft": False,
+            "baseRefName": "main",
+            "labels": [],
+        }
+        runner.when(
+            ["pr", "list"],
+            [
+                {
+                    "number": 30,
+                    "title": "own",
+                    "body": "<!-- foreman:unit=#7 -->",
+                    "url": "u30",
+                    "headRefName": "b7",
+                    "author": {"login": "bot"},
+                    **pr_fields,
+                },
+                {
+                    "number": 31,
+                    "title": "forged",
+                    "body": "<!-- foreman:unit=#9 -->",
+                    "url": "u31",
+                    "headRefName": "b9",
+                    "author": {"login": "mallory"},
+                    **pr_fields,
+                },
+            ],
+        )
+        runner.when(
+            ["api", "repos/owner/repo/issues/7/comments", "--paginate", "--slurp"],
+            [[]],
+        )
+        runner.when(["api", "--method", "POST"], "{}")
+
+        def raise_guard(*args, **kwargs):
+            raise ForemanError("own-PR guard")
+
+        original = shepherd_mod.shepherd_pr
+        shepherd_mod.shepherd_pr = raise_guard
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                out = shepherd_mod.run_shepherd(gh, Config(), Path(tmp), None)
+        finally:
+            shepherd_mod.shepherd_pr = original
+
+        # Both escalations are reported to the operator...
+        self.assertEqual(sorted(out.environmental), [7, 9])
+        # ...but only foreman's own PR leaves provenance on its issue.
+        posts = runner.called_with_prefix(["api", "--method", "POST"])
+        self.assertEqual(len(posts), 1)
+        self.assertIn("issues/7/comments", posts[0][3])
+        touched_9 = [
+            argv for argv, _ in runner.calls if any("issues/9/" in a for a in argv)
+        ]
+        self.assertEqual(touched_9, [])
