@@ -77,6 +77,14 @@ class LabelTransition(unittest.TestCase):
         )
         self.assertFalse(ready_for_review_now(gh, behind))
 
+        awaiting_human_approval = dict(
+            base,
+            labels=[{"name": READY_FOR_REVIEW_LABEL}],
+            mergeStateStatus="BLOCKED",
+            mergeable="MERGEABLE",
+        )
+        self.assertTrue(ready_for_review_now(gh, awaiting_human_approval))
+
     def test_shepherd_writes_only_namespaced_ready_label(self):
         gh, _runner = make_github()
         gh.pr_status = lambda number: {  # type: ignore[method-assign]

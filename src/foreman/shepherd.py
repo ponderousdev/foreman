@@ -112,11 +112,15 @@ def ready_for_review_now(gh: GitHub, status: dict) -> bool:
         return False
     checks_state, _failed = classify_checks(status.get("statusCheckRollup"))
     merge_state = (status.get("mergeStateStatus") or "").upper()
+    mergeable = (status.get("mergeable") or "").upper()
+    structurally_ready = merge_state == "CLEAN" or (
+        merge_state == "BLOCKED" and mergeable == "MERGEABLE"
+    )
     return (
         (status.get("state") or "OPEN").upper() == "OPEN"
         and not status.get("isDraft")
         and checks_state == "green"
-        and merge_state == "CLEAN"
+        and structurally_ready
         and not any(
             not thread.get("isResolved")
             for thread in gh.review_threads(status["number"])
