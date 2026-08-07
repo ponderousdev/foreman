@@ -14,6 +14,7 @@ from foreman.github import (
     READY_FOR_REVIEW_LABEL,
 )
 from foreman.shepherd import (
+    automation_ready_now,
     classify_checks,
     open_foreman_prs,
     ready_for_review_now,
@@ -113,6 +114,95 @@ class LabelTransition(unittest.TestCase):
         )
         self.assertEqual(work.state, "ready")
         self.assertEqual(writes, [(9, [READY_FOR_REVIEW_LABEL], None)])
+
+
+class SharedReadinessGate(unittest.TestCase):
+    def _status(self, merge_state: str, *, mergeable: str = "MERGEABLE") -> dict:
+        return {
+            "number": 9,
+            "title": "feat: unit 1",
+            "url": "https://github.com/owner/repo/pull/9",
+            "state": "OPEN",
+            "isDraft": False,
+            "labels": [{"name": READY_FOR_REVIEW_LABEL}],
+            "headRefName": "foreman/feat/1-unit",
+            "statusCheckRollup": [{"status": "COMPLETED", "conclusion": "SUCCESS"}],
+            "mergeStateStatus": merge_state,
+            "mergeable": mergeable,
+        }
+
+    def test_shepherd_and_status_apply_the_same_live_verdict(self):
+        cases = (
+            ("CLEAN", "UNKNOWN", True),
+            ("BLOCKED", "MERGEABLE", True),
+            ("UNKNOWN", "MERGEABLE", False),
+            ("UNSTABLE", "MERGEABLE", False),
+        )
+        for merge_state, mergeable, expected in cases:
+            with self.subTest(merge_state=merge_state, mergeable=mergeable):
+                gh, _runner = make_github()
+                status = self._status(merge_state, mergeable=mergeable)
+                gh.pr_status = lambda number, status=status: status  # type: ignore[method-assign]
+                gh.review_threads = lambda number: []  # type: ignore[assignment]
+                writes = []
+                gh.label_own_pr = (  # type: ignore[method-assign]
+                    lambda number, *, add=None, remove=None: writes.append(
+                        (number, add, remove)
+                    )
+                )
+
+                work = shepherd_pr(
+                    gh,
+                    Config(remote="origin"),
+                    Path("."),
+                    None,  # type: ignore[arg-type]
+                    {"number": 9, "_unit": 1},
+                    [],
+                )
+                displayed_ready = ready_for_review_now(gh, status)
+
+                self.assertEqual(work.state == "ready", expected)
+                self.assertEqual(displayed_ready, expected)
+                self.assertEqual(bool(writes), expected)
+
+    def test_unstable_pending_checks_do_not_label_or_dispatch_a_fixer(self):
+        gh, _runner = make_github()
+        status = self._status("UNSTABLE")
+        status["statusCheckRollup"] = [
+            {
+                "name": "non-required checks (mergeStateStatus UNSTABLE)",
+                "status": "PENDING",
+                "conclusion": "",
+            }
+        ]
+        gh.pr_status = lambda number: status  # type: ignore[method-assign]
+        writes = []
+        gh.label_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, add=None, remove=None: writes.append(
+                (number, add, remove)
+            )
+        )
+
+        work = shepherd_pr(
+            gh,
+            Config(remote="origin"),
+            Path("."),
+            None,  # type: ignore[arg-type]
+            {"number": 9, "_unit": 1},
+            [],
+        )
+
+        self.assertEqual(work.state, "settling")
+        self.assertEqual(work.actions, 0)
+        self.assertEqual(writes, [])
+
+    def test_gate_rejects_unresolved_threads(self):
+        status = self._status("CLEAN")
+        self.assertFalse(
+            automation_ready_now(
+                status, lambda: [{"id": "thread", "isResolved": False}]
+            )
+        )
 
 
 class ReviewThreadReads(unittest.TestCase):

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import graphlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -105,26 +106,39 @@ def classify_checks(rollup: list[dict] | None) -> tuple[str, list[dict]]:
     return "green", []
 
 
-def ready_for_review_now(gh: GitHub, status: dict) -> bool:
-    """Revalidate a current PR snapshot; a readiness label is only a hint."""
-    labels = {label["name"] for label in status.get("labels") or []}
-    if labels.isdisjoint(READY_FOR_REVIEW_LABELS):
-        return False
+def automation_ready_now(
+    status: dict, review_threads: Callable[[], list[dict]]
+) -> bool:
+    """One current-snapshot gate for automated readiness.
+
+    This deliberately excludes the readiness label and draft/published state:
+    shepherd uses it to decide whether to write the label, while status adds
+    those display-only preconditions before trusting the same live verdict.
+    """
     checks_state, _failed = classify_checks(status.get("statusCheckRollup"))
     merge_state = (status.get("mergeStateStatus") or "").upper()
     mergeable = (status.get("mergeable") or "").upper()
+    # GitHub uses BLOCKED for an otherwise mergeable PR awaiting required
+    # human approval. Every transient/stale state (UNKNOWN, UNSTABLE, BEHIND,
+    # DIRTY) remains not-ready even when `mergeable` happens to be MERGEABLE.
     structurally_ready = merge_state == "CLEAN" or (
         merge_state == "BLOCKED" and mergeable == "MERGEABLE"
     )
     return (
         (status.get("state") or "OPEN").upper() == "OPEN"
-        and not status.get("isDraft")
         and checks_state == "green"
         and structurally_ready
-        and not any(
-            not thread.get("isResolved")
-            for thread in gh.review_threads(status["number"])
-        )
+        and not any(not thread.get("isResolved") for thread in review_threads())
+    )
+
+
+def ready_for_review_now(gh: GitHub, status: dict) -> bool:
+    """Revalidate a displayed-ready PR; its label is only a hint."""
+    labels = {label["name"] for label in status.get("labels") or []}
+    return (
+        not labels.isdisjoint(READY_FOR_REVIEW_LABELS)
+        and not status.get("isDraft")
+        and automation_ready_now(status, lambda: gh.review_threads(status["number"]))
     )
 
 
@@ -441,7 +455,8 @@ def shepherd_pr(
             work.state, work.detail = "escalated", "agent could not resolve the rebase"
         return work
 
-    threads = [t for t in gh.review_threads(work.number) if not t.get("isResolved")]
+    review_threads = gh.review_threads(work.number)
+    threads = [t for t in review_threads if not t.get("isResolved")]
     if threads:
         # Adjudication resumes an agent on the branch's tree — the #46
         # inheritance rule first, before any thread content is considered.
@@ -580,8 +595,7 @@ def shepherd_pr(
             work.state, work.detail = "escalated", "adjudication agent failed"
         return work
 
-    mergeable = (status.get("mergeable") or "").upper()
-    if merge_state == "CLEAN" or mergeable == "MERGEABLE":
+    if automation_ready_now(status, lambda: review_threads):
         gh.label_own_pr(work.number, add=[READY_FOR_REVIEW_LABEL])
         work.state, work.detail = (
             "ready",
