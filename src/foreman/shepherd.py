@@ -40,6 +40,7 @@ from foreman.runner import Selection
 from foreman.util import info, relation_refs, warn, write_text
 
 MAX_AGENT_ACTIONS_PER_PR = 2  # per shepherd run; watch ticks give more rounds
+READY_HEAD_PREFIX = "<!-- foreman:ready-head:"
 
 
 @dataclass
@@ -136,8 +137,12 @@ def automation_ready_now(
 def ready_for_review_now(gh: GitHub, status: dict) -> bool:
     """Revalidate a displayed-ready PR; its label is only a hint."""
     labels = {label["name"] for label in status.get("labels") or []}
+    current_label_bound = READY_FOR_REVIEW_LABEL not in labels or _ready_head(
+        status.get("body") or ""
+    ) == status.get("headRefOid")
     return (
         not labels.isdisjoint(READY_FOR_REVIEW_LABELS)
+        and current_label_bound
         and not status.get("isDraft")
         and automation_ready_now(status, lambda: gh.review_threads(status["number"]))
     )
@@ -151,20 +156,36 @@ def _return_to_draft(gh: GitHub, status: dict) -> None:
         gh.label_own_pr(status["number"], remove=[READY_FOR_REVIEW_LABEL])
 
 
-def _demote_promoted_if_invalid(gh: GitHub, status: dict) -> None:
+def _ready_head(body: str) -> str:
+    for line in body.splitlines():
+        if line.startswith(READY_HEAD_PREFIX) and line.endswith(" -->"):
+            return line[len(READY_HEAD_PREFIX) : -4].strip()
+    return ""
+
+
+def _body_with_ready_head(body: str, head: str) -> str:
+    lines = [
+        line for line in body.splitlines() if not line.startswith(READY_HEAD_PREFIX)
+    ]
+    return "\n".join([*lines, f"{READY_HEAD_PREFIX}{head} -->", ""])
+
+
+def _demote_promoted_if_invalid(gh: GitHub, status: dict) -> bool:
     """A PR Foreman promoted must return to draft when evidence regresses."""
     labels = {label["name"] for label in status.get("labels") or []}
     if READY_FOR_REVIEW_LABEL not in labels:
-        return
+        return False
     try:
-        ready = bool(status.get("headRefOid")) and automation_ready_now(
-            status, lambda: gh.review_threads(status["number"])
-        )
+        ready = _ready_head(status.get("body") or "") == status.get(
+            "headRefOid"
+        ) and automation_ready_now(status, lambda: gh.review_threads(status["number"]))
     except Exception:
         _return_to_draft(gh, status)
         raise
     if not ready:
         _return_to_draft(gh, status)
+        return True
+    return False
 
 
 def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str, dict | None]:
@@ -208,12 +229,11 @@ def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str, dict | Non
 
     # Even an already-published compatibility PR crosses the guarded seam:
     # promote_own_pr becomes a no-op only after checking the exact head.
-    promoted = bool(fresh.get("isDraft"))
     try:
-        guarded = gh.promote_own_pr(status["number"], expected_head_oid=fresh_head)
+        guarded, promoted = gh.promote_own_pr(
+            status["number"], expected_head_oid=fresh_head
+        )
     except Exception:
-        if promoted:
-            gh.draft_own_pr(status["number"])
         raise
     if not guarded:
         return False, "head changed during readiness guard", None
@@ -252,6 +272,10 @@ def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str, dict | Non
         return False, detail, after
 
     try:
+        gh.edit_own_pr_body(
+            status["number"],
+            _body_with_ready_head(after.get("body") or "", after_head),
+        )
         gh.label_own_pr(status["number"], add=[READY_FOR_REVIEW_LABEL])
     except Exception:
         if promoted:
@@ -510,7 +534,12 @@ def shepherd_pr(
     # A namespaced readiness label proves this PR crossed Foreman's promotion
     # boundary. If any live predicate later regresses (push, checks, merge
     # state, or threads), return it to the draft workbench before repair.
-    _demote_promoted_if_invalid(gh, status)
+    if _demote_promoted_if_invalid(gh, status):
+        work.state, work.detail = (
+            "settling",
+            "readiness evidence invalidated — returned PR to draft",
+        )
+        return work
 
     if checks_state == "pending":
         work.state, work.detail = "settling", "checks still running"

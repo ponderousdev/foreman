@@ -117,7 +117,9 @@ class GuardedChannels(unittest.TestCase):
                 "isDraft": True,
             },
         )
-        self.assertFalse(gh.promote_own_pr(9, expected_head_oid="old-head"))
+        self.assertEqual(
+            gh.promote_own_pr(9, expected_head_oid="old-head"), (False, False)
+        )
         self.assertFalse(runner.called_with_prefix(["pr", "ready"]))
 
     def test_matching_head_promotes_and_non_ready_returns_to_draft(self):
@@ -134,7 +136,7 @@ class GuardedChannels(unittest.TestCase):
             },
         )
         runner.when(["pr", "ready", "9"], "")
-        self.assertTrue(gh.promote_own_pr(9, expected_head_oid="head"))
+        self.assertEqual(gh.promote_own_pr(9, expected_head_oid="head"), (True, True))
         self.assertEqual(len(runner.called_with_prefix(["pr", "ready", "9"])), 1)
 
         gh2, runner2 = make_github()
@@ -155,6 +157,26 @@ class GuardedChannels(unittest.TestCase):
             runner2.called_with_prefix(["pr", "ready", "9", "--undo"]),
             [["pr", "ready", "9", "--undo"]],
         )
+
+    def test_indeterminate_promotion_attempts_compensating_draft(self):
+        gh, runner = make_github()
+        runner.when(
+            ["pr", "view", "9"],
+            {
+                "number": 9,
+                "author": {"login": "bot"},
+                "labels": [],
+                "body": "",
+                "headRefOid": "head",
+                "isDraft": True,
+            },
+        )
+        runner.when(["pr", "ready", "9"], "lost response", rc=1)
+
+        with self.assertRaises(ForemanError):
+            gh.promote_own_pr(9, expected_head_oid="head")
+
+        self.assertEqual(len(runner.called_with_prefix(["pr", "view", "9"])), 2)
 
     def test_vet_comment_requires_human_approval(self):
         gh, runner = make_github()

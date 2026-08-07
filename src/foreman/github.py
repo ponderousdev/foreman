@@ -791,7 +791,9 @@ class GitHub:
             )
         return pr
 
-    def promote_own_pr(self, number: int, *, expected_head_oid: str) -> bool:
+    def promote_own_pr(
+        self, number: int, *, expected_head_oid: str
+    ) -> tuple[bool, bool]:
         """Promote an own draft only when its head still matches the gate.
 
         GitHub's ready mutation has no compare-and-swap parameter, so the own
@@ -803,10 +805,18 @@ class GitHub:
         pr = self._own_pr_guard(number, "promote draft")
         actual_head = pr.get("headRefOid") or ""
         if not expected_head_oid or actual_head != expected_head_oid:
-            return False
-        if pr.get("isDraft"):
-            self.gh.call(["pr", "ready", str(number)])
-        return True
+            return False, False
+        transitioned = bool(pr.get("isDraft"))
+        if transitioned:
+            try:
+                self.gh.call(["pr", "ready", str(number)])
+            except Exception:
+                # The mutation may have reached GitHub even when its response
+                # was lost. The guarded read knows this call could transition,
+                # so compensate here before propagating the indeterminate result.
+                self.draft_own_pr(number)
+                raise
+        return True, transitioned
 
     def draft_own_pr(self, number: int) -> None:
         """Return an own PR to its draft workbench (a fail-closed mutation)."""

@@ -35,13 +35,20 @@ def bare_unit(number: int) -> Unit:
 
 
 def pr_view(number: int, *, unit: int, labels: list[str] | None = None) -> dict:
+    label_names = labels or []
     return {
         "number": number,
         "title": f"feat: unit {unit}",
         "url": f"https://github.com/owner/repo/pull/{number}",
         "state": "OPEN",
-        "labels": [{"name": name} for name in labels or []],
+        "labels": [{"name": name} for name in label_names],
+        "body": (
+            "<!-- foreman:ready-head:head -->"
+            if READY_FOR_REVIEW_LABEL in label_names
+            else ""
+        ),
         "headRefName": f"foreman/feat/{unit}-x",
+        "headRefOid": "head",
         "statusCheckRollup": [{"status": "COMPLETED", "conclusion": "SUCCESS"}],
         "mergeStateStatus": "CLEAN",
     }
