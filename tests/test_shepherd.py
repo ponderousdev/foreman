@@ -405,6 +405,60 @@ class DraftLifecycle(unittest.TestCase):
 
         self.assertEqual(drafted, [9])
 
+    def test_promotion_exception_returns_pr_to_draft(self):
+        gh, _runner = make_github()
+        gh.pr_status = lambda number: self._status()  # type: ignore[method-assign]
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
+        gh.promote_own_pr = (  # type: ignore[method-assign]
+            lambda *args, **kwargs: (_ for _ in ()).throw(ForemanError("lost"))
+        )
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(ForemanError, "lost"):
+            _promote_ready_head(gh, self._status())
+
+        self.assertEqual(drafted, [9])
+
+    def test_labeled_head_change_is_invalidated_during_fresh_read(self):
+        gh, _runner = make_github()
+        initial = self._status(draft=False, labels=[READY_FOR_REVIEW_LABEL])
+        gh.pr_status = lambda number: self._status(  # type: ignore[method-assign]
+            head="new", draft=False, labels=[READY_FOR_REVIEW_LABEL]
+        )
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
+        writes = []
+        gh.label_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, add=None, remove=None: writes.append(
+                (number, add, remove)
+            )
+        )
+
+        ready, _detail, _revealed = _promote_ready_head(gh, initial)
+
+        self.assertFalse(ready)
+        self.assertEqual(drafted, [9])
+        self.assertEqual(writes, [(9, None, [READY_FOR_REVIEW_LABEL])])
+
+    def test_conflicting_draft_routes_directly_to_merge_repair(self):
+        gh, _runner = make_github()
+        status = self._status()
+        status["mergeable"] = "CONFLICTING"
+        gh.pr_status = lambda number: status  # type: ignore[method-assign]
+
+        def repaired(_gh, _cfg, _root, _selection, work):
+            work.state, work.detail = "rebased", "draft conflict repaired"
+            return work
+
+        with patch(
+            "foreman.shepherd._repair_merge_state", side_effect=repaired
+        ) as repair:
+            work = self._shepherd(gh)
+
+        self.assertEqual(work.state, "rebased")
+        repair.assert_called_once()
+
     def test_draft_that_reveals_behind_is_routed_to_rebase(self):
         gh, _runner = make_github()
         statuses = iter(

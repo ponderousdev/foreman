@@ -175,13 +175,17 @@ def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str, dict | Non
     """
     expected_head = status.get("headRefOid") or ""
     started_draft = bool(status.get("isDraft"))
+    had_ready_label = any(
+        label.get("name") == READY_FOR_REVIEW_LABEL
+        for label in status.get("labels") or []
+    )
     if not expected_head:
         return False, "head is indeterminate — keeping PR in draft", None
 
     fresh = gh.pr_status(status["number"])
     fresh_head = fresh.get("headRefOid") or ""
     if fresh_head != expected_head:
-        if started_draft and not fresh.get("isDraft"):
+        if had_ready_label or (started_draft and not fresh.get("isDraft")):
             _return_to_draft(gh, fresh)
         return False, "head changed before promotion — keeping PR in draft", fresh
 
@@ -194,7 +198,7 @@ def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str, dict | Non
         return fresh_threads
 
     if not automation_ready_now(fresh, load_fresh_threads):
-        if started_draft and not fresh.get("isDraft"):
+        if had_ready_label or (started_draft and not fresh.get("isDraft")):
             _return_to_draft(gh, fresh)
         return (
             False,
@@ -205,7 +209,13 @@ def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str, dict | Non
     # Even an already-published compatibility PR crosses the guarded seam:
     # promote_own_pr becomes a no-op only after checking the exact head.
     promoted = bool(fresh.get("isDraft"))
-    if not gh.promote_own_pr(status["number"], expected_head_oid=fresh_head):
+    try:
+        guarded = gh.promote_own_pr(status["number"], expected_head_oid=fresh_head)
+    except Exception:
+        if promoted:
+            gh.draft_own_pr(status["number"])
+        raise
+    if not guarded:
         return False, "head changed during readiness guard", None
 
     # GitHub has no expected-head compare-and-swap on the ready mutation.
@@ -576,7 +586,11 @@ def shepherd_pr(
         return work
 
     merge_state = (status.get("mergeStateStatus") or "").upper()
-    if merge_state in ("BEHIND", "DIRTY"):
+    mergeable = (status.get("mergeable") or "").upper()
+    draft_conflict = (
+        status.get("isDraft") and merge_state == "DRAFT" and mergeable == "CONFLICTING"
+    )
+    if merge_state in ("BEHIND", "DIRTY") or draft_conflict:
         return _repair_merge_state(gh, cfg, root, selection, work)
 
     review_threads = gh.review_threads(work.number)
