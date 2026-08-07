@@ -187,6 +187,21 @@ def _demote_promoted_if_invalid(gh: GitHub, status: dict) -> bool:
     return False
 
 
+def _recover_interrupted_promotion(gh: GitHub, status: dict) -> bool:
+    """Fail closed when a process died after publishing but before labeling."""
+    labels = {label["name"] for label in status.get("labels") or []}
+    recorded_head = _ready_head(status.get("body") or "")
+    if READY_FOR_REVIEW_LABEL in labels or status.get("isDraft") or not recorded_head:
+        return False
+    head = status.get("headRefOid") or ""
+    if recorded_head == head and automation_ready_now(
+        status, lambda: gh.review_threads(status["number"])
+    ):
+        return False
+    gh.draft_own_pr(status["number"])
+    return True
+
+
 def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str, dict | None]:
     """Revalidate, promote, then verify the exact head survived the mutation.
 
@@ -225,6 +240,12 @@ def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str, dict | Non
             "readiness changed before promotion — keeping PR in draft",
             fresh,
         )
+
+    # Persist intent while the PR is still draft. If the process dies after
+    # the ready mutation, the next tick can distinguish the interrupted
+    # transition from an existing compatibility-era non-draft PR.
+    if not gh.record_ready_head_own_pr(status["number"], expected_head_oid=fresh_head):
+        return False, "head changed before promotion intent was recorded", None
 
     # Even an already-published compatibility PR crosses the guarded seam:
     # promote_own_pr becomes a no-op only after checking the exact head.
@@ -554,6 +575,13 @@ def shepherd_pr(
     # A namespaced readiness label proves this PR crossed Foreman's promotion
     # boundary. If any live predicate later regresses (push, checks, merge
     # state, or threads), return it to the draft workbench before repair.
+    if _recover_interrupted_promotion(gh, status):
+        work.state, work.detail = (
+            "settling",
+            "interrupted promotion invalidated — returned PR to draft",
+        )
+        return work
+
     if _demote_promoted_if_invalid(gh, status):
         work.state, work.detail = (
             "settling",

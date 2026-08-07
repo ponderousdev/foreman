@@ -17,6 +17,7 @@ from foreman.github import (
 from foreman.shepherd import (
     _demote_promoted_if_invalid,
     _promote_ready_head,
+    _recover_interrupted_promotion,
     automation_ready_now,
     classify_checks,
     open_foreman_prs,
@@ -371,6 +372,7 @@ class DraftLifecycle(unittest.TestCase):
         gh.pr_status = lambda number: next(statuses)  # type: ignore[method-assign]
         gh.review_threads = lambda number: []  # type: ignore[assignment]
         gh.promote_own_pr = lambda *args, **kwargs: (True, True)  # type: ignore[method-assign]
+        gh.record_ready_head_own_pr = lambda *args, **kwargs: True  # type: ignore[method-assign]
         drafted = []
         gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
 
@@ -461,6 +463,7 @@ class DraftLifecycle(unittest.TestCase):
             raise ForemanError("lost")
 
         gh.promote_own_pr = failed_promotion  # type: ignore[method-assign]
+        gh.record_ready_head_own_pr = lambda *args, **kwargs: True  # type: ignore[method-assign]
 
         with self.assertRaisesRegex(ForemanError, "lost"):
             _promote_ready_head(gh, self._status())
@@ -565,6 +568,18 @@ class DraftLifecycle(unittest.TestCase):
             ],
         )
 
+    def test_interrupted_promotion_with_invalid_evidence_is_recovered(self):
+        gh, _runner = make_github()
+        status = dict(
+            self._status(draft=False, checks="FAILURE"),
+            body="<!-- foreman:ready-head:head -->",
+        )
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
+
+        self.assertTrue(_recover_interrupted_promotion(gh, status))
+        self.assertEqual(drafted, [9])
+
     def test_conflicting_draft_routes_directly_to_merge_repair(self):
         gh, _runner = make_github()
         status = self._status()
@@ -595,6 +610,7 @@ class DraftLifecycle(unittest.TestCase):
         gh.pr_status = lambda number: next(statuses)  # type: ignore[method-assign]
         gh.review_threads = lambda number: []  # type: ignore[assignment]
         gh.promote_own_pr = lambda *args, **kwargs: (True, True)  # type: ignore[method-assign]
+        gh.record_ready_head_own_pr = lambda *args, **kwargs: True  # type: ignore[method-assign]
         drafted = []
         gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
 
