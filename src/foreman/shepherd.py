@@ -154,7 +154,7 @@ def _return_to_draft(gh: GitHub, status: dict) -> None:
 def _demote_promoted_if_invalid(gh: GitHub, status: dict) -> None:
     """A PR Foreman promoted must return to draft when evidence regresses."""
     labels = {label["name"] for label in status.get("labels") or []}
-    if READY_FOR_REVIEW_LABEL not in labels or status.get("isDraft"):
+    if READY_FOR_REVIEW_LABEL not in labels:
         return
     try:
         ready = bool(status.get("headRefOid")) and automation_ready_now(
@@ -167,18 +167,23 @@ def _demote_promoted_if_invalid(gh: GitHub, status: dict) -> None:
         _return_to_draft(gh, status)
 
 
-def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str]:
-    """Revalidate, promote, then verify the exact head survived the mutation."""
+def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str, dict | None]:
+    """Revalidate, promote, then verify the exact head survived the mutation.
+
+    The final status is returned on failure so a merge state hidden by GitHub's
+    ``DRAFT`` state can be routed through the normal repair path immediately.
+    """
     expected_head = status.get("headRefOid") or ""
+    started_draft = bool(status.get("isDraft"))
     if not expected_head:
-        return False, "head is indeterminate — keeping PR in draft"
+        return False, "head is indeterminate — keeping PR in draft", None
 
     fresh = gh.pr_status(status["number"])
     fresh_head = fresh.get("headRefOid") or ""
     if fresh_head != expected_head:
-        if not fresh.get("isDraft"):
+        if started_draft and not fresh.get("isDraft"):
             _return_to_draft(gh, fresh)
-        return False, "head changed before promotion — keeping PR in draft"
+        return False, "head changed before promotion — keeping PR in draft", fresh
 
     fresh_threads: list[dict] | None = None
 
@@ -189,44 +194,62 @@ def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str]:
         return fresh_threads
 
     if not automation_ready_now(fresh, load_fresh_threads):
-        if not fresh.get("isDraft"):
+        if started_draft and not fresh.get("isDraft"):
             _return_to_draft(gh, fresh)
-        return False, "readiness changed before promotion — keeping PR in draft"
+        return (
+            False,
+            "readiness changed before promotion — keeping PR in draft",
+            fresh,
+        )
 
-    promoted = False
-    if fresh.get("isDraft"):
-        if not gh.promote_own_pr(status["number"], expected_head_oid=fresh_head):
-            gh.draft_own_pr(status["number"])
-            return False, "head changed during promotion — returned PR to draft"
-        promoted = True
+    # Even an already-published compatibility PR crosses the guarded seam:
+    # promote_own_pr becomes a no-op only after checking the exact head.
+    promoted = bool(fresh.get("isDraft"))
+    if not gh.promote_own_pr(status["number"], expected_head_oid=fresh_head):
+        return False, "head changed during readiness guard", None
 
-        # GitHub has no expected-head compare-and-swap on the ready mutation.
-        # Re-read immediately and undo the transition if the remaining race
-        # window admitted a push or indeterminate readiness evidence.
-        try:
-            after = gh.pr_status(status["number"])
-            after_head = after.get("headRefOid") or ""
-        except Exception:
+    # GitHub has no expected-head compare-and-swap on the ready mutation.
+    # Re-read immediately and undo a promotion if the remaining race window
+    # admitted a push or indeterminate readiness evidence.
+    try:
+        after = gh.pr_status(status["number"])
+        after_head = after.get("headRefOid") or ""
+    except Exception:
+        if promoted:
             gh.draft_own_pr(status["number"])
-            raise
-        if after.get("isDraft") or after_head != fresh_head:
+        raise
+    if after.get("isDraft") or after_head != fresh_head:
+        if promoted:
             _return_to_draft(gh, after)
-            return False, "readiness changed during promotion — returned PR to draft"
-        try:
-            still_ready = automation_ready_now(
-                after, lambda: gh.review_threads(status["number"])
-            )
-        except Exception:
+            detail = "readiness changed during promotion — returned PR to draft"
+        else:
+            detail = "readiness changed before labeling compatibility PR"
+        return False, detail, after
+    try:
+        still_ready = automation_ready_now(
+            after, lambda: gh.review_threads(status["number"])
+        )
+    except Exception:
+        if promoted:
             gh.draft_own_pr(status["number"])
-            raise
-        if not still_ready:
+        raise
+    if not still_ready:
+        if promoted:
             _return_to_draft(gh, after)
-            return False, "readiness changed during promotion — returned PR to draft"
+            detail = "readiness changed during promotion — returned PR to draft"
+        else:
+            detail = "readiness changed before labeling compatibility PR"
+        return False, detail, after
 
-    gh.label_own_pr(status["number"], add=[READY_FOR_REVIEW_LABEL])
+    try:
+        gh.label_own_pr(status["number"], add=[READY_FOR_REVIEW_LABEL])
+    except Exception:
+        if promoted:
+            gh.draft_own_pr(status["number"])
+        raise
     if promoted:
-        return True, "automation complete — promoted for human review"
-    return True, "automation complete — ready for human review"
+        return True, "automation complete — promoted for human review", after
+    return True, "automation complete — ready for human review", after
 
 
 def _failure_text(gh: GitHub, failed: list[dict]) -> str:
@@ -386,6 +409,68 @@ def _common_tokens(
     }
 
 
+def _repair_merge_state(
+    gh: GitHub,
+    cfg: Config,
+    root: Path,
+    selection: Selection,
+    work: PrWork,
+) -> PrWork:
+    """Route an exposed BEHIND/DIRTY state through the standard rebase path."""
+    remote_name = worktree.remote(cfg)
+    wt_path = _ensure_worktree(cfg, root, work.unit_number, work.branch, remote_name)
+    worktree.fetch(remote_name)
+    base_ref = f"{remote_name}/{gh.default_branch()}"
+    git = gitops.UnitGit(selection.runner, wt_path)
+    conflicts = git.merge_tree_conflicts(base_ref)
+    if not conflicts:
+        if git.rebase_onto(base_ref):
+            git.push(remote_name, work.branch, first=False)
+            work.state, work.detail = (
+                "rebased",
+                "mechanical rebase onto fresh default branch",
+            )
+        else:
+            work.state, work.detail = (
+                "escalated",
+                "mechanical rebase unexpectedly failed",
+            )
+        return work
+
+    # A conflicted rebase resumes an agent on the branch's tree — the same
+    # #46 inheritance rule as the CI fix applies.
+    refusal = _origin_refusal(gh, cfg, selection, work.unit_number)
+    if refusal:
+        work.state, work.detail = (
+            "escalated",
+            "conflicted rebase on an untrusted-origin branch — an agent "
+            f"is not resumed on its tree here (#46): {refusal}",
+        )
+        return work
+    work.actions += 1
+    tokens = _common_tokens(gh, cfg, selection, work)
+    tokens["CONFLICTS"] = "\n".join(f"- {c}" for c in conflicts)
+    result = _resume_agent(gh, cfg, root, selection, work, "shepherd-rebase", tokens)
+    work.cost_usd += result.cost_usd or 0.0
+    if result.ok:
+        ok, _tail, _failed = verify.run_gate(
+            gate.compose(cfg, selection.runner.capabilities()),
+            wt_path,
+            backend_mod.unit_dir(cfg, root, work.unit_number),
+        )
+        if ok:
+            git.push(remote_name, work.branch, first=False)
+            work.state, work.detail = (
+                "rebased",
+                f"agent resolved {len(conflicts)} conflict(s), verify green",
+            )
+        else:
+            work.state, work.detail = "escalated", "post-rebase verification failed"
+    else:
+        work.state, work.detail = "escalated", "agent could not resolve the rebase"
+    return work
+
+
 def shepherd_pr(
     gh: GitHub,
     cfg: Config,
@@ -492,60 +577,7 @@ def shepherd_pr(
 
     merge_state = (status.get("mergeStateStatus") or "").upper()
     if merge_state in ("BEHIND", "DIRTY"):
-        wt_path = _ensure_worktree(
-            cfg, root, work.unit_number, work.branch, remote_name
-        )
-        worktree.fetch(remote_name)
-        base_ref = f"{remote_name}/{gh.default_branch()}"
-        git = gitops.UnitGit(selection.runner, wt_path)
-        conflicts = git.merge_tree_conflicts(base_ref)
-        if not conflicts:
-            if git.rebase_onto(base_ref):
-                git.push(remote_name, work.branch, first=False)
-                work.state, work.detail = (
-                    "rebased",
-                    "mechanical rebase onto fresh default branch",
-                )
-            else:
-                work.state, work.detail = (
-                    "escalated",
-                    "mechanical rebase unexpectedly failed",
-                )
-            return work
-        # A conflicted rebase resumes an agent on the branch's tree — the
-        # same #46 inheritance rule as the CI fix applies.
-        refusal = _origin_refusal(gh, cfg, selection, work.unit_number)
-        if refusal:
-            work.state, work.detail = (
-                "escalated",
-                "conflicted rebase on an untrusted-origin branch — an agent "
-                f"is not resumed on its tree here (#46): {refusal}",
-            )
-            return work
-        work.actions += 1
-        tokens = _common_tokens(gh, cfg, selection, work)
-        tokens["CONFLICTS"] = "\n".join(f"- {c}" for c in conflicts)
-        result = _resume_agent(
-            gh, cfg, root, selection, work, "shepherd-rebase", tokens
-        )
-        work.cost_usd += result.cost_usd or 0.0
-        if result.ok:
-            ok, _tail, _failed = verify.run_gate(
-                gate.compose(cfg, selection.runner.capabilities()),
-                wt_path,
-                backend_mod.unit_dir(cfg, root, work.unit_number),
-            )
-            if ok:
-                git.push(remote_name, work.branch, first=False)
-                work.state, work.detail = (
-                    "rebased",
-                    f"agent resolved {len(conflicts)} conflict(s), verify green",
-                )
-            else:
-                work.state, work.detail = "escalated", "post-rebase verification failed"
-        else:
-            work.state, work.detail = "escalated", "agent could not resolve the rebase"
-        return work
+        return _repair_merge_state(gh, cfg, root, selection, work)
 
     review_threads = gh.review_threads(work.number)
     threads = [t for t in review_threads if not t.get("isResolved")]
@@ -688,7 +720,10 @@ def shepherd_pr(
         return work
 
     if automation_ready_now(status, lambda: review_threads):
-        ready, detail = _promote_ready_head(gh, status)
+        ready, detail, revealed = _promote_ready_head(gh, status)
+        revealed_merge_state = ((revealed or {}).get("mergeStateStatus") or "").upper()
+        if not ready and revealed_merge_state in ("BEHIND", "DIRTY"):
+            return _repair_merge_state(gh, cfg, root, selection, work)
         work.state, work.detail = ("ready" if ready else "settling", detail)
     else:
         work.state, work.detail = "healthy", f"mergeState={merge_state or 'UNKNOWN'}"
