@@ -8,8 +8,8 @@ Deterministic triggers → bounded agent actions:
                 ones go to the agent (rebase additively, re-verify, push)
   unresolved review-bot threads → resume the agent to adjudicate each finding
                 (apply or decline-with-reasoning; blanket-accepting prohibited)
-  green ∧ adjudicated ∧ mergeable ∧ not behind → label ready-to-merge and
-                report a dependency-aware suggested merge order.
+  green ∧ adjudicated ∧ mergeable ∧ not behind → label ready-for-review and
+                report a dependency-aware suggested review order.
 
 Foreman never merges. `gh run rerun` is assumed unavailable to the bot token;
 the CI retrigger primitive is an empty commit.
@@ -28,7 +28,12 @@ from foreman import signatures as signatures_mod
 from foreman import trust as trust_mod
 from foreman.config import Config
 from foreman.dispatch import RETRIGGER_SUBJECT
-from foreman.github import GitHub
+from foreman.github import (
+    DISPATCHED_LABELS,
+    READY_FOR_REVIEW_LABEL,
+    READY_FOR_REVIEW_LABELS,
+    GitHub,
+)
 from foreman.graph import MARKER_RE
 from foreman.runner import Selection
 from foreman.util import info, relation_refs, warn, write_text
@@ -59,13 +64,19 @@ class ShepherdReport:
 
 
 def open_foreman_prs(gh: GitHub) -> list[dict]:
-    prs = []
-    for pr in gh.prs(label="foreman-dispatched", state="open"):
-        match = MARKER_RE.search(pr.get("body") or "")
-        if match:
-            pr["_unit"] = int(match.group("number"))
-            prs.append(pr)
-    return prs
+    """Open PRs carrying current or transition-era Foreman provenance.
+
+    Query each label explicitly so active PRs remain discoverable throughout
+    the compatibility period. A PR carrying both names is returned once.
+    """
+    prs_by_number: dict[int, dict] = {}
+    for label in DISPATCHED_LABELS:
+        for pr in gh.prs(label=label, state="open"):
+            match = MARKER_RE.search(pr.get("body") or "")
+            if match:
+                pr["_unit"] = int(match.group("number"))
+                prs_by_number.setdefault(pr["number"], pr)
+    return list(prs_by_number.values())
 
 
 def classify_checks(rollup: list[dict] | None) -> tuple[str, list[dict]]:
@@ -92,6 +103,26 @@ def classify_checks(rollup: list[dict] | None) -> tuple[str, list[dict]]:
     if pending:
         return "pending", []
     return "green", []
+
+
+def ready_for_review_now(gh: GitHub, status: dict) -> bool:
+    """Revalidate a current PR snapshot; a readiness label is only a hint."""
+    labels = {label["name"] for label in status.get("labels") or []}
+    if labels.isdisjoint(READY_FOR_REVIEW_LABELS):
+        return False
+    checks_state, _failed = classify_checks(status.get("statusCheckRollup"))
+    merge_state = (status.get("mergeStateStatus") or "").upper()
+    mergeable = (status.get("mergeable") or "").upper()
+    return (
+        (status.get("state") or "OPEN").upper() == "OPEN"
+        and not status.get("isDraft")
+        and checks_state == "green"
+        and (merge_state == "CLEAN" or mergeable == "MERGEABLE")
+        and not any(
+            not thread.get("isResolved")
+            for thread in gh.review_threads(status["number"])
+        )
+    )
 
 
 def _failure_text(gh: GitHub, failed: list[dict]) -> str:
@@ -548,10 +579,10 @@ def shepherd_pr(
 
     mergeable = (status.get("mergeable") or "").upper()
     if merge_state == "CLEAN" or mergeable == "MERGEABLE":
-        gh.label_own_pr(work.number, add=["ready-to-merge"])
+        gh.label_own_pr(work.number, add=[READY_FOR_REVIEW_LABEL])
         work.state, work.detail = (
             "ready",
-            "green, adjudicated, mergeable — awaiting human merge",
+            "automation complete — ready for human review",
         )
     else:
         work.state, work.detail = "healthy", f"mergeState={merge_state or 'UNKNOWN'}"
@@ -624,7 +655,7 @@ def run_shepherd(
                 )
         if work.state == "ready" and _own_pr(gh, pr):
             report.append_status_event(
-                gh, work.unit_number, "ready to merge — awaiting human"
+                gh, work.unit_number, "ready for review — human turn"
             )
         if work.state == "waiting":
             out.waiting[work.unit_number] = work.detail

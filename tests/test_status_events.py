@@ -150,11 +150,11 @@ class ShepherdAppendPreservesSnapshot(unittest.TestCase):
         runner.when(
             ["api", "--method", "PATCH", "repos/owner/repo/issues/comments/2"], "{}"
         )
-        report.append_status_event(gh, UNIT, "ready to merge — awaiting human")
+        report.append_status_event(gh, UNIT, "ready for review — human turn")
         body = written(runner, "PATCH")[0]
         expected = prior.split(EVENT_LOG_MARKER, 1)[0].rstrip("\n")
         self.assertEqual(body.split(EVENT_LOG_MARKER, 1)[0].rstrip("\n"), expected)
-        self.assertIn("ready to merge — awaiting human", body)
+        self.assertIn("ready for review — human turn", body)
         self.assertIn("initiated (attempt 1)", body)
 
     def test_missing_comment_creates_a_log_only_one(self):

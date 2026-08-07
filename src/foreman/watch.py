@@ -152,8 +152,8 @@ def run_watch(
             if shep.ready_order and dispatched == 0 and not failed:
                 if not idle_notified:
                     info(
-                        "watch: idling by design — PRs are ready and nothing new is "
-                        "dispatchable; waiting on human merges:\n"
+                        "watch: idling by design — automation is complete and nothing "
+                        "new is dispatchable; waiting on human review:\n"
                         + "\n".join(
                             f"  {n}. #{u} {url}"
                             for n, (u, url) in enumerate(shep.ready_order, 1)

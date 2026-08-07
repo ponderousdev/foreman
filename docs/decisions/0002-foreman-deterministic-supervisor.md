@@ -24,13 +24,13 @@ crashes, and every terminal path inherits a cleanup obligation. Option 3
 converts the ask from *status* to *provenance*: foreman writes time-stamped,
 immutable past facts (`initiated (attempt N, branch …)` at dispatch, then
 `PR opened: …`, `failed: …`, `blocked …`, `refused: …`, `escalated: …`,
-`ready to merge …`) into the same single marker-identified comment, below a
+`ready for review …`) into the same single marker-identified comment, below a
 second marker (`<!-- foreman:event-log -->`).
 
 This does not weaken "derived state is never stored". The comment body is
 read back **only to preserve its own display text across re-renders** — the
 same reason foreman finds the comment to edit it in place at all. Events are
-provenance, like the `foreman-dispatched` PR label: no eligibility, doneness,
+provenance, like the `foreman:dispatched` PR label: no eligibility, doneness,
 freshness, or shepherd decision consumes them, and `spec.trusted_comments`
 keeps foreman's own marked comment out of every prompt, so the log cannot
 re-enter an agent's input as specification. Nothing a crash could falsify is

@@ -14,6 +14,7 @@ from pathlib import Path
 from foreman import report
 from foreman.cli import _parser, _scan_local_run, _status_overall, _status_targeted
 from foreman.config import Config
+from foreman.github import LEGACY_READY_FOR_REVIEW_LABEL, READY_FOR_REVIEW_LABEL
 from foreman.graph import Target, Unit
 from tests.fakes import issue_json, make_github, pr_json
 
@@ -134,34 +135,56 @@ class OverallSnapshot(unittest.TestCase):
         self.assertIn("pr-open", out)
         self.assertIn("foreman/feat/3-x", out)
 
-    def test_ready_to_merge_pr_enters_merge_queue(self):
+    def test_ready_for_review_pr_enters_human_review_queue(self):
         cfg = Config()
         gh, runner = make_github(cfg)
         runner.when(["pr", "list"], [pr_json(7, unit=3, merged=False)])
         runner.when(["issue", "view", "3"], issue_json(3))
-        runner.when(["pr", "view", "7"], pr_view(7, unit=3, labels=["ready-to-merge"]))
+        runner.when(
+            ["pr", "view", "7"],
+            pr_view(7, unit=3, labels=[READY_FOR_REVIEW_LABEL]),
+        )
         # Readiness revalidates every shepherd predicate: green checks,
         # CLEAN merge state, and no unresolved review threads.
         gh.review_threads = lambda number: []  # type: ignore[assignment]
         with tempfile.TemporaryDirectory() as tmp:
             rc, out = self._run(gh, Path(tmp))
         self.assertEqual(rc, 0)
-        self.assertIn("ready-to-merge", out)
-        self.assertIn("Pending merges", out)
+        self.assertIn("ready-for-review", out)
+        self.assertIn("Ready for human review", out)
+
+    def test_legacy_ready_label_remains_visible_during_transition(self):
+        cfg = Config()
+        gh, runner = make_github(cfg)
+        runner.when(["pr", "list"], [pr_json(7, unit=3, merged=False)])
+        runner.when(["issue", "view", "3"], issue_json(3))
+        runner.when(
+            ["pr", "view", "7"],
+            pr_view(7, unit=3, labels=[LEGACY_READY_FOR_REVIEW_LABEL]),
+        )
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out = self._run(gh, Path(tmp))
+        self.assertEqual(rc, 0)
+        self.assertIn("ready-for-review", out)
+        self.assertIn("Ready for human review", out)
 
     def test_stale_ready_label_with_unresolved_thread_is_not_queued(self):
         cfg = Config()
         gh, runner = make_github(cfg)
         runner.when(["pr", "list"], [pr_json(7, unit=3, merged=False)])
         runner.when(["issue", "view", "3"], issue_json(3))
-        runner.when(["pr", "view", "7"], pr_view(7, unit=3, labels=["ready-to-merge"]))
+        runner.when(
+            ["pr", "view", "7"],
+            pr_view(7, unit=3, labels=[READY_FOR_REVIEW_LABEL]),
+        )
         gh.review_threads = lambda number: [  # type: ignore[assignment]
             {"id": "t", "isResolved": False}
         ]
         with tempfile.TemporaryDirectory() as tmp:
             rc, out = self._run(gh, Path(tmp))
         self.assertEqual(rc, 0)
-        self.assertNotIn("Pending merges", out)
+        self.assertNotIn("Ready for human review", out)
 
     def test_local_blocked_and_completed_dirs_are_reported(self):
         cfg = Config()
@@ -268,6 +291,19 @@ class TargetedMatchesOverall(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             targeted = self._targeted(gh, Path(tmp), 90)
         self.assertIn("⏳ waiting", targeted)
+
+    def test_targeted_status_revalidates_stale_ready_label(self):
+        cfg = Config()
+        gh, runner = make_github(cfg)
+        runner.when(["pr", "list"], [pr_json(7, unit=3, merged=False)])
+        stale = pr_view(7, unit=3, labels=[READY_FOR_REVIEW_LABEL])
+        stale["statusCheckRollup"] = [{"status": "COMPLETED", "conclusion": "FAILURE"}]
+        runner.when(["pr", "view", "7"], stale)
+        with tempfile.TemporaryDirectory() as tmp:
+            targeted = self._targeted(gh, Path(tmp), 3)
+        self.assertIn("pr-open", targeted)
+        self.assertNotIn("ready-for-review", targeted)
+        self.assertNotIn("Ready for human review", targeted)
 
 
 class LocalScanSingleSourced(unittest.TestCase):

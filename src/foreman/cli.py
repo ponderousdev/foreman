@@ -26,7 +26,7 @@ from foreman import shepherd as shepherd_mod
 from foreman import watch as watch_mod
 from foreman.config import Config
 from foreman.config import load as load_config
-from foreman.github import Gh, GitHub
+from foreman.github import DISPATCHED_LABELS, Gh, GitHub
 from foreman.graph import (
     Target,
     _unit_from_issue,
@@ -226,8 +226,9 @@ def _concurrent_activity(
     others = [
         p
         for p in gh.prs(state="open")
-        if "foreman-dispatched"
-        not in [label["name"] for label in p.get("labels") or []]
+        if set(DISPATCHED_LABELS).isdisjoint(
+            label["name"] for label in p.get("labels") or []
+        )
     ]
     if others:
         notices.append(
@@ -307,7 +308,7 @@ def cmd_shepherd(_args: argparse.Namespace) -> int:
         print(report.table(["unit", "pr", "state", "detail"], rows))
     if shep.ready_order:
         print()
-        print("Suggested merge order (foreman never merges):")
+        print("Suggested human review order:")
         for index, (number, url) in enumerate(shep.ready_order, 1):
             print(f"  {index}. #{number}  {url}")
     if shep.environmental:
@@ -488,21 +489,11 @@ def _status_overall(cfg: Config, root: Path, gh: GitHub) -> int:
         checks_state, _failed = shepherd_mod.classify_checks(
             status.get("statusCheckRollup")
         )
-        labels = [label["name"] for label in status.get("labels") or []]
-        # A ready-to-merge label can go stale (new commits, regressed
-        # checks, base advanced, fresh review threads) — readiness
-        # revalidates every predicate the shepherd requires: green checks,
-        # a clean merge state, and no unresolved review threads. The
-        # checks state renders either way.
-        ready_now = (
-            "ready-to-merge" in labels
-            and checks_state == "green"
-            and (status.get("mergeStateStatus") or "").upper() == "CLEAN"
-            and not any(
-                not t.get("isResolved") for t in gh.review_threads(pr["number"])
-            )
-        )
-        state = "ready-to-merge" if ready_now else f"pr-open ({checks_state})"
+        # The label can go stale after new commits, regressed checks, a base
+        # advance, or fresh review threads. Treat it only as a hint and
+        # revalidate the complete current snapshot.
+        ready_now = shepherd_mod.ready_for_review_now(gh, status)
+        state = "ready-for-review" if ready_now else f"pr-open ({checks_state})"
         if ready_now:
             ready.append(
                 shepherd_mod.PrWork(
@@ -619,9 +610,9 @@ def _status_targeted(cfg: Config, root: Path, gh: GitHub, target: Target) -> int
             checks_state, _failed = shepherd_mod.classify_checks(
                 status.get("statusCheckRollup")
             )
-            labels = [label["name"] for label in status.get("labels") or []]
-            state = "ready-to-merge" if "ready-to-merge" in labels else "pr-open"
-            if state == "ready-to-merge":
+            ready_now = shepherd_mod.ready_for_review_now(gh, status)
+            state = "ready-for-review" if ready_now else "pr-open"
+            if ready_now:
                 ready.append(
                     shepherd_mod.PrWork(
                         number=pr["number"],

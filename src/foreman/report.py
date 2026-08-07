@@ -36,7 +36,7 @@ class UnitStatus:
     """One unit's snapshot for the status comment + summary row."""
 
     unit: Unit
-    state: str  # dispatched | pr-open | ready-to-merge | failed | blocked | held | waiting | merged
+    state: str  # dispatched | pr-open | ready-for-review | failed | blocked | held | waiting | merged
     branch: str = ""
     pr_url: str = ""
     checks: str = ""
@@ -49,7 +49,7 @@ class UnitStatus:
 STATE_ICONS = {
     "dispatched": "🚧",
     "pr-open": "🔃",
-    "ready-to-merge": "✅",
+    "ready-for-review": "✅",
     "failed": "⚠️",
     "blocked": "❓",
     "held": "⏸",
@@ -65,7 +65,7 @@ STATE_ICONS = {
 # ── event log (#82) ──────────────────────────────────────────────────
 #
 # The status comment's second section: time-stamped, immutable past facts
-# (provenance, like the foreman-dispatched PR label), newest first. The log
+# (provenance, like the foreman:dispatched PR label), newest first. The log
 # is parsed back out of the prior body only so a re-render preserves it —
 # never to decide anything.
 
@@ -283,7 +283,7 @@ def human_queue(
     lines: list[str] = ["Human action queue:"]
     if merge_order:
         lines.append("")
-        lines.append("  Pending merges (suggested dependency-aware order):")
+        lines.append("  Ready for human review (suggested dependency-aware order):")
         for position, (number, url) in enumerate(merge_order, 1):
             lines.append(f"    {position}. #{number}  {url}")
     if blocked:

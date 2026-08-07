@@ -8,6 +8,7 @@ import unittest
 from foreman import pr as pr_mod
 from foreman.backend import ResultContract
 from foreman.config import Config
+from foreman.github import DISPATCHED_LABEL
 from foreman.graph import MARKER_RE, Unit
 from foreman.inputs import UnitInputs
 from tests.fakes import issue_json
@@ -98,6 +99,35 @@ class Bodies(unittest.TestCase):
         self.assertIn("works [CI]", body)
         self.assertIn("`t::a`", body)
         self.assertIn("foreman never merges", body)
+
+
+class LabelWrites(unittest.TestCase):
+    def test_open_pr_writes_only_namespaced_provenance_label(self):
+        class RecordingGitHub:
+            def __init__(self):
+                self.labels = None
+                self.ensured = False
+
+            def ensure_labels(self):
+                self.ensured = True
+
+            def create_pr(self, **kwargs):
+                self.labels = kwargs["labels"]
+                return "https://github.com/owner/repo/pull/9"
+
+        gh = RecordingGitHub()
+        url = pr_mod.open_pr(
+            gh,
+            Config(),
+            unit(),
+            title="feat: add widget",
+            body="body",
+            branch="foreman/feat/42-widget",
+            base="main",
+        )
+        self.assertTrue(gh.ensured)
+        self.assertEqual(gh.labels, [DISPATCHED_LABEL])
+        self.assertEqual(url, "https://github.com/owner/repo/pull/9")
 
 
 if __name__ == "__main__":
