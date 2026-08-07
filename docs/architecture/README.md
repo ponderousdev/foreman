@@ -24,7 +24,7 @@ flowchart LR
     LOCAL --> GATE[composed verify gate]
     GATE -->|green| PUSH[Foreman-owned push + PR]
     PUSH --> SHEP[shepherd: CI/rebase/adjudicate]
-    SHEP -->|ready-to-merge| HUMAN[[human merges — Foreman never does]]
+    SHEP -->|foreman:ready-for-review| HUMAN[[human reviews and merges]]
 ```
 
 ## Components

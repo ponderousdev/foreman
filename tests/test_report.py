@@ -123,8 +123,8 @@ class SnapshotFieldsCannotForgeTheLog(unittest.TestCase):
 
 class EventAppend(unittest.TestCase):
     def test_identical_newest_text_is_not_re_appended(self):
-        once = append_event([], "ready to merge — awaiting human")
-        twice = append_event(once, "ready to merge — awaiting human")
+        once = append_event([], "ready for review — human turn")
+        twice = append_event(once, "ready for review — human turn")
         self.assertEqual(twice, once)
 
     def test_multiline_text_is_flattened_and_still_dedups(self):

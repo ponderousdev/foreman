@@ -3,17 +3,121 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from foreman import signatures as signatures_mod
-from foreman.shepherd import classify_checks
+from foreman.config import Config
+from foreman.github import (
+    DISPATCHED_LABEL,
+    LEGACY_DISPATCHED_LABEL,
+    LEGACY_READY_FOR_REVIEW_LABEL,
+    READY_FOR_REVIEW_LABEL,
+)
+from foreman.shepherd import (
+    classify_checks,
+    open_foreman_prs,
+    ready_for_review_now,
+    shepherd_pr,
+)
 from foreman.util import ForemanError
-from tests.fakes import make_github
+from tests.fakes import make_github, pr_json
 from tests.fakes import make_github as _mk
+
+
+class LabelTransition(unittest.TestCase):
+    def test_current_and_legacy_provenance_labels_are_discoverable_and_deduped(self):
+        gh, _runner = make_github()
+        current = pr_json(10, unit=1, merged=False)
+        legacy = pr_json(11, unit=2, merged=False)
+        calls = []
+
+        def prs(*, label=None, head=None, state="open"):
+            calls.append((label, state))
+            if label == DISPATCHED_LABEL:
+                return [current]
+            if label == LEGACY_DISPATCHED_LABEL:
+                return [legacy, current]
+            return []
+
+        gh.prs = prs  # type: ignore[method-assign]
+        discovered = open_foreman_prs(gh)
+        self.assertEqual([pr["number"] for pr in discovered], [10, 11])
+        self.assertEqual([pr["_unit"] for pr in discovered], [1, 2])
+        self.assertEqual(
+            calls,
+            [(DISPATCHED_LABEL, "open"), (LEGACY_DISPATCHED_LABEL, "open")],
+        )
+
+    def test_current_and_legacy_readiness_labels_are_live_revalidated(self):
+        gh, _runner = make_github()
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
+        base = {
+            "number": 9,
+            "state": "OPEN",
+            "isDraft": False,
+            "statusCheckRollup": [{"status": "COMPLETED", "conclusion": "SUCCESS"}],
+            "mergeStateStatus": "CLEAN",
+        }
+        for label in (READY_FOR_REVIEW_LABEL, LEGACY_READY_FOR_REVIEW_LABEL):
+            status = dict(base, labels=[{"name": label}])
+            self.assertTrue(ready_for_review_now(gh, status), label)
+
+        stale = dict(
+            base,
+            labels=[{"name": READY_FOR_REVIEW_LABEL}],
+            statusCheckRollup=[{"status": "COMPLETED", "conclusion": "FAILURE"}],
+        )
+        self.assertFalse(ready_for_review_now(gh, stale))
+
+        behind = dict(
+            base,
+            labels=[{"name": READY_FOR_REVIEW_LABEL}],
+            mergeStateStatus="BEHIND",
+            mergeable="MERGEABLE",
+        )
+        self.assertFalse(ready_for_review_now(gh, behind))
+
+        awaiting_human_approval = dict(
+            base,
+            labels=[{"name": READY_FOR_REVIEW_LABEL}],
+            mergeStateStatus="BLOCKED",
+            mergeable="MERGEABLE",
+        )
+        self.assertTrue(ready_for_review_now(gh, awaiting_human_approval))
+
+    def test_shepherd_writes_only_namespaced_ready_label(self):
+        gh, _runner = make_github()
+        gh.pr_status = lambda number: {  # type: ignore[method-assign]
+            "number": number,
+            "title": "feat: unit 1",
+            "url": "https://github.com/owner/repo/pull/9",
+            "headRefName": "foreman/feat/1-unit",
+            "statusCheckRollup": [{"status": "COMPLETED", "conclusion": "SUCCESS"}],
+            "mergeStateStatus": "CLEAN",
+            "mergeable": "MERGEABLE",
+        }
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
+        writes = []
+        gh.label_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, add=None, remove=None: writes.append(
+                (number, add, remove)
+            )
+        )
+        work = shepherd_pr(
+            gh,
+            Config(remote="origin"),
+            Path("."),
+            None,  # type: ignore[arg-type]
+            {"number": 9, "_unit": 1},
+            [],
+        )
+        self.assertEqual(work.state, "ready")
+        self.assertEqual(writes, [(9, [READY_FOR_REVIEW_LABEL], None)])
 
 
 class ReviewThreadReads(unittest.TestCase):
     """#54: unread threads must never read as resolved — that path ends in
-    ready-to-merge."""
+    ready-for-review."""
 
     def _resp(self, total, nodes):
         return {
@@ -642,6 +746,7 @@ class ProvenanceGate(unittest.TestCase):
                 },
             ],
         )
+        runner.when(["label", "create"], "")
         runner.when(
             ["api", "repos/owner/repo/issues/7/comments", "--paginate", "--slurp"],
             [[]],
@@ -661,6 +766,11 @@ class ProvenanceGate(unittest.TestCase):
 
         # Both escalations are reported to the operator...
         self.assertEqual(sorted(out.environmental), [7, 9])
+        creates = runner.called_with_prefix(["label", "create"])
+        self.assertEqual(
+            {argv[2] for argv in creates},
+            {DISPATCHED_LABEL, READY_FOR_REVIEW_LABEL},
+        )
         # ...but only foreman's own PR leaves provenance on its issue.
         posts = runner.called_with_prefix(["api", "--method", "POST"])
         self.assertEqual(len(posts), 1)

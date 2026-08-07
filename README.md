@@ -51,8 +51,8 @@ Design intent: [DESIGN.md](DESIGN.md) · architecture:
    never pushes.
 3. **shepherd** — keep open PRs healthy: retry environmental CI failures once,
    rebase cleanly, hand mechanical failures and review-bot threads back to a
-   bounded agent, and label the green-and-mergeable ones `ready-to-merge` with
-   a dependency-aware merge order.
+   bounded agent, and label automation-complete PRs
+   `foreman:ready-for-review` with a dependency-aware suggested review order.
 4. **You merge.** The next tick re-derives state from GitHub + git and
    discovers the newly-unblocked wave. During a merge freeze Foreman idles by
    design.

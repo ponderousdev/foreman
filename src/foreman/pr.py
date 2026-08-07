@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 from foreman.backend import ResultContract
 from foreman.config import Config
-from foreman.github import GitHub
+from foreman.github import DISPATCHED_LABEL, GitHub
 from foreman.graph import Unit, dependency_satisfied
 from foreman.spec import spec_hash, trusted_comments
 from foreman.util import sub_issue_refs, warn
@@ -168,6 +168,6 @@ def open_pr(
 ) -> str:
     gh.ensure_labels()
     url = gh.create_pr(
-        title=title, body=body, head=branch, base=base, labels=["foreman-dispatched"]
+        title=title, body=body, head=branch, base=base, labels=[DISPATCHED_LABEL]
     )
     return url

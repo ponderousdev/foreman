@@ -37,13 +37,21 @@ _UNKNOWN_COMMENT = object()
 # this integration are satisfiable only by Actions job observations.
 _ACTIONS_APP_ID = 15368
 
-# Labels foreman idempotently ensures and is allowed to apply to its own PRs.
+# Labels Foreman idempotently ensures and is allowed to apply to its own PRs.
+# Legacy names are read-only compatibility aliases: never ensure or write them.
+DISPATCHED_LABEL = "foreman:dispatched"
+READY_FOR_REVIEW_LABEL = "foreman:ready-for-review"
+LEGACY_DISPATCHED_LABEL = "foreman-dispatched"
+LEGACY_READY_FOR_REVIEW_LABEL = "ready-to-merge"
+DISPATCHED_LABELS = (DISPATCHED_LABEL, LEGACY_DISPATCHED_LABEL)
+READY_FOR_REVIEW_LABELS = (
+    READY_FOR_REVIEW_LABEL,
+    LEGACY_READY_FOR_REVIEW_LABEL,
+)
+
 FOREMAN_LABELS = {
-    "foreman-dispatched": ("1D76DB", "PR opened by foreman for a dispatched unit"),
-    "ready-to-merge": (
-        "5319E7",
-        "Green, adjudicated, mergeable - awaiting human merge",
-    ),
+    DISPATCHED_LABEL: ("1D76DB", "PR opened by Foreman for a dispatched unit"),
+    READY_FOR_REVIEW_LABEL: ("5319E7", "Automation complete; ready for human review"),
 }
 
 ISSUE_FIELDS = ",".join(
@@ -431,7 +439,7 @@ class GitHub:
                 # A failing third-party Checks-API run is invisible to both
                 # derived sources and earns no required-context sentinel, so
                 # GitHub's own verdict is the only signal — surface it as a
-                # pending row: never green (no ready-to-merge), never red
+                # pending row: never green (no ready-for-review), never red
                 # (no fixer agent chasing a check the PAT cannot see).
                 status["statusCheckRollup"].append(
                     {
@@ -682,7 +690,7 @@ class GitHub:
             total = connection.get("totalCount")
         except (KeyError, TypeError, AttributeError) as exc:
             # Fail closed (#54): an unreadable response must never read as
-            # "no unresolved threads" — that path ends in ready-to-merge.
+            # "no unresolved threads" — that path ends in ready-for-review.
             raise ForemanError(
                 f"review threads: unreadable GraphQL response for PR "
                 f"#{number} — failing closed"

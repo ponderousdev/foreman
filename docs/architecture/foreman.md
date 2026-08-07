@@ -179,9 +179,25 @@ Deterministic triggers → bounded agent actions on open foreman PRs:
   dispositions — its token is read-only — and foreman posts each reply and
   resolves each thread through the write contract, then re-checks
   disposition completeness deterministically.
-- **Green + adjudicated + mergeable** → `ready-to-merge` label plus a
-  dependency-aware suggested merge order. Foreman performs no merge action
-  of any kind.
+- **Green + adjudicated + mergeable** → `foreman:ready-for-review` plus a
+  dependency-aware suggested review order. This proves only that automation
+  is complete and it is a human's turn; Foreman does not assert human approval
+  or permission to merge, and performs no merge action of any kind.
+
+### PR-label migration compatibility
+
+New writes use only `foreman:dispatched` and `foreman:ready-for-review`.
+During the compatibility period, reads also recognize the legacy
+`foreman-dispatched` provenance label and `ready-to-merge` readiness label so
+an in-flight PR cannot disappear or lose its displayed status during rollout.
+The readiness label is never trusted as proof: every consumer revalidates the
+current PR snapshot, checks, merge state, and review threads.
+
+Foreman does not create, apply, remove, or rename the legacy labels, and the
+old repository label definitions must remain until all live PRs have either
+closed or been relabeled. Legacy-read support may be removed only in a later
+breaking release after operators have verified that no open PR carries either
+old name; removing the old label definitions is a separate human migration.
 
 ## Watch mode and unattended runs
 

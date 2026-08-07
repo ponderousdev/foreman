@@ -11,7 +11,12 @@ import unittest
 
 from foreman import github as github_mod
 from foreman.config import Config
-from foreman.github import STATUS_MARKER
+from foreman.github import (
+    DISPATCHED_LABEL,
+    FOREMAN_LABELS,
+    READY_FOR_REVIEW_LABEL,
+    STATUS_MARKER,
+)
 from foreman.util import ForemanError
 from tests.fakes import make_github
 
@@ -24,7 +29,10 @@ def _mutations(gh):
             lambda: gh.create_pr(title="t", body="b", head="h", base="main", labels=[]),
         ),
         ("edit_own_pr_body", lambda: gh.edit_own_pr_body(1, "b")),
-        ("label_own_pr", lambda: gh.label_own_pr(1, add=["ready-to-merge"])),
+        (
+            "label_own_pr",
+            lambda: gh.label_own_pr(1, add=[READY_FOR_REVIEW_LABEL]),
+        ),
         ("comment_own_pr", lambda: gh.comment_own_pr(1, "b")),
         (
             "upsert_status_comment",
@@ -66,6 +74,20 @@ class IdentityAssertion(unittest.TestCase):
         runner.when(["label", "create"], "")
         gh.ensure_labels()
         self.assertTrue(runner.called_with_prefix(["label", "create"]))
+
+
+class LabelVocabulary(unittest.TestCase):
+    def test_write_contract_contains_only_namespaced_current_labels(self):
+        self.assertEqual(
+            set(FOREMAN_LABELS), {DISPATCHED_LABEL, READY_FOR_REVIEW_LABEL}
+        )
+        self.assertTrue(all(name.startswith("foreman:") for name in FOREMAN_LABELS))
+
+    def test_ready_description_claims_only_automation_complete_and_human_turn(self):
+        description = FOREMAN_LABELS[READY_FOR_REVIEW_LABEL][1].lower()
+        self.assertIn("automation complete", description)
+        self.assertIn("human review", description)
+        self.assertNotIn("merge", description)
 
 
 class GuardedChannels(unittest.TestCase):

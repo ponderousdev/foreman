@@ -63,8 +63,8 @@ stateDiagram-v2
     dispatched --> blocked : agent asks a question
     dispatched --> failed : verify/contract/timeout/abnormal
     dispatched --> pr_open : verified, PR opened
-    pr_open --> ready_to_merge : green, adjudicated, mergeable (shepherd)
-    ready_to_merge --> merged : human merges
+    pr_open --> ready_for_review : automation complete (shepherd)
+    ready_for_review --> merged : human reviews and merges
     blocked --> waiting : human answers → retry / re-arm
     failed --> waiting : foreman retry / attach
     merged --> [*]
