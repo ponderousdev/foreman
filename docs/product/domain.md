@@ -62,8 +62,9 @@ stateDiagram-v2
     ready --> dispatched : worktree + agent
     dispatched --> blocked : agent asks a question
     dispatched --> failed : verify/contract/timeout/abnormal
-    dispatched --> pr_open : verified, PR opened
-    pr_open --> ready_for_review : automation complete (shepherd)
+    dispatched --> pr_draft : verified, draft PR opened
+    pr_draft --> ready_for_review : exact-head automation gate (shepherd)
+    ready_for_review --> pr_draft : push or readiness invalidation
     ready_for_review --> merged : human reviews and merges
     blocked --> waiting : human answers → retry / re-arm
     failed --> waiting : foreman retry / attach

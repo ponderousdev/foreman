@@ -1,10 +1,12 @@
 """All GitHub access — every read and every mutation lives here, nowhere else.
 
 Write contract (docs/architecture/foreman.md): foreman MAY create/push its own
-branches, open non-draft PRs, edit its OWN PRs and their foreman-namespace
-labels, create/edit the single marker-identified status comment per unit,
-resolve review threads it dispositioned, post human-approved vet
-correction comments, and idempotently ensure its label definitions exist.
+branches, open draft PRs, promote its OWN drafts after the readiness gate,
+return its OWN PRs to draft when readiness is invalidated, edit its OWN PRs
+and their foreman-namespace labels, create/edit the single marker-identified
+status comment per unit, resolve review threads it dispositioned, post
+human-approved vet correction comments, and idempotently ensure its label
+definitions exist.
 
 Foreman MUST NEVER: merge anything, close/reopen issues, edit issue
 titles/bodies/milestones, edit or delete human or third-party comments,
@@ -774,6 +776,7 @@ class GitHub:
             head,
             "--base",
             base,
+            "--draft",
         ]
         for label in labels:
             args += ["--label", label]
@@ -781,12 +784,36 @@ class GitHub:
         return out.strip().splitlines()[-1] if out.strip() else ""
 
     def _own_pr_guard(self, number: int, action: str) -> dict:
-        pr = self.pr_view(number, "number,author,labels,body")
+        pr = self.pr_view(number, "number,author,labels,body,headRefOid,isDraft")
         if pr["author"]["login"] != self.viewer():
             raise ForemanError(
                 f"write contract: '{action}' on PR #{number} not authored by foreman"
             )
         return pr
+
+    def promote_own_pr(self, number: int, *, expected_head_oid: str) -> bool:
+        """Promote an own draft only when its head still matches the gate.
+
+        GitHub's ready mutation has no compare-and-swap parameter, so the own
+        PR guard performs the last possible head read immediately before it.
+        The caller performs a post-transition read to catch the remaining
+        network-sized race window.
+        """
+        self._assert_writable("promote own PR")
+        pr = self._own_pr_guard(number, "promote draft")
+        actual_head = pr.get("headRefOid") or ""
+        if not expected_head_oid or actual_head != expected_head_oid:
+            return False
+        if pr.get("isDraft"):
+            self.gh.call(["pr", "ready", str(number)])
+        return True
+
+    def draft_own_pr(self, number: int) -> None:
+        """Return an own PR to its draft workbench (a fail-closed mutation)."""
+        self._assert_writable("return own PR to draft")
+        pr = self._own_pr_guard(number, "return to draft")
+        if not pr.get("isDraft"):
+            self.gh.call(["pr", "ready", str(number), "--undo"])
 
     def edit_own_pr_body(self, number: int, body: str) -> None:
         self._assert_writable("edit own PR body")

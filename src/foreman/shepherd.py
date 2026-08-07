@@ -118,11 +118,12 @@ def automation_ready_now(
     checks_state, _failed = classify_checks(status.get("statusCheckRollup"))
     merge_state = (status.get("mergeStateStatus") or "").upper()
     mergeable = (status.get("mergeable") or "").upper()
-    # GitHub uses BLOCKED for an otherwise mergeable PR awaiting required
-    # human approval. Every transient/stale state (UNKNOWN, UNSTABLE, BEHIND,
-    # DIRTY) remains not-ready even when `mergeable` happens to be MERGEABLE.
+    # GitHub uses DRAFT for the workbench before promotion and BLOCKED for an
+    # otherwise mergeable PR awaiting required human approval. Every transient
+    # or stale state (UNKNOWN, UNSTABLE, BEHIND, DIRTY) remains not-ready even
+    # when `mergeable` happens to be MERGEABLE.
     structurally_ready = merge_state == "CLEAN" or (
-        merge_state == "BLOCKED" and mergeable == "MERGEABLE"
+        merge_state in ("DRAFT", "BLOCKED") and mergeable == "MERGEABLE"
     )
     return (
         (status.get("state") or "OPEN").upper() == "OPEN"
@@ -140,6 +141,92 @@ def ready_for_review_now(gh: GitHub, status: dict) -> bool:
         and not status.get("isDraft")
         and automation_ready_now(status, lambda: gh.review_threads(status["number"]))
     )
+
+
+def _return_to_draft(gh: GitHub, status: dict) -> None:
+    """Fail closed after readiness invalidation; legacy labels stay read-only."""
+    gh.draft_own_pr(status["number"])
+    labels = {label["name"] for label in status.get("labels") or []}
+    if READY_FOR_REVIEW_LABEL in labels:
+        gh.label_own_pr(status["number"], remove=[READY_FOR_REVIEW_LABEL])
+
+
+def _demote_promoted_if_invalid(gh: GitHub, status: dict) -> None:
+    """A PR Foreman promoted must return to draft when evidence regresses."""
+    labels = {label["name"] for label in status.get("labels") or []}
+    if READY_FOR_REVIEW_LABEL not in labels or status.get("isDraft"):
+        return
+    try:
+        ready = bool(status.get("headRefOid")) and automation_ready_now(
+            status, lambda: gh.review_threads(status["number"])
+        )
+    except Exception:
+        _return_to_draft(gh, status)
+        raise
+    if not ready:
+        _return_to_draft(gh, status)
+
+
+def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str]:
+    """Revalidate, promote, then verify the exact head survived the mutation."""
+    expected_head = status.get("headRefOid") or ""
+    if not expected_head:
+        return False, "head is indeterminate — keeping PR in draft"
+
+    fresh = gh.pr_status(status["number"])
+    fresh_head = fresh.get("headRefOid") or ""
+    if fresh_head != expected_head:
+        if not fresh.get("isDraft"):
+            _return_to_draft(gh, fresh)
+        return False, "head changed before promotion — keeping PR in draft"
+
+    fresh_threads: list[dict] | None = None
+
+    def load_fresh_threads() -> list[dict]:
+        nonlocal fresh_threads
+        if fresh_threads is None:
+            fresh_threads = gh.review_threads(status["number"])
+        return fresh_threads
+
+    if not automation_ready_now(fresh, load_fresh_threads):
+        if not fresh.get("isDraft"):
+            _return_to_draft(gh, fresh)
+        return False, "readiness changed before promotion — keeping PR in draft"
+
+    promoted = False
+    if fresh.get("isDraft"):
+        if not gh.promote_own_pr(status["number"], expected_head_oid=fresh_head):
+            gh.draft_own_pr(status["number"])
+            return False, "head changed during promotion — returned PR to draft"
+        promoted = True
+
+        # GitHub has no expected-head compare-and-swap on the ready mutation.
+        # Re-read immediately and undo the transition if the remaining race
+        # window admitted a push or indeterminate readiness evidence.
+        try:
+            after = gh.pr_status(status["number"])
+            after_head = after.get("headRefOid") or ""
+        except Exception:
+            gh.draft_own_pr(status["number"])
+            raise
+        if after.get("isDraft") or after_head != fresh_head:
+            _return_to_draft(gh, after)
+            return False, "readiness changed during promotion — returned PR to draft"
+        try:
+            still_ready = automation_ready_now(
+                after, lambda: gh.review_threads(status["number"])
+            )
+        except Exception:
+            gh.draft_own_pr(status["number"])
+            raise
+        if not still_ready:
+            _return_to_draft(gh, after)
+            return False, "readiness changed during promotion — returned PR to draft"
+
+    gh.label_own_pr(status["number"], add=[READY_FOR_REVIEW_LABEL])
+    if promoted:
+        return True, "automation complete — promoted for human review"
+    return True, "automation complete — ready for human review"
 
 
 def _failure_text(gh: GitHub, failed: list[dict]) -> str:
@@ -324,6 +411,11 @@ def shepherd_pr(
         sink[work.number] = work
     remote_name = worktree.remote(cfg)
     checks_state, failed = classify_checks(status.get("statusCheckRollup"))
+
+    # A namespaced readiness label proves this PR crossed Foreman's promotion
+    # boundary. If any live predicate later regresses (push, checks, merge
+    # state, or threads), return it to the draft workbench before repair.
+    _demote_promoted_if_invalid(gh, status)
 
     if checks_state == "pending":
         work.state, work.detail = "settling", "checks still running"
@@ -596,11 +688,8 @@ def shepherd_pr(
         return work
 
     if automation_ready_now(status, lambda: review_threads):
-        gh.label_own_pr(work.number, add=[READY_FOR_REVIEW_LABEL])
-        work.state, work.detail = (
-            "ready",
-            "automation complete — ready for human review",
-        )
+        ready, detail = _promote_ready_head(gh, status)
+        work.state, work.detail = ("ready" if ready else "settling", detail)
     else:
         work.state, work.detail = "healthy", f"mergeState={merge_state or 'UNKNOWN'}"
     return work

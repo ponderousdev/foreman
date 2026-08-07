@@ -22,7 +22,7 @@ flowchart LR
     SEAM -->|sprite v2.1: microVM| SPRITE[Fly Machine]
     SEAM -->|docker v2.2: container| DOCKER[sibling container]
     LOCAL --> GATE[composed verify gate]
-    GATE -->|green| PUSH[Foreman-owned push + PR]
+    GATE -->|green| PUSH[Foreman-owned push + draft PR]
     PUSH --> SHEP[shepherd: CI/rebase/adjudicate]
     SHEP -->|foreman:ready-for-review| HUMAN[[human reviews and merges]]
 ```
