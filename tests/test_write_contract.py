@@ -33,6 +33,10 @@ def _mutations(gh):
             lambda: gh.promote_own_pr(1, expected_head_oid="abc"),
         ),
         ("draft_own_pr", lambda: gh.draft_own_pr(1)),
+        (
+            "record_ready_head_own_pr",
+            lambda: gh.record_ready_head_own_pr(1, expected_head_oid="abc"),
+        ),
         ("edit_own_pr_body", lambda: gh.edit_own_pr_body(1, "b")),
         (
             "label_own_pr",
@@ -177,6 +181,31 @@ class GuardedChannels(unittest.TestCase):
             gh.promote_own_pr(9, expected_head_oid="head")
 
         self.assertEqual(len(runner.called_with_prefix(["pr", "view", "9"])), 2)
+
+    def test_ready_head_marker_preserves_latest_body(self):
+        gh, runner = make_github()
+        runner.when(
+            ["pr", "view", "9"],
+            {
+                "number": 9,
+                "author": {"login": "bot"},
+                "labels": [],
+                "body": "maintainer update\n",
+                "headRefOid": "head",
+                "isDraft": False,
+            },
+        )
+        runner.when(["pr", "edit", "9", "--body-file", "-"], "")
+
+        self.assertTrue(gh.record_ready_head_own_pr(9, expected_head_oid="head"))
+        edits = [
+            body
+            for argv, body in runner.calls
+            if argv[:4] == ["pr", "edit", "9", "--body-file"]
+        ]
+        self.assertEqual(
+            edits, ["maintainer update\n<!-- foreman:ready-head:head -->\n"]
+        )
 
     def test_vet_comment_requires_human_approval(self):
         gh, runner = make_github()

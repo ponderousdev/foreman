@@ -33,6 +33,7 @@ from foreman.github import (
     DISPATCHED_LABELS,
     READY_FOR_REVIEW_LABEL,
     READY_FOR_REVIEW_LABELS,
+    READY_HEAD_PREFIX,
     GitHub,
 )
 from foreman.graph import MARKER_RE
@@ -40,7 +41,6 @@ from foreman.runner import Selection
 from foreman.util import info, relation_refs, warn, write_text
 
 MAX_AGENT_ACTIONS_PER_PR = 2  # per shepherd run; watch ticks give more rounds
-READY_HEAD_PREFIX = "<!-- foreman:ready-head:"
 
 
 @dataclass
@@ -163,22 +163,21 @@ def _ready_head(body: str) -> str:
     return ""
 
 
-def _body_with_ready_head(body: str, head: str) -> str:
-    lines = [
-        line for line in body.splitlines() if not line.startswith(READY_HEAD_PREFIX)
-    ]
-    return "\n".join([*lines, f"{READY_HEAD_PREFIX}{head} -->", ""])
-
-
 def _demote_promoted_if_invalid(gh: GitHub, status: dict) -> bool:
     """A PR Foreman promoted must return to draft when evidence regresses."""
     labels = {label["name"] for label in status.get("labels") or []}
     if READY_FOR_REVIEW_LABEL not in labels:
         return False
     try:
-        ready = _ready_head(status.get("body") or "") == status.get(
-            "headRefOid"
-        ) and automation_ready_now(status, lambda: gh.review_threads(status["number"]))
+        head = status.get("headRefOid") or ""
+        live_ready = bool(head) and automation_ready_now(
+            status, lambda: gh.review_threads(status["number"])
+        )
+        recorded_head = _ready_head(status.get("body") or "")
+        if not recorded_head and not status.get("isDraft") and live_ready:
+            if gh.record_ready_head_own_pr(status["number"], expected_head_oid=head):
+                return False
+        ready = recorded_head == head and live_ready
     except Exception:
         _return_to_draft(gh, status)
         raise
@@ -272,15 +271,36 @@ def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str, dict | Non
         return False, detail, after
 
     try:
-        gh.edit_own_pr_body(
-            status["number"],
-            _body_with_ready_head(after.get("body") or "", after_head),
-        )
+        if not gh.record_ready_head_own_pr(
+            status["number"], expected_head_oid=after_head
+        ):
+            if promoted:
+                gh.draft_own_pr(status["number"])
+            return False, "head changed before readiness writes", None
         gh.label_own_pr(status["number"], add=[READY_FOR_REVIEW_LABEL])
     except Exception:
         if promoted:
             gh.draft_own_pr(status["number"])
         raise
+    try:
+        final = gh.pr_status(status["number"])
+        final_ready = (
+            not final.get("isDraft")
+            and final.get("headRefOid") == after_head
+            and _ready_head(final.get("body") or "") == after_head
+            and automation_ready_now(final, lambda: gh.review_threads(status["number"]))
+        )
+    except Exception:
+        gh.draft_own_pr(status["number"])
+        gh.label_own_pr(status["number"], remove=[READY_FOR_REVIEW_LABEL])
+        raise
+    if not final_ready:
+        _return_to_draft(gh, final)
+        return (
+            False,
+            "readiness changed during final writes — returned PR to draft",
+            final,
+        )
     if promoted:
         return True, "automation complete — promoted for human review", after
     return True, "automation complete — ready for human review", after

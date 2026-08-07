@@ -43,6 +43,7 @@ _ACTIONS_APP_ID = 15368
 # Legacy names are read-only compatibility aliases: never ensure or write them.
 DISPATCHED_LABEL = "foreman:dispatched"
 READY_FOR_REVIEW_LABEL = "foreman:ready-for-review"
+READY_HEAD_PREFIX = "<!-- foreman:ready-head:"
 LEGACY_DISPATCHED_LABEL = "foreman-dispatched"
 LEGACY_READY_FOR_REVIEW_LABEL = "ready-to-merge"
 DISPATCHED_LABELS = (DISPATCHED_LABEL, LEGACY_DISPATCHED_LABEL)
@@ -824,6 +825,21 @@ class GitHub:
         pr = self._own_pr_guard(number, "return to draft")
         if not pr.get("isDraft"):
             self.gh.call(["pr", "ready", str(number), "--undo"])
+
+    def record_ready_head_own_pr(self, number: int, *, expected_head_oid: str) -> bool:
+        """Record readiness using the body read by the guarded mutation."""
+        self._assert_writable("record own PR ready head")
+        pr = self._own_pr_guard(number, "record ready head")
+        if (pr.get("headRefOid") or "") != expected_head_oid:
+            return False
+        lines = [
+            line
+            for line in (pr.get("body") or "").splitlines()
+            if not line.startswith(READY_HEAD_PREFIX)
+        ]
+        body = "\n".join([*lines, f"{READY_HEAD_PREFIX}{expected_head_oid} -->", ""])
+        self.gh.call(["pr", "edit", str(number), "--body-file", "-"], input_text=body)
+        return True
 
     def edit_own_pr_body(self, number: int, body: str) -> None:
         self._assert_writable("edit own PR body")

@@ -15,6 +15,7 @@ from foreman.github import (
     READY_FOR_REVIEW_LABEL,
 )
 from foreman.shepherd import (
+    _demote_promoted_if_invalid,
     _promote_ready_head,
     automation_ready_now,
     classify_checks,
@@ -102,8 +103,8 @@ class LabelTransition(unittest.TestCase):
 
     def test_shepherd_writes_only_namespaced_ready_label(self):
         gh, _runner = make_github()
-        gh.pr_status = lambda number: {  # type: ignore[method-assign]
-            "number": number,
+        status = {
+            "number": 9,
             "title": "feat: unit 1",
             "url": "https://github.com/owner/repo/pull/9",
             "headRefName": "foreman/feat/1-unit",
@@ -114,13 +115,20 @@ class LabelTransition(unittest.TestCase):
             "mergeStateStatus": "CLEAN",
             "mergeable": "MERGEABLE",
         }
+        gh.pr_status = lambda number: status  # type: ignore[method-assign]
         gh.review_threads = lambda number: []  # type: ignore[assignment]
         gh.promote_own_pr = lambda *args, **kwargs: (True, False)  # type: ignore[method-assign]
-        gh.edit_own_pr_body = lambda *args, **kwargs: None  # type: ignore[method-assign]
+        gh.record_ready_head_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, expected_head_oid: (
+                status.update(body=f"<!-- foreman:ready-head:{expected_head_oid} -->")
+                or True
+            )
+        )
         writes = []
         gh.label_own_pr = (  # type: ignore[method-assign]
-            lambda number, *, add=None, remove=None: writes.append(
-                (number, add, remove)
+            lambda number, *, add=None, remove=None: (
+                writes.append((number, add, remove))
+                or status["labels"].extend({"name": name} for name in add or [])
             )
         )
         work = shepherd_pr(
@@ -166,13 +174,21 @@ class SharedReadinessGate(unittest.TestCase):
                 gh.pr_status = lambda number, status=status: status  # type: ignore[method-assign]
                 gh.review_threads = lambda number: []  # type: ignore[assignment]
                 gh.promote_own_pr = lambda *args, **kwargs: (True, False)  # type: ignore[method-assign]
-                gh.edit_own_pr_body = lambda *args, **kwargs: None  # type: ignore[method-assign]
+                gh.record_ready_head_own_pr = (  # type: ignore[method-assign]
+                    lambda number, *, expected_head_oid, status=status: (
+                        status.update(
+                            body=f"<!-- foreman:ready-head:{expected_head_oid} -->"
+                        )
+                        or True
+                    )
+                )
                 writes = []
                 drafted = []
                 gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
                 gh.label_own_pr = (  # type: ignore[method-assign]
-                    lambda number, *, add=None, remove=None: writes.append(
-                        (number, add, remove)
+                    lambda number, *, add=None, remove=None: (
+                        writes.append((number, add, remove))
+                        or status["labels"].extend({"name": name} for name in add or [])
                     )
                 )
 
@@ -278,6 +294,10 @@ class DraftLifecycle(unittest.TestCase):
                 self._status(),
                 self._status(),
                 self._status(draft=False),
+                dict(
+                    self._status(draft=False, labels=[READY_FOR_REVIEW_LABEL]),
+                    body="<!-- foreman:ready-head:head -->",
+                ),
             ]
         )
         gh.pr_status = lambda number: next(statuses)  # type: ignore[method-assign]
@@ -288,7 +308,7 @@ class DraftLifecycle(unittest.TestCase):
                 promotions.append((number, expected_head_oid)) or (True, True)
             )
         )
-        gh.edit_own_pr_body = lambda *args, **kwargs: None  # type: ignore[method-assign]
+        gh.record_ready_head_own_pr = lambda *args, **kwargs: True  # type: ignore[method-assign]
         writes = []
         gh.label_own_pr = (  # type: ignore[method-assign]
             lambda number, *, add=None, remove=None: writes.append(
@@ -371,11 +391,17 @@ class DraftLifecycle(unittest.TestCase):
                 promoted.append((number, expected_head_oid)) or (True, False)
             )
         )
-        gh.edit_own_pr_body = lambda *args, **kwargs: None  # type: ignore[method-assign]
+        gh.record_ready_head_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, expected_head_oid: (
+                status.update(body=f"<!-- foreman:ready-head:{expected_head_oid} -->")
+                or True
+            )
+        )
         writes = []
         gh.label_own_pr = (  # type: ignore[method-assign]
-            lambda number, *, add=None, remove=None: writes.append(
-                (number, add, remove)
+            lambda number, *, add=None, remove=None: (
+                writes.append((number, add, remove))
+                or status["labels"].extend({"name": name} for name in add or [])
             )
         )
 
@@ -411,7 +437,7 @@ class DraftLifecycle(unittest.TestCase):
         gh.pr_status = lambda number: next(statuses)  # type: ignore[method-assign]
         gh.review_threads = lambda number: []  # type: ignore[assignment]
         gh.promote_own_pr = lambda *args, **kwargs: (True, True)  # type: ignore[method-assign]
-        gh.edit_own_pr_body = lambda *args, **kwargs: None  # type: ignore[method-assign]
+        gh.record_ready_head_own_pr = lambda *args, **kwargs: True  # type: ignore[method-assign]
         gh.label_own_pr = (  # type: ignore[method-assign]
             lambda *args, **kwargs: (_ for _ in ()).throw(ForemanError("boom"))
         )
@@ -476,12 +502,68 @@ class DraftLifecycle(unittest.TestCase):
             )
         )
         gh.promote_own_pr = lambda *args, **kwargs: self.fail("re-promoted")  # type: ignore[method-assign]
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
 
         work = self._shepherd(gh)
 
         self.assertEqual(work.state, "settling")
         self.assertEqual(drafted, [9])
         self.assertEqual(writes, [(9, None, [READY_FOR_REVIEW_LABEL])])
+
+    def test_pre_marker_ready_pr_is_migrated_without_demotion(self):
+        gh, _runner = make_github()
+        status = self._status(draft=False, labels=[READY_FOR_REVIEW_LABEL])
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
+        recorded = []
+        gh.record_ready_head_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, expected_head_oid: (
+                recorded.append((number, expected_head_oid)) or True
+            )
+        )
+        gh.draft_own_pr = lambda number: self.fail("demoted")  # type: ignore[method-assign]
+
+        self.assertFalse(_demote_promoted_if_invalid(gh, status))
+        self.assertEqual(recorded, [(9, "head")])
+
+    def test_push_during_final_writes_is_returned_to_draft(self):
+        gh, _runner = make_github()
+        statuses = iter(
+            [
+                self._status(),
+                self._status(draft=False),
+                dict(
+                    self._status(
+                        head="new", draft=False, labels=[READY_FOR_REVIEW_LABEL]
+                    ),
+                    body="<!-- foreman:ready-head:head -->",
+                ),
+            ]
+        )
+        gh.pr_status = lambda number: next(statuses)  # type: ignore[method-assign]
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
+        gh.promote_own_pr = lambda *args, **kwargs: (True, True)  # type: ignore[method-assign]
+        gh.record_ready_head_own_pr = lambda *args, **kwargs: True  # type: ignore[method-assign]
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
+        writes = []
+        gh.label_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, add=None, remove=None: writes.append(
+                (number, add, remove)
+            )
+        )
+
+        ready, detail, _revealed = _promote_ready_head(gh, self._status())
+
+        self.assertFalse(ready)
+        self.assertIn("final writes", detail)
+        self.assertEqual(drafted, [9])
+        self.assertEqual(
+            writes,
+            [
+                (9, [READY_FOR_REVIEW_LABEL], None),
+                (9, None, [READY_FOR_REVIEW_LABEL]),
+            ],
+        )
 
     def test_conflicting_draft_routes_directly_to_merge_repair(self):
         gh, _runner = make_github()
