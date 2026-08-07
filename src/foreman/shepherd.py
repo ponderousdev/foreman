@@ -112,12 +112,11 @@ def ready_for_review_now(gh: GitHub, status: dict) -> bool:
         return False
     checks_state, _failed = classify_checks(status.get("statusCheckRollup"))
     merge_state = (status.get("mergeStateStatus") or "").upper()
-    mergeable = (status.get("mergeable") or "").upper()
     return (
         (status.get("state") or "OPEN").upper() == "OPEN"
         and not status.get("isDraft")
         and checks_state == "green"
-        and (merge_state == "CLEAN" or mergeable == "MERGEABLE")
+        and merge_state == "CLEAN"
         and not any(
             not thread.get("isResolved")
             for thread in gh.review_threads(status["number"])
@@ -625,6 +624,11 @@ def run_shepherd(
     if not prs:
         info("shepherd: no open foreman PRs")
         return out
+    # A repository upgraded with only legacy label definitions may have no
+    # new dispatch to create the namespaced definitions before shepherding an
+    # in-flight PR. Ensure current definitions after compatibility discovery
+    # and before any readiness write; FOREMAN_LABELS excludes legacy names.
+    gh.ensure_labels()
     for pr in prs:
         sink: dict[int, PrWork] = {}
         try:

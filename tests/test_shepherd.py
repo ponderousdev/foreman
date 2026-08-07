@@ -69,6 +69,14 @@ class LabelTransition(unittest.TestCase):
         )
         self.assertFalse(ready_for_review_now(gh, stale))
 
+        behind = dict(
+            base,
+            labels=[{"name": READY_FOR_REVIEW_LABEL}],
+            mergeStateStatus="BEHIND",
+            mergeable="MERGEABLE",
+        )
+        self.assertFalse(ready_for_review_now(gh, behind))
+
     def test_shepherd_writes_only_namespaced_ready_label(self):
         gh, _runner = make_github()
         gh.pr_status = lambda number: {  # type: ignore[method-assign]
@@ -730,6 +738,7 @@ class ProvenanceGate(unittest.TestCase):
                 },
             ],
         )
+        runner.when(["label", "create"], "")
         runner.when(
             ["api", "repos/owner/repo/issues/7/comments", "--paginate", "--slurp"],
             [[]],
@@ -749,6 +758,11 @@ class ProvenanceGate(unittest.TestCase):
 
         # Both escalations are reported to the operator...
         self.assertEqual(sorted(out.environmental), [7, 9])
+        creates = runner.called_with_prefix(["label", "create"])
+        self.assertEqual(
+            {argv[2] for argv in creates},
+            {DISPATCHED_LABEL, READY_FOR_REVIEW_LABEL},
+        )
         # ...but only foreman's own PR leaves provenance on its issue.
         posts = runner.called_with_prefix(["api", "--method", "POST"])
         self.assertEqual(len(posts), 1)
