@@ -39,13 +39,14 @@ from tests.fakes import make_github as _mk
 
 class ResumeAdapterSelection(unittest.TestCase):
     def test_shepherd_reuses_adapter_recorded_by_dispatch(self):
-        cfg = Config(backend="claude")
+        cfg = Config(backend="claude", remote="origin")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_dir = backend_mod.unit_dir(cfg, root, 5)
             (run_dir / "run_started.json").write_text(
                 json.dumps({"backend": "claude-code-deepseek"}), encoding="utf-8"
             )
+            backend_mod._record_backend_selection(cfg, root, 5, "claude-code-deepseek")
             (run_dir / "session").write_text(
                 "SESSION_REF=deepseek-session\n", encoding="utf-8"
             )

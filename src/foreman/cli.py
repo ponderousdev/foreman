@@ -762,7 +762,7 @@ def cmd_attach(args: argparse.Namespace) -> int:
         )
         return 1
     wt_path = wt_glob[0]
-    backend_name = backend_mod.recorded_backend(run_dir, cfg.backend)
+    backend_name = backend_mod.recorded_backend(cfg, root, args.unit, cfg.backend)
     backend_mod.assert_backend_version(cfg, backend_name)
     adapter = backend_mod.adapter_path(backend_name)
     if "attach" not in backend_mod.capabilities(adapter):

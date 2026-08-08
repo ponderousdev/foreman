@@ -90,11 +90,14 @@ class BackendResult:
 
 
 def adapter_path(name: str) -> Path:
-    path = BACKENDS_DIR / f"{name}.sh"
-    if not path.exists():
-        available = sorted(p.stem for p in BACKENDS_DIR.glob("*.sh"))
+    # Select from enumerated trusted basenames instead of joining untrusted
+    # recorded text into a path. A unit may corrupt its own telemetry, but it
+    # must never turn shepherd/attach into an arbitrary-script launcher.
+    available = {path.stem: path for path in BACKENDS_DIR.glob("*.sh")}
+    path = available.get(name)
+    if path is None:
         raise ForemanError(
-            f"unknown backend '{name}' (available: {', '.join(available)})"
+            f"unknown backend '{name}' (available: {', '.join(sorted(available))})"
         )
     return path
 
@@ -140,25 +143,40 @@ def unit_dir(cfg: Config, root: Path, number: int) -> Path:
     return path
 
 
-def recorded_backend(unit_run_dir: Path, fallback: str) -> str:
-    """Return the adapter that actually started this unit.
+def _backend_selection_path(cfg: Config, root: Path, unit: int) -> Path:
+    return runner_mod.runs_dir(cfg, root) / f"{unit}.backend"
 
-    Runs created before adapter recording fall back to the repository default.
-    Once a run record exists, malformed or incomplete metadata fails closed:
-    silently selecting another provider could resume a session with the wrong
-    credentials or endpoint.
+
+def _record_backend_selection(
+    cfg: Config, root: Path, unit: int, backend_name: str
+) -> None:
+    """Atomically persist the supervisor-owned effective adapter selection."""
+    adapter_path(backend_name)  # known basename under BACKENDS_DIR
+    path = _backend_selection_path(cfg, root, unit)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".backend.tmp")
+    tmp.write_text(backend_name + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def recorded_backend(cfg: Config, root: Path, unit: int, fallback: str) -> str:
+    """Return the trusted adapter selection that actually started this unit.
+
+    The selector lives beside runner handles, outside the run directory granted
+    to the agent. Runs created before selector recording fall back to the
+    repository default. Once a selector exists, unknown names fail closed.
     """
-    path = unit_run_dir / "run_started.json"
+    path = _backend_selection_path(cfg, root, unit)
     if not path.exists():
         return fallback
     try:
-        record = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ForemanError(f"invalid backend run record {path}: {exc}") from exc
-    selected = record.get("backend")
-    if not isinstance(selected, str) or not selected.strip():
-        raise ForemanError(f"backend run record {path} has no selected adapter")
-    return selected.strip()
+        selected = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise ForemanError(f"invalid backend selection record {path}: {exc}") from exc
+    if not selected:
+        raise ForemanError(f"backend selection record {path} is empty")
+    adapter_path(selected)  # reject traversal and unknown adapter names
+    return selected
 
 
 def agent_env(cfg: Config) -> dict[str, str]:
@@ -207,6 +225,33 @@ def _record_run_started(
         "started_at": utc_now_iso(),
     }
     write_text(unit_run_dir / "run_started.json", json.dumps(payload, indent=2) + "\n")
+
+
+def _publish_started_run(
+    cfg: Config,
+    root: Path,
+    unit_run_dir: Path,
+    handle: runner_mod.Handle,
+    spec: UnitSpec,
+    *,
+    backend_name: str,
+    resume_ref: str | None,
+) -> None:
+    """Publish restart state in dependency order.
+
+    The effective adapter becomes durable before the recoverable handle is
+    visible. The agent-writable run_started document remains telemetry only.
+    """
+    _record_backend_selection(cfg, root, spec.unit, backend_name)
+    runner_mod.save_handle(cfg, root, handle)
+    _record_run_started(
+        cfg,
+        unit_run_dir,
+        handle,
+        spec,
+        backend_name=backend_name,
+        resume_ref=resume_ref,
+    )
 
 
 def run_backend(
@@ -262,9 +307,9 @@ def run_backend(
     session_offset = session_file.stat().st_size if session_file.exists() else 0
 
     handle = runner.spawn(spec)
-    runner_mod.save_handle(cfg, root, handle)
-    _record_run_started(
+    _publish_started_run(
         cfg,
+        root,
         unit_run_dir,
         handle,
         spec,

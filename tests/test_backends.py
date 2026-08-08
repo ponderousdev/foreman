@@ -249,22 +249,79 @@ class BackendRunRecord(unittest.TestCase):
 
     def test_recorded_backend_reuses_selected_adapter(self):
         with tempfile.TemporaryDirectory() as tmp:
-            run_dir = Path(tmp)
-            (run_dir / "run_started.json").write_text(
-                '{"backend": "claude-code-deepseek"}\n', encoding="utf-8"
-            )
+            root = Path(tmp)
+            cfg = Config()
+            backend_mod._record_backend_selection(cfg, root, 9, "claude-code-deepseek")
             self.assertEqual(
-                backend_mod.recorded_backend(run_dir, "claude"),
+                backend_mod.recorded_backend(cfg, root, 9, "claude"),
                 "claude-code-deepseek",
             )
 
     def test_recorded_backend_legacy_fallback_and_malformed_fail_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
-            run_dir = Path(tmp)
-            self.assertEqual(backend_mod.recorded_backend(run_dir, "claude"), "claude")
-            (run_dir / "run_started.json").write_text("{}\n", encoding="utf-8")
-            with self.assertRaisesRegex(ForemanError, "no selected adapter"):
-                backend_mod.recorded_backend(run_dir, "claude")
+            root = Path(tmp)
+            cfg = Config()
+            self.assertEqual(
+                backend_mod.recorded_backend(cfg, root, 9, "claude"), "claude"
+            )
+            path = backend_mod._backend_selection_path(cfg, root, 9)
+            path.parent.mkdir(parents=True)
+            path.write_text("../../../payload\n", encoding="utf-8")
+            with self.assertRaisesRegex(ForemanError, "unknown backend"):
+                backend_mod.recorded_backend(cfg, root, 9, "claude")
+
+    def test_adapter_path_rejects_traversal_even_when_target_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trusted = root / "backends"
+            trusted.mkdir()
+            (trusted / "claude.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            (root / "payload.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            with mock.patch.object(backend_mod, "BACKENDS_DIR", trusted):
+                with self.assertRaisesRegex(ForemanError, "unknown backend"):
+                    backend_mod.adapter_path("../payload")
+
+    def test_backend_selection_precedes_recoverable_handle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = Config()
+            spec = UnitSpec(
+                unit=9,
+                workdir=root,
+                run_dir=root,
+                env={},
+                cmd=("adapter", "run"),
+                timeout_s=60,
+            )
+            handle = Handle(runner="mock", unit=9, run_dir=str(root), payload={})
+            order: list[str] = []
+            with (
+                mock.patch.object(
+                    backend_mod,
+                    "_record_backend_selection",
+                    side_effect=lambda *_args: order.append("backend"),
+                ),
+                mock.patch.object(
+                    backend_mod.runner_mod,
+                    "save_handle",
+                    side_effect=lambda *_args: order.append("handle"),
+                ),
+                mock.patch.object(
+                    backend_mod,
+                    "_record_run_started",
+                    side_effect=lambda *_args, **_kwargs: order.append("telemetry"),
+                ),
+            ):
+                backend_mod._publish_started_run(
+                    cfg,
+                    root,
+                    root,
+                    handle,
+                    spec,
+                    backend_name="claude-code-deepseek",
+                    resume_ref=None,
+                )
+            self.assertEqual(order, ["backend", "handle", "telemetry"])
 
     def test_version_pin_checks_effective_per_unit_adapter(self):
         cfg = Config(backend="mock", backend_version="2.1.167")

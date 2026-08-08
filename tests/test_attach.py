@@ -57,6 +57,9 @@ class LocalAttach(unittest.TestCase):
         (run_dir / "run_started.json").write_text(
             json.dumps({"backend": "claude-code-deepseek"}), encoding="utf-8"
         )
+        cli.backend_mod._record_backend_selection(
+            self.cfg, self.root, 5, "claude-code-deepseek"
+        )
         rc, out = self._run()
         self.assertEqual(rc, 0)
         self.assertIn("foreman attach --unit 5 --execute", out)
@@ -72,6 +75,9 @@ class LocalAttach(unittest.TestCase):
         session_file.write_text("SESSION_REF=sess-123\n", "utf-8")
         (run_dir / "run_started.json").write_text(
             json.dumps({"backend": "claude-code-deepseek"}), encoding="utf-8"
+        )
+        cli.backend_mod._record_backend_selection(
+            self.cfg, self.root, 5, "claude-code-deepseek"
         )
         args = Args()
         args.execute = True
