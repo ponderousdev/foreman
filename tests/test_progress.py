@@ -143,6 +143,27 @@ class ReporterLiveness(unittest.TestCase):
         self.assertTrue(out.startswith("foreman: #5: "))
 
 
+class ReporterLabel(unittest.TestCase):
+    def test_label_overrides_the_unit_number_prefix(self):
+        # #125: vet and shepherd narrate through the same UnitProgress but are
+        # not dispatch units — a label replaces the #N prefix on every line
+        # kind (phase, heartbeat, terminal), and #0 never leaks.
+        buf = io.StringIO()
+        unit = DispatchReporter(stream=buf, isatty=False).unit(0, label="vet")
+        unit.phase("analyzing milestone #7")
+        unit.heartbeat(1, 5400)
+        unit.terminal("analysis complete")
+        lines = buf.getvalue().splitlines()
+        self.assertEqual(len(lines), 3)
+        self.assertTrue(all(ln.startswith("foreman: vet: ") for ln in lines))
+        self.assertNotIn("#0", buf.getvalue())
+
+    def test_default_prefix_is_unchanged(self):
+        buf = io.StringIO()
+        DispatchReporter(stream=buf, isatty=False).unit(7).phase("verifying")
+        self.assertEqual(buf.getvalue(), "foreman: #7: verifying\n")
+
+
 class ReporterHonesty(unittest.TestCase):
     def test_phase_and_terminal_are_prefixed_lines_only(self):
         # AC4-adjacent: narration is its own #N: channel — it never renders a

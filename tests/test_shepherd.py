@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -89,6 +91,74 @@ class ResumeAdapterSelection(unittest.TestCase):
             self.assertEqual(
                 run_backend.call_args.kwargs["resume_ref"], "deepseek-session"
             )
+
+
+class ResumeAgentNarration(unittest.TestCase):
+    """#125: every shepherd agent invocation narrates start + terminal through
+    the _resume_agent funnel, labeled per unit/PR, line-oriented on non-TTY."""
+
+    def _run(
+        self, prompt_name: str, result: BackendResult
+    ) -> tuple[str, list[str], object]:
+        cfg = Config(backend="claude", remote="origin")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            wt = root / "worktree"
+            wt.mkdir()
+            work = PrWork(
+                10, 5, "foreman/feat/5-test", "https://example.invalid/10", "test"
+            )
+            selection = Selection(
+                runner=object(),  # type: ignore[arg-type]
+                make_handoff=lambda _workdir, _handle: None,
+                refusal=lambda _required: None,
+            )
+            buf = io.StringIO()
+            with (
+                patch("foreman.shepherd.spec.load_prompt", return_value="fix it"),
+                patch("foreman.shepherd._ensure_worktree", return_value=wt),
+                patch("foreman.shepherd.backend_mod.capabilities", return_value=set()),
+                patch("foreman.shepherd.backend_mod.assert_backend_version"),
+                patch(
+                    "foreman.shepherd.backend_mod.run_backend", return_value=result
+                ) as run_backend,
+                redirect_stdout(buf),
+            ):
+                _resume_agent(
+                    object(),  # type: ignore[arg-type]
+                    cfg,
+                    root,
+                    selection,
+                    work,
+                    prompt_name,
+                    {},
+                )
+            reporter = run_backend.call_args.kwargs["reporter"]
+        return (
+            buf.getvalue(),
+            [ln for ln in buf.getvalue().splitlines() if ln],
+            reporter,
+        )
+
+    def test_narrates_start_and_terminal_with_pr_label(self):
+        out, lines, reporter = self._run("shepherd-ci-fix", BackendResult(returncode=0))
+        self.assertIsNotNone(reporter)  # heartbeat wiring rides run_backend
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(all(ln.startswith("foreman: #5 PR #10: ") for ln in lines))
+        self.assertIn("repairing red CI", lines[0])
+        self.assertIn("agent.log", lines[0])
+        self.assertIn("agent finished", lines[1])
+        self.assertNotIn("\r", out)  # captured stdout is not a TTY → plain lines
+
+    def test_terminal_is_honest_about_timeout_and_failure(self):
+        _out, lines, _ = self._run(
+            "shepherd-rebase", BackendResult(returncode=None, timed_out=True)
+        )
+        self.assertIn("resolving rebase conflicts", lines[0])
+        self.assertIn("agent timed out", lines[1])
+        _out, lines, _ = self._run("shepherd-adjudicate", BackendResult(returncode=3))
+        self.assertIn("adjudicating review threads", lines[0])
+        self.assertIn("agent failed — exit=3", lines[1])
 
 
 class LabelTransition(unittest.TestCase):
