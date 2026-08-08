@@ -70,6 +70,10 @@ AGENT_FOREMAN_ENV = (
     "FOREMAN_DEEPSEEK_API_KEY",
     "FOREMAN_KIMI_API_KEY",
     "FOREMAN_GLM_API_KEY",
+    "FOREMAN_OPENAI_API_KEY",
+    # Non-secret runner configuration: pins the codex-cli model when set. Kept
+    # on the explicit allowlist so it reaches the adapter without a prefix sweep.
+    "FOREMAN_CODEX_MODEL",
     "FOREMAN_READONLY",
 )
 # Reaping window after kill(): the group is already dead or dying; this only

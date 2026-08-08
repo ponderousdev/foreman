@@ -55,6 +55,8 @@ Variables per profile:
 | `FOREMAN_DEEPSEEK_API_KEY` | ✅ | — | DeepSeek API credential consumed only by Foreman's `claude-code-deepseek` adapter |
 | `FOREMAN_KIMI_API_KEY` | ✅ | — | Kimi (Moonshot) API credential consumed only by Foreman's `claude-code-kimi` adapter |
 | `FOREMAN_GLM_API_KEY` | ✅ | — | GLM (Z.ai) API credential consumed only by Foreman's `claude-code-glm` adapter |
+| `FOREMAN_OPENAI_API_KEY` | ✅ | — | OpenAI API credential consumed only by Foreman's `codex-cli` adapter under `billing = "api"` (subscription mode uses `codex login` instead) |
+| `FOREMAN_CODEX_MODEL` | ✅ | — | non-secret runner config: pins the `codex-cli` model (e.g. `gpt-5.6-sol`); a static line in `devcontainer.env`, not managed/evicted by `init-env.sh` |
 | `AGENT_DECK_TELEGRAM_KEY` | ✅ | ✅ | agent-deck bridge (optional) |
 | `TS_AUTHKEY` | — | ✅ | Tailscale (dev only) |
 
@@ -92,6 +94,8 @@ repo** (one template serves every repo). To stand this repo up in Coder:
      `FOREMAN_DEEPSEEK_API_KEY` (when using the DeepSeek adapter),
      `FOREMAN_KIMI_API_KEY` (when using the Kimi adapter),
      `FOREMAN_GLM_API_KEY` (when using the GLM adapter),
+     `FOREMAN_OPENAI_API_KEY` (when using the `codex-cli` adapter with
+     `billing = "api"`),
      `AGENT_DECK_TELEGRAM_KEY` (+ `TS_AUTHKEY` if you want Tailscale). Coder
      passes these into the workspace's host environment, where `init-env.sh`
      picks them up.

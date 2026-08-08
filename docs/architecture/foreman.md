@@ -263,10 +263,11 @@ inherit the container's `CLAUDE_CODE_OAUTH_TOKEN`; USD budgets are inert
 exhaustion into planned pauses. `billing = "api"` lets each adapter consume its
 dedicated `FOREMAN_*_API_KEY` and translate it **only inside the adapter
 process**; raw provider variables remain excluded from the unit environment.
-The `claude` adapter reports verified cost and binds USD budgets. Provider
-wrappers that do not advertise `cost`, including `claude-code-deepseek`,
-`claude-code-kimi`, and `claude-code-glm`, bind through timeout/turn limits
-instead of pretending an unverified cost is exact.
+The `claude` adapter reports verified cost and binds USD budgets. Adapters that
+do not advertise `cost`, including `claude-code-deepseek`, `claude-code-kimi`,
+`claude-code-glm`, and `codex-cli`, bind through timeout/turn limits instead of
+pretending an unverified cost is exact. `codex-cli` additionally supports
+`billing = "subscription"` (the ChatGPT login under `$CODEX_HOME`).
 
 ### Claude Code with DeepSeek
 
@@ -363,6 +364,59 @@ Like the other provider wrappers, it advertises `resume` but not `cost`: the
 custom-provider stream carries no cost value Foreman can independently verify.
 Provider errors remain in `agent.log`, and Foreman's runner owns the unchanged
 timeout/kill path.
+
+### Codex CLI
+
+`backend = "codex-cli"` selects OpenAI's [Codex CLI](https://github.com/openai/codex)
+(`codex exec`) instead of Claude Code. Codex is a different harness, so the
+adapter is standalone (it does not source `lib/claude-common.sh`) yet satisfies
+the same `run` / `resume` / `attach` / `capabilities` contract and deterministic
+result contract. It advertises `resume attach` but **not** `cost`: Codex's JSONL
+stream reports token usage, not a verified USD figure. The adapter captures the
+session ref from Codex's first `thread.started` event (early enough that a
+killed agent is still resumable) and streams the JSONL to `agent.log`.
+
+**Credentials.** Both billing modes are supported:
+
+- `billing = "subscription"` (default) uses the ChatGPT login persisted under
+  `$CODEX_HOME` (`codex login`, stored in `auth.json`). The adapter pins
+  `forced_login_method = chatgpt` and drops any stray `OPENAI_API_KEY` so a
+  leftover key cannot silently switch billing.
+- `billing = "api"` requires `FOREMAN_OPENAI_API_KEY` in the bot devcontainer
+  environment; the adapter exports it as `OPENAI_API_KEY`, pins
+  `forced_login_method = api`, and **fails closed without echoing the secret**
+  when the key is absent. There is no password-manager fallback.
+
+Either way the adapter strips competing vendor credentials (Anthropic/Claude
+OAuth, DeepSeek, Kimi/Moonshot, GLM/Z.ai) from Codex's child process, and the
+raw `OPENAI_API_KEY` is never forwarded to the unit environment — only the
+dedicated `FOREMAN_OPENAI_API_KEY` provisioning variable is, and the adapter
+consumes it.
+
+**Model selection is runner configuration.** The bot pins the model by exporting
+`FOREMAN_CODEX_MODEL` in its devcontainer environment (a non-secret static line
+in `devcontainer.env`); the adapter passes it as `-c model=…`. The verified
+default is **`gpt-5.6-sol`** — set `FOREMAN_CODEX_MODEL=gpt-5.6-sol`. When the
+variable is unset the adapter arms no model and Codex falls back to its own
+`config.toml` (`model = …`) or built-in default. Advisory `suggest:*` labels have
+no path to the model — the adapter reads no labels.
+
+**Sandbox.** `codex exec resume` accepts neither `--sandbox` nor `--add-dir`, so
+the adapter drives both through `-c` overrides shared by run and resume:
+`sandbox_mode = workspace-write` with the run directory added to
+`sandbox_workspace_write.writable_roots` (the result contract lives outside the
+worktree), or `sandbox_mode = read-only` for vet's read-only analysis mode.
+
+The validated baseline is Codex CLI **0.147.x** (the `thread.started`/`--json`
+event shape this adapter parses). Codex is not on the `claude`-CLI version-pin
+path, so `backend_version` does not gate it; re-verify the adapter contract
+tests before adopting a newer Codex release.
+
+```toml
+backend = "codex-cli"
+billing = "subscription"   # or "api" with FOREMAN_OPENAI_API_KEY
+# Model is set out-of-band: FOREMAN_CODEX_MODEL=gpt-5.6-sol in the bot env.
+```
 
 ## Security model
 
@@ -538,8 +592,9 @@ every consumer's next `uvx` resolution. See
 
 - **Backends**: `src/foreman/backends/<name>.sh` is the entire vendor
   surface (`run` / `resume <ref>` / `capabilities`). Production adapters are
-  `claude.sh`, `claude-code-deepseek.sh`, `claude-code-kimi.sh`, and
-  `claude-code-glm.sh`; `mock.sh` is a hermetic seam proof.
+  `claude.sh`, `claude-code-deepseek.sh`, `claude-code-kimi.sh`,
+  `claude-code-glm.sh`, and `codex-cli.sh` (OpenAI Codex CLI); `mock.sh` is a
+  hermetic seam proof.
   Claude Code adapters share only execution mechanics under `backends/lib/`;
   provider credentials and model wiring remain in the named adapter.
 - **Runners**: implement the `Runner` protocol (`src/foreman/runner/`) and
