@@ -41,12 +41,21 @@ _is_uuid() {
 }
 
 # Serialize $1 as a TOML basic string so a path containing a quote, backslash,
-# or newline cannot break (or alter) the `writable_roots` array override.
+# or a control character cannot break (or alter) the `writable_roots` array
+# override. TOML basic strings forbid raw control characters; escape the ones
+# with shorthands and refuse the rest rather than emit an invalid override.
 _toml_str() {
     local s="$1"
     s="${s//\\/\\\\}" # backslash first
     s="${s//\"/\\\"}" # then double-quote
+    s="${s//$'\b'/\\b}"
+    s="${s//$'\t'/\\t}"
     s="${s//$'\n'/\\n}"
+    s="${s//$'\f'/\\f}"
+    s="${s//$'\r'/\\r}"
+    case "$s" in
+    *[$'\001'-$'\037']*) _fail "path contains an unsupported control character" ;;
+    esac
     printf '"%s"' "$s"
 }
 

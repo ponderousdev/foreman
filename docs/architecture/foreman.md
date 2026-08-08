@@ -422,8 +422,10 @@ cost, so a configured `max_turns` would leave only the wall-clock timeout as a
 bound. Rather than silently ignore it, the adapter **fails closed** when a
 nonzero `max_turns` is requested — set `max_turns = 0` and bound Codex units via
 `timeout_min`. Session refs are validated as canonical UUIDs before they are
-persisted or passed back to Codex, so a corrupted agent-writable session ledger
-cannot smuggle an option-shaped value (e.g. `--last`) into a resume.
+persisted or passed back to Codex, and the adapter-owned session ledger is kept
+as a **sibling** of the run directory (`backend.session_ledger`) — outside every
+writable root the sandbox grants — so a unit cannot forge another unit's
+`SESSION_REF` and have a later resume hijack the wrong Codex thread.
 
 The validated baseline is Codex CLI **0.147.x** (the `thread.started`/`--json`
 event shape this adapter parses). Codex is not on the `claude`-CLI version-pin

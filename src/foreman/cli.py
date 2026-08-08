@@ -749,7 +749,7 @@ def cmd_attach(args: argparse.Namespace) -> int:
         (root / cfg.worktrees_dir).glob(f"pr-{args.unit}")
     )
     session_ref = None
-    session_file = run_dir / "session"
+    session_file = backend_mod.session_ledger(run_dir)
     if session_file.exists():
         for line in session_file.read_text(encoding="utf-8").splitlines():
             if line.startswith("SESSION_REF="):

@@ -858,6 +858,21 @@ class CodexCliAdapter(unittest.TestCase):
         self.assertIn("unknown command", proc.stderr)
 
 
+class SessionLedgerIsolation(unittest.TestCase):
+    def test_ledger_is_outside_the_agent_writable_run_dir(self):
+        # Dispatch grants the agent write access to the run dir (the result
+        # contract lives there); the adapter-owned ledger must sit outside it so
+        # a unit cannot forge another unit's SESSION_REF.
+        run_dir = Path("/x/.foreman/units/9")
+        ledger = backend_mod.session_ledger(run_dir)
+        self.assertEqual(ledger, Path("/x/.foreman/units/9.session"))
+        self.assertNotEqual(ledger.parent, run_dir)
+        self.assertFalse(
+            str(ledger).startswith(str(run_dir) + "/"),
+            "ledger must not live inside the agent-writable run dir",
+        )
+
+
 class BackendRunRecord(unittest.TestCase):
     def test_fresh_spawn_clears_stale_provider_session(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -868,7 +883,8 @@ class BackendRunRecord(unittest.TestCase):
             worktree.mkdir()
             prompt = run_dir / "prompt.md"
             prompt.write_text("work\n", encoding="utf-8")
-            session = run_dir / "session"
+            # The ledger is a SIBLING of the run dir (outside agent-writable roots).
+            session = backend_mod.session_ledger(run_dir)
             session.write_text("SESSION_REF=old-provider-session\n", encoding="utf-8")
 
             def new_session(spec: UnitSpec) -> int:

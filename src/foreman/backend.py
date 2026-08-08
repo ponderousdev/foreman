@@ -152,6 +152,20 @@ def unit_dir(cfg: Config, root: Path, number: int) -> Path:
     return path
 
 
+def session_ledger(unit_run_dir: Path) -> Path:
+    """The adapter-owned session ledger (SESSION_REF/COST_USD), kept as a SIBLING
+    of the run directory rather than inside it.
+
+    Dispatch grants the agent write access to the run directory (that is where
+    the result contract lives), so a ledger inside it would be agent-writable —
+    and adapters with a real filesystem sandbox (codex-cli) resume by the ref
+    recorded here. A buggy or adversarial unit could then forge a `SESSION_REF`
+    for another unit's session. Placing the ledger beside the run dir keeps it
+    outside every writable root the adapter grants while staying derivable from
+    the run dir alone, so writers (backend) and readers (cli/shepherd) agree."""
+    return unit_run_dir.parent / f"{unit_run_dir.name}.session"
+
+
 def _backend_selection_path(cfg: Config, root: Path, unit: int) -> Path:
     return runner_mod.runs_dir(cfg, root) / f"{unit}.backend"
 
@@ -278,7 +292,7 @@ def run_backend(
     gate_cmds: list[list[str]] | None = None,
     reporter: progress_mod.UnitProgress | None = None,
 ) -> BackendResult:
-    session_file = unit_run_dir / "session"
+    session_file = session_ledger(unit_run_dir)
     log_file = unit_run_dir / "agent.log"
     result_file = unit_run_dir / "result.json"
     if result_file.exists():
@@ -393,7 +407,7 @@ def result_from_wait(
     result = BackendResult(
         returncode=status.code, timed_out=timed_out, abnormal=status.abnormal
     )
-    _read_session_file(unit_run_dir / "session", result, cost_offset=session_offset)
+    _read_session_file(session_ledger(unit_run_dir), result, cost_offset=session_offset)
     log_tail = (
         tail(unit_run_dir / "agent.log", 80)
         + "\n"
@@ -603,8 +617,8 @@ def write_resume_state(unit_run_dir: Path, worktree: Path, note: str) -> Path:
         ["git", "-C", str(worktree), "log", "--oneline", "-5"], check=False
     ).stdout
     session = (
-        (unit_run_dir / "session").read_text(encoding="utf-8")
-        if (unit_run_dir / "session").exists()
+        session_ledger(unit_run_dir).read_text(encoding="utf-8")
+        if session_ledger(unit_run_dir).exists()
         else ""
     )
     body = (
