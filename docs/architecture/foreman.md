@@ -341,8 +341,8 @@ provisioning variable, raw GLM/Z.ai/Kimi/DeepSeek/Anthropic credentials, and the
 Claude OAuth token from the child environment, then configures Z.ai's official
 Anthropic-compatible endpoint (`https://api.z.ai/api/anthropic`).
 
-The adapter fixes the model family to GLM: `GLM-4.7` handles
-primary/Opus/Sonnet work, while `GLM-4.5-Air` handles Haiku and subagents. This
+The adapter fixes the model family to GLM: `glm-4.7` handles
+primary/Opus/Sonnet work, while `glm-4.5-air` handles Haiku and subagents. This
 follows Z.ai's
 [official Claude Code integration](https://docs.z.ai/scenario-example/develop-tools/claude);
 advisory labels cannot change the family. The validated harness baseline is the
