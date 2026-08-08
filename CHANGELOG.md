@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are intentional: release-please maintains a rolling release PR from
 conventional commits, and merging it cuts the tag, GitHub release, and this
 changelog (`task release:*` remains as a manual override).
+## [2.3.0](https://github.com/ponderousdev/foreman/compare/v2.2.0...v2.3.0) (2026-08-08)
+
+
+### Features
+
+* **backend:** add Claude Code DeepSeek adapter ([#145](https://github.com/ponderousdev/foreman/issues/145)) ([2b13572](https://github.com/ponderousdev/foreman/commit/2b13572627c90364bbe7edbc81c9bfb8ab0b111e))
+
 ## [2.2.0](https://github.com/ponderousdev/foreman/compare/v2.1.1...v2.2.0) (2026-08-08)
 
 
