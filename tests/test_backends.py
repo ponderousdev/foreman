@@ -423,6 +423,7 @@ class GLMAdapter(unittest.TestCase):
                     printf 'SUBAGENT=%s\\n' "${CLAUDE_CODE_SUBAGENT_MODEL:-}"
                     printf 'EFFORT=%s\\n' "${CLAUDE_CODE_EFFORT_LEVEL:-}"
                     printf 'MCP=%s\\n' "${ENABLE_CLAUDEAI_MCP_SERVERS:-}"
+                    printf 'TIMEOUT=%s\\n' "${API_TIMEOUT_MS:-}"
                     [ "${ANTHROPIC_AUTH_TOKEN:-}" = 'test-glm-key' ] && echo 'AUTH_MATCH=yes' || echo 'AUTH_MATCH=no'
                     [ "${FOREMAN_GLM_API_KEY+x}" = x ] && echo 'FOREMAN_KEY_PRESENT=yes' || echo 'FOREMAN_KEY_PRESENT=no'
                     [ "${ZAI_API_KEY+x}" = x ] && echo 'RAW_KEY_PRESENT=yes' || echo 'RAW_KEY_PRESENT=no'
@@ -487,14 +488,15 @@ class GLMAdapter(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         capture = self.capture_lines()
         self.assertEqual(capture["BASE"], "https://api.z.ai/api/anthropic")
-        self.assertEqual(capture["MODEL"], "glm-4.7")
-        self.assertEqual(capture["OPUS"], "glm-4.7")
-        self.assertEqual(capture["SONNET"], "glm-4.7")
-        self.assertEqual(capture["HAIKU"], "glm-4.5-air")
-        self.assertEqual(capture["FABLE"], "glm-4.7")
-        self.assertEqual(capture["SUBAGENT"], "glm-4.5-air")
+        self.assertEqual(capture["MODEL"], "glm-5.2[1m]")
+        self.assertEqual(capture["OPUS"], "glm-5.2[1m]")
+        self.assertEqual(capture["SONNET"], "glm-5.2[1m]")
+        self.assertEqual(capture["HAIKU"], "glm-4.7")
+        self.assertEqual(capture["FABLE"], "glm-5.2[1m]")
+        self.assertEqual(capture["SUBAGENT"], "glm-4.7")
         self.assertEqual(capture["EFFORT"], "max")
         self.assertEqual(capture["MCP"], "false")
+        self.assertEqual(capture["TIMEOUT"], "3000000")
         self.assertEqual(capture["AUTH_MATCH"], "yes")
         self.assertEqual(capture["FOREMAN_KEY_PRESENT"], "no")
         self.assertEqual(capture["RAW_KEY_PRESENT"], "no")

@@ -341,12 +341,14 @@ provisioning variable, raw GLM/Z.ai/Kimi/DeepSeek/Anthropic credentials, and the
 Claude OAuth token from the child environment, then configures Z.ai's official
 Anthropic-compatible endpoint (`https://api.z.ai/api/anthropic`).
 
-The adapter fixes the model family to GLM: `glm-4.7` handles
-primary/Opus/Sonnet work, while `glm-4.5-air` handles Haiku and subagents. This
-follows Z.ai's
+The adapter fixes the model family to GLM: `glm-5.2[1m]` (the 1M-context
+flagship) handles primary/Opus/Sonnet work, while `glm-4.7` handles Haiku and
+subagents. This follows Z.ai's
 [official Claude Code integration](https://docs.z.ai/scenario-example/develop-tools/claude);
-advisory labels cannot change the family. The validated harness baseline is the
-bot image's Claude Code `2.1.167` pin and Z.ai's GLM Anthropic API/model IDs as
+advisory labels cannot change the family. It also sets a generous client
+`API_TIMEOUT_MS` so a slow GLM response is never aborted before foreman's own
+per-unit timeout governs the run. The validated harness baseline is the bot
+image's Claude Code `2.1.167` pin and Z.ai's GLM Anthropic API/model IDs as
 documented on 2026-08-08. Pin `backend_version = "2.1.167"` until a newer CLI has
 passed the adapter contract tests.
 
