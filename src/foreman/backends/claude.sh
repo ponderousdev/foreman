@@ -4,7 +4,8 @@
 # Contract (see src/foreman/backend.py):
 #   claude.sh run                  dispatch with $FOREMAN_PROMPT_FILE
 #   claude.sh resume <session-id>  resume a prior session with a new prompt
-#   claude.sh capabilities         print capability tokens ("resume cost")
+#   claude.sh attach [session-id]  interactive local triage
+#   claude.sh capabilities         print capability tokens
 #
 # Env in:  FOREMAN_PROMPT_FILE FOREMAN_RESULT_FILE FOREMAN_SESSION_FILE
 #          FOREMAN_LOG_FILE FOREMAN_PERMISSION_MODE FOREMAN_BILLING
@@ -17,7 +18,7 @@
 set -euo pipefail
 
 FOREMAN_ADAPTER_NAME="claude.sh"
-FOREMAN_ADAPTER_CAPABILITIES="resume cost"
+FOREMAN_ADAPTER_CAPABILITIES="resume cost attach"
 
 # Billing isolation (spec A11): in api mode the key is exported ONLY into this
 # adapter process. The container-wide ANTHROPIC_API_KEY strip (init-env.sh,

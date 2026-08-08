@@ -2,7 +2,7 @@
 vendor surface. Foreman shells out; no vendor SDKs in core.
 
 Adapter contract:
-  argv:  <adapter> run | resume <session-ref> | capabilities
+  argv:  <adapter> run | resume <session-ref> | attach [session-ref] | capabilities
   cwd:   the unit's worktree
   env:   FOREMAN_PROMPT_FILE, FOREMAN_RESULT_FILE, FOREMAN_SESSION_FILE,
          FOREMAN_LOG_FILE, FOREMAN_TIMEOUT_MIN, FOREMAN_PERMISSION_MODE,
@@ -119,14 +119,16 @@ def backend_cli_version(cfg: Config, backend_name: str | None = None) -> str:
     return proc.stdout.strip().split()[0]
 
 
-def assert_backend_version(cfg: Config) -> None:
+def assert_backend_version(cfg: Config, backend_name: str | None = None) -> None:
     """Pin check: headless behavior drifts between agent-CLI releases."""
-    if not cfg.backend_version or not _uses_claude_cli(cfg.backend):
+    selected = backend_name or cfg.backend
+    if not cfg.backend_version or not _uses_claude_cli(selected):
         return
-    version = backend_cli_version(cfg)
+    version = backend_cli_version(cfg, selected)
     if not version.startswith(cfg.backend_version):
         raise ForemanError(
-            f"backend version mismatch: claude CLI is '{version or 'missing'}', "
+            f"backend '{selected}' version mismatch: claude CLI is "
+            f"'{version or 'missing'}', "
             f"config pins '{cfg.backend_version}'"
         )
 
@@ -135,6 +137,27 @@ def unit_dir(cfg: Config, root: Path, number: int) -> Path:
     path = root / cfg.runtime_dir / "units" / str(number)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def recorded_backend(unit_run_dir: Path, fallback: str) -> str:
+    """Return the adapter that actually started this unit.
+
+    Runs created before adapter recording fall back to the repository default.
+    Once a run record exists, malformed or incomplete metadata fails closed:
+    silently selecting another provider could resume a session with the wrong
+    credentials or endpoint.
+    """
+    path = unit_run_dir / "run_started.json"
+    if not path.exists():
+        return fallback
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ForemanError(f"invalid backend run record {path}: {exc}") from exc
+    selected = record.get("backend")
+    if not isinstance(selected, str) or not selected.strip():
+        raise ForemanError(f"backend run record {path} has no selected adapter")
+    return selected.strip()
 
 
 def agent_env(cfg: Config) -> dict[str, str]:

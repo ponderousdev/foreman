@@ -415,7 +415,9 @@ def _resume_agent(
     prompt = spec.load_prompt(prompt_name, tokens)
     prompt_file = run_dir / f"{prompt_name}.md"
     write_text(prompt_file, prompt)
-    adapter = backend_mod.adapter_path(cfg.backend)
+    backend_name = backend_mod.recorded_backend(run_dir, cfg.backend)
+    backend_mod.assert_backend_version(cfg, backend_name)
+    adapter = backend_mod.adapter_path(backend_name)
     caps = backend_mod.capabilities(adapter)
     session_file = run_dir / "session"
     resume_ref = None

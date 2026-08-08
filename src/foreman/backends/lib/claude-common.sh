@@ -27,19 +27,32 @@ foreman_claude_main() {
             return 1
         }
         ;;
+    attach)
+        resume_ref="${2:-}"
+        ;;
     *)
         _foreman_claude_fail "unknown command: $cmd"
         return 1
         ;;
     esac
 
-    : "${FOREMAN_PROMPT_FILE:?}" "${FOREMAN_RESULT_FILE:?}" \
-        "${FOREMAN_SESSION_FILE:?}" "${FOREMAN_LOG_FILE:?}"
     command -v claude >/dev/null 2>&1 || {
         _foreman_claude_fail "claude CLI not found on PATH"
         return 1
     }
     foreman_claude_prepare || return
+
+    # Manual local triage stays inside the provider adapter so resumes use the
+    # same endpoint, model routing, and credential isolation as headless runs.
+    if [ "$cmd" = "attach" ]; then
+        if [ -n "$resume_ref" ]; then
+            exec claude --resume "$resume_ref"
+        fi
+        exec claude
+    fi
+
+    : "${FOREMAN_PROMPT_FILE:?}" "${FOREMAN_RESULT_FILE:?}" \
+        "${FOREMAN_SESSION_FILE:?}" "${FOREMAN_LOG_FILE:?}"
 
     # Read-only analysis mode (vet): plain-text final output on stdout
     # (foreman captures it), no file edits, no shell.

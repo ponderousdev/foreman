@@ -5,6 +5,7 @@ while doing nothing."""
 from __future__ import annotations
 
 import io
+import json
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -47,13 +48,18 @@ class LocalAttach(unittest.TestCase):
         self.assertEqual(rc, 1)
 
     def test_resumes_with_session_ref_when_present(self):
+        self.cfg.billing = "api"
         wt = self._worktree()
         run_dir = self.root / self.cfg.runtime_dir / "units" / "5"
         run_dir.mkdir(parents=True)
         (run_dir / "session").write_text("SESSION_REF=sess-123\n", "utf-8")
+        (run_dir / "run_started.json").write_text(
+            json.dumps({"backend": "claude-code-deepseek"}), encoding="utf-8"
+        )
         rc, out = self._run()
         self.assertEqual(rc, 0)
-        self.assertIn("claude --resume sess-123", out)
+        self.assertIn("claude-code-deepseek.sh attach sess-123", out)
+        self.assertIn("FOREMAN_BILLING=api", out)
         self.assertIn(str(wt), out)
 
     def test_without_session_ref_gives_exact_manual_path(self):
@@ -64,6 +70,7 @@ class LocalAttach(unittest.TestCase):
         rc, out = self._run()
         self.assertEqual(rc, 0)
         self.assertIn(f"cd {wt}", out)
+        self.assertIn("claude.sh attach", out)
         self.assertIn("resume-state.md", out)
 
     def test_non_local_runner_is_explicitly_unimplemented(self):

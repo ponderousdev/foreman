@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from foreman import backend as backend_mod
 from foreman import signatures as signatures_mod
+from foreman.backend import BackendResult
 from foreman.config import Config
 from foreman.github import (
     DISPATCHED_LABEL,
@@ -14,10 +18,13 @@ from foreman.github import (
     LEGACY_READY_FOR_REVIEW_LABEL,
     READY_FOR_REVIEW_LABEL,
 )
+from foreman.runner import Selection
 from foreman.shepherd import (
+    PrWork,
     _demote_promoted_if_invalid,
     _promote_ready_head,
     _recover_interrupted_promotion,
+    _resume_agent,
     _return_to_draft,
     automation_ready_now,
     classify_checks,
@@ -28,6 +35,59 @@ from foreman.shepherd import (
 from foreman.util import ForemanError
 from tests.fakes import make_github, pr_json
 from tests.fakes import make_github as _mk
+
+
+class ResumeAdapterSelection(unittest.TestCase):
+    def test_shepherd_reuses_adapter_recorded_by_dispatch(self):
+        cfg = Config(backend="claude")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = backend_mod.unit_dir(cfg, root, 5)
+            (run_dir / "run_started.json").write_text(
+                json.dumps({"backend": "claude-code-deepseek"}), encoding="utf-8"
+            )
+            (run_dir / "session").write_text(
+                "SESSION_REF=deepseek-session\n", encoding="utf-8"
+            )
+            wt = root / "worktree"
+            wt.mkdir()
+            work = PrWork(
+                10, 5, "foreman/feat/5-test", "https://example.invalid/10", "test"
+            )
+            selection = Selection(
+                runner=object(),  # type: ignore[arg-type]
+                make_handoff=lambda _workdir, _handle: None,
+                refusal=lambda _required: None,
+            )
+            with (
+                patch("foreman.shepherd.spec.load_prompt", return_value="fix it"),
+                patch("foreman.shepherd._ensure_worktree", return_value=wt),
+                patch(
+                    "foreman.shepherd.backend_mod.capabilities", return_value={"resume"}
+                ),
+                patch("foreman.shepherd.backend_mod.assert_backend_version") as version,
+                patch(
+                    "foreman.shepherd.backend_mod.run_backend",
+                    return_value=BackendResult(returncode=0),
+                ) as run_backend,
+            ):
+                _resume_agent(
+                    object(),  # type: ignore[arg-type]
+                    cfg,
+                    root,
+                    selection,
+                    work,
+                    "review-fix",
+                    {},
+                )
+            version.assert_called_once_with(cfg, "claude-code-deepseek")
+            self.assertEqual(
+                run_backend.call_args.args[3],
+                backend_mod.adapter_path("claude-code-deepseek"),
+            )
+            self.assertEqual(
+                run_backend.call_args.kwargs["resume_ref"], "deepseek-session"
+            )
 
 
 class LabelTransition(unittest.TestCase):

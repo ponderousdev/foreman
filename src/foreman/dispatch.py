@@ -326,6 +326,13 @@ def _dispatch_locked(
     if drift is not None:
         return Outcome(unit, "refused", detail=f"trust re-check at dispatch: {drift}")
 
+    inp = unit.inputs
+    backend_name = inp.backend if inp and inp.backend else cfg.backend
+    # The CLI's early check covers the repository default. Re-check the
+    # effective per-unit selection here, after live trust validation and before
+    # any worktree or agent process is created.
+    backend_mod.assert_backend_version(cfg, backend_name)
+
     existing = worktree.attempt_branches(cfg, remote_name, unit.number)
     branch = worktree.next_attempt_branch(worktree.branch_name(cfg, unit), existing)
 
@@ -375,8 +382,6 @@ def _dispatch_locked(
     progress.phase("preparing worktree")
     worktree.add(wt_path, branch, base)
 
-    inp = unit.inputs
-    backend_name = inp.backend if inp and inp.backend else cfg.backend
     adapter = backend_mod.adapter_path(backend_name)
     timeout_min = _timeout_min(cfg, unit)
     progress.phase("agent running")

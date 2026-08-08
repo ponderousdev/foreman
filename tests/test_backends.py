@@ -14,6 +14,7 @@ from unittest import mock
 from foreman import backend as backend_mod
 from foreman.config import Config
 from foreman.runner import Handle, UnitSpec
+from foreman.util import ForemanError
 
 
 class DeepSeekAdapter(unittest.TestCase):
@@ -106,7 +107,7 @@ class DeepSeekAdapter(unittest.TestCase):
     def test_capabilities_are_exact_and_do_not_require_credentials(self):
         proc = self.run_adapter("capabilities", env={"PATH": os.environ["PATH"]})
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(proc.stdout.strip().split(), ["resume"])
+        self.assertEqual(proc.stdout.strip().split(), ["resume", "attach"])
 
     def test_run_hardwires_deepseek_family_and_strips_competing_credentials(self):
         proc = self.run_adapter("run")
@@ -156,6 +157,16 @@ class DeepSeekAdapter(unittest.TestCase):
         args = self.capture.read_text(encoding="utf-8").splitlines()[0].split("\t")[1:]
         self.assertEqual(args[-2:], ["--resume", "prior-session"])
 
+    def test_attach_uses_provider_environment_for_interactive_resume(self):
+        proc = self.run_adapter("attach", "prior-session")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        lines = self.capture.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(lines[0].split("\t")[1:], ["--resume", "prior-session"])
+        capture = self.capture_lines()
+        self.assertEqual(capture["BASE"], "https://api.deepseek.com/anthropic")
+        self.assertEqual(capture["AUTH_MATCH"], "yes")
+        self.assertEqual(capture["FOREMAN_KEY_PRESENT"], "no")
+
     def test_missing_key_and_subscription_billing_fail_closed_without_secret_echo(self):
         missing = self.env()
         missing.pop("FOREMAN_DEEPSEEK_API_KEY")
@@ -184,7 +195,7 @@ class DeepSeekAdapter(unittest.TestCase):
             "capabilities", env={"PATH": os.environ["PATH"]}
         )
         self.assertEqual(capabilities.returncode, 0, capabilities.stderr)
-        self.assertEqual(set(capabilities.stdout.split()), {"resume", "cost"})
+        self.assertEqual(set(capabilities.stdout.split()), {"resume", "cost", "attach"})
 
         proc = self.run_adapter("run")
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -234,6 +245,33 @@ class BackendRunRecord(unittest.TestCase):
             self.assertEqual(record["backend"], "claude-code-deepseek")
             self.assertEqual(record["backend_cli_version"], "2.1.167")
             version.assert_called_once_with(cfg, "claude-code-deepseek")
+
+    def test_recorded_backend_reuses_selected_adapter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            (run_dir / "run_started.json").write_text(
+                '{"backend": "claude-code-deepseek"}\n', encoding="utf-8"
+            )
+            self.assertEqual(
+                backend_mod.recorded_backend(run_dir, "claude"),
+                "claude-code-deepseek",
+            )
+
+    def test_recorded_backend_legacy_fallback_and_malformed_fail_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            self.assertEqual(backend_mod.recorded_backend(run_dir, "claude"), "claude")
+            (run_dir / "run_started.json").write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(ForemanError, "no selected adapter"):
+                backend_mod.recorded_backend(run_dir, "claude")
+
+    def test_version_pin_checks_effective_per_unit_adapter(self):
+        cfg = Config(backend="mock", backend_version="2.1.167")
+        with mock.patch.object(
+            backend_mod, "backend_cli_version", return_value="2.1.167"
+        ) as version:
+            backend_mod.assert_backend_version(cfg, "claude-code-deepseek")
+        version.assert_called_once_with(cfg, "claude-code-deepseek")
 
 
 if __name__ == "__main__":

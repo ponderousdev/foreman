@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -758,6 +759,15 @@ def cmd_attach(args: argparse.Namespace) -> int:
         )
         return 1
     wt_path = wt_glob[0]
+    backend_name = backend_mod.recorded_backend(run_dir, cfg.backend)
+    backend_mod.assert_backend_version(cfg, backend_name)
+    adapter = backend_mod.adapter_path(backend_name)
+    if "attach" not in backend_mod.capabilities(adapter):
+        error(f"backend '{backend_name}' does not support local attach")
+        return 1
+    attach_cmd = (
+        f"FOREMAN_BILLING={shlex.quote(cfg.billing)} {shlex.quote(str(adapter))} attach"
+    )
     resume_state = run_dir / "resume-state.md"
     print(f"Local triage for unit #{args.unit} (no live process to attach to):")
     print(f"  worktree:     {wt_path}")
@@ -766,13 +776,16 @@ def cmd_attach(args: argparse.Namespace) -> int:
     print()
     if session_ref:
         print("  Resume the preserved Claude session in the worktree:")
-        print(f"    cd {wt_path} && claude --resume {session_ref}")
+        print(
+            f"    cd {shlex.quote(str(wt_path))} && {attach_cmd} "
+            f"{shlex.quote(session_ref)}"
+        )
     else:
         print(
             "  No captured session ref — start a fresh session in the "
             "worktree and hand it the resume state:"
         )
-        print(f"    cd {wt_path} && claude")
+        print(f"    cd {shlex.quote(str(wt_path))} && {attach_cmd}")
         if resume_state.exists():
             print(f"    # then paste the context from {resume_state}")
     return 0

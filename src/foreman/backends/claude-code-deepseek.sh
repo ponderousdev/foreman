@@ -11,7 +11,7 @@ FOREMAN_ADAPTER_NAME="claude-code-deepseek.sh"
 # Claude Code sessions can resume against the same provider configuration.
 # Its custom-provider stream does not provide a cost value Foreman can verify,
 # so this adapter deliberately does not advertise or persist `cost`.
-FOREMAN_ADAPTER_CAPABILITIES="resume"
+FOREMAN_ADAPTER_CAPABILITIES="resume attach"
 
 foreman_claude_prepare() {
     if [ "${FOREMAN_BILLING:-subscription}" != "api" ]; then
