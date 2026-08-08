@@ -2,7 +2,8 @@
 vendor surface. Foreman shells out; no vendor SDKs in core.
 
 Adapter contract:
-  argv:  <adapter> run | resume <session-ref> | capabilities
+  argv:  <adapter> run | resume <session-ref> |
+         attach [session-ref | --session-file <path>] | capabilities
   cwd:   the unit's worktree
   env:   FOREMAN_PROMPT_FILE, FOREMAN_RESULT_FILE, FOREMAN_SESSION_FILE,
          FOREMAN_LOG_FILE, FOREMAN_TIMEOUT_MIN, FOREMAN_PERMISSION_MODE,
@@ -20,11 +21,12 @@ enforced HERE (portable), not in the adapters.
 The agent environment is an allowlist (#13): PATH/HOME/USER/LANG/TERM,
 CLAUDE_CODE_OAUTH_TOKEN, the READ-ONLY GitHub token (from
 FOREMAN_AGENT_GH_TOKEN, handed to the agent as GH_TOKEN), and explicit
-FOREMAN_* variables. Never the write token, never ANTHROPIC_API_KEY or
-ANTHROPIC_AUTH_TOKEN (resolving #13's open question: a strict allowlist
-already excludes them — this is where that is made true). Under local this
-is defense in depth, not containment (D1/D3): the write token remains
-reachable on the shared box, and no test may claim otherwise.
+FOREMAN_* variables. Never the write token, never raw provider variables such
+as ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or DEEPSEEK_API_KEY. Adapters
+translate their dedicated FOREMAN_* provisioning variable and strip unrelated
+provider credentials before launching the CLI. Under local this is defense in
+depth, not containment (D1/D3): the write token remains reachable on the shared
+box, and no test may claim otherwise.
 """
 
 from __future__ import annotations
@@ -57,12 +59,17 @@ AGENT_TOKEN_VAR = "FOREMAN_AGENT_GH_TOKEN"
 # secret is never exposed to the agent by default (#13, spec "explicit
 # FOREMAN_* variables"). Foreman's per-unit FOREMAN_* values (prompt/result/
 # session/log paths, timeout, billing, …) are layered on by run_backend and
-# are not host-inherited. FOREMAN_ANTHROPIC_API_KEY is included so `billing =
-# "api"` reaches the adapter; under subscription billing it is simply absent.
+# are not host-inherited. Dedicated provider credentials are explicit entries;
+# each adapter validates and consumes only its own. Under other backends or
+# subscription billing they are simply absent/unused.
 # FOREMAN_READONLY is included so vet's read-only mode actually reaches the
 # adapter (claude.sh branches on it) — the total-allowlist env otherwise
 # silently dropped it, and vet ran with normal write permissions.
-AGENT_FOREMAN_ENV = ("FOREMAN_ANTHROPIC_API_KEY", "FOREMAN_READONLY")
+AGENT_FOREMAN_ENV = (
+    "FOREMAN_ANTHROPIC_API_KEY",
+    "FOREMAN_DEEPSEEK_API_KEY",
+    "FOREMAN_READONLY",
+)
 # Reaping window after kill(): the group is already dead or dying; this only
 # bounds how long we wait for the recorded status to become readable.
 KILL_REAP_S = 30
@@ -83,11 +90,14 @@ class BackendResult:
 
 
 def adapter_path(name: str) -> Path:
-    path = BACKENDS_DIR / f"{name}.sh"
-    if not path.exists():
-        available = sorted(p.stem for p in BACKENDS_DIR.glob("*.sh"))
+    # Select from enumerated trusted basenames instead of joining untrusted
+    # recorded text into a path. A unit may corrupt its own telemetry, but it
+    # must never turn shepherd/attach into an arbitrary-script launcher.
+    available = {path.stem: path for path in BACKENDS_DIR.glob("*.sh")}
+    path = available.get(name)
+    if path is None:
         raise ForemanError(
-            f"unknown backend '{name}' (available: {', '.join(available)})"
+            f"unknown backend '{name}' (available: {', '.join(sorted(available))})"
         )
     return path
 
@@ -97,10 +107,15 @@ def capabilities(adapter: Path) -> set[str]:
     return set(proc.stdout.split()) if proc.returncode == 0 else set()
 
 
-def backend_cli_version(cfg: Config) -> str:
+def _uses_claude_cli(backend_name: str) -> bool:
+    """Harness classification without provider-specific core branches."""
+    return backend_name == "claude" or backend_name.startswith("claude-code-")
+
+
+def backend_cli_version(cfg: Config, backend_name: str | None = None) -> str:
     """Best-effort agent-CLI version (recorded in run_started; asserted by
     assert_backend_version when pinned)."""
-    if cfg.backend != "claude":
+    if not _uses_claude_cli(backend_name or cfg.backend):
         return ""
     proc = run(["claude", "--version"], check=False)
     if proc.returncode != 0 or not proc.stdout:
@@ -108,14 +123,16 @@ def backend_cli_version(cfg: Config) -> str:
     return proc.stdout.strip().split()[0]
 
 
-def assert_backend_version(cfg: Config) -> None:
+def assert_backend_version(cfg: Config, backend_name: str | None = None) -> None:
     """Pin check: headless behavior drifts between agent-CLI releases."""
-    if not cfg.backend_version or cfg.backend != "claude":
+    selected = backend_name or cfg.backend
+    if not cfg.backend_version or not _uses_claude_cli(selected):
         return
-    version = backend_cli_version(cfg)
+    version = backend_cli_version(cfg, selected)
     if not version.startswith(cfg.backend_version):
         raise ForemanError(
-            f"backend version mismatch: claude CLI is '{version or 'missing'}', "
+            f"backend '{selected}' version mismatch: claude CLI is "
+            f"'{version or 'missing'}', "
             f"config pins '{cfg.backend_version}'"
         )
 
@@ -124,6 +141,42 @@ def unit_dir(cfg: Config, root: Path, number: int) -> Path:
     path = root / cfg.runtime_dir / "units" / str(number)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _backend_selection_path(cfg: Config, root: Path, unit: int) -> Path:
+    return runner_mod.runs_dir(cfg, root) / f"{unit}.backend"
+
+
+def _record_backend_selection(
+    cfg: Config, root: Path, unit: int, backend_name: str
+) -> None:
+    """Atomically persist the supervisor-owned effective adapter selection."""
+    adapter_path(backend_name)  # known basename under BACKENDS_DIR
+    path = _backend_selection_path(cfg, root, unit)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".backend.tmp")
+    tmp.write_text(backend_name + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def recorded_backend(cfg: Config, root: Path, unit: int, fallback: str) -> str:
+    """Return the trusted adapter selection that actually started this unit.
+
+    The selector lives beside runner handles, outside the run directory granted
+    to the agent. Runs created before selector recording fall back to the
+    repository default. Once a selector exists, unknown names fail closed.
+    """
+    path = _backend_selection_path(cfg, root, unit)
+    if not path.exists():
+        return fallback
+    try:
+        selected = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise ForemanError(f"invalid backend selection record {path}: {exc}") from exc
+    if not selected:
+        raise ForemanError(f"backend selection record {path} is empty")
+    adapter_path(selected)  # reject traversal and unknown adapter names
+    return selected
 
 
 def agent_env(cfg: Config) -> dict[str, str]:
@@ -155,6 +208,7 @@ def _record_run_started(
     handle: runner_mod.Handle,
     spec: UnitSpec,
     *,
+    backend_name: str,
     resume_ref: str | None,
 ) -> None:
     """#22: run_started records runner, image digest, and CLI version."""
@@ -164,13 +218,40 @@ def _record_run_started(
         "runner": handle.runner,
         "image": spec.image or None,
         "image_digest": None,  # local boots no image; sprite records one (v2.1)
-        "backend": cfg.backend,
-        "backend_cli_version": backend_cli_version(cfg),
+        "backend": backend_name,
+        "backend_cli_version": backend_cli_version(cfg, backend_name),
         "resume_ref": resume_ref,
         "timeout_s": spec.timeout_s,
         "started_at": utc_now_iso(),
     }
     write_text(unit_run_dir / "run_started.json", json.dumps(payload, indent=2) + "\n")
+
+
+def _publish_started_run(
+    cfg: Config,
+    root: Path,
+    unit_run_dir: Path,
+    handle: runner_mod.Handle,
+    spec: UnitSpec,
+    *,
+    backend_name: str,
+    resume_ref: str | None,
+) -> None:
+    """Publish restart state in dependency order.
+
+    The effective adapter becomes durable before the recoverable handle is
+    visible. The agent-writable run_started document remains telemetry only.
+    """
+    _record_backend_selection(cfg, root, spec.unit, backend_name)
+    runner_mod.save_handle(cfg, root, handle)
+    _record_run_started(
+        cfg,
+        unit_run_dir,
+        handle,
+        spec,
+        backend_name=backend_name,
+        resume_ref=resume_ref,
+    )
 
 
 def run_backend(
@@ -193,6 +274,11 @@ def run_backend(
     result_file = unit_run_dir / "result.json"
     if result_file.exists():
         result_file.unlink()
+    # A non-resume spawn starts a new provider/session lineage. Keeping the
+    # prior ledger would make shepherd's first SESSION_REF belong to an older
+    # backend after retry or a per-unit backend change.
+    if resume_ref is None:
+        session_file.unlink(missing_ok=True)
 
     env = agent_env(cfg)
     env.update(
@@ -207,9 +293,6 @@ def run_backend(
             "FOREMAN_MAX_TURNS": str(cfg.max_turns),
         }
     )
-    if cfg.billing == "api" and not env.get("FOREMAN_ANTHROPIC_API_KEY"):
-        raise ForemanError("billing=api but FOREMAN_ANTHROPIC_API_KEY is not set")
-
     argv = [str(adapter), "resume", resume_ref] if resume_ref else [str(adapter), "run"]
     spec = UnitSpec(
         unit=unit_number,
@@ -223,14 +306,21 @@ def run_backend(
         # process runs the gate in the worktree after the agent exits.
         gate_cmds=tuple(tuple(c) for c in (gate_cmds or [])),
     )
-    # Snapshot the session file BEFORE the spawn (#54): the file persists
-    # across resumes, and a run that dies before emitting its own COST_USD
-    # must not be billed the previous invocation's last cost line.
+    # Snapshot the session file BEFORE the spawn (#54): it persists only
+    # across true resumes, and a run that dies before emitting its own
+    # COST_USD must not be billed the previous invocation's last cost line.
     session_offset = session_file.stat().st_size if session_file.exists() else 0
 
     handle = runner.spawn(spec)
-    runner_mod.save_handle(cfg, root, handle)
-    _record_run_started(cfg, unit_run_dir, handle, spec, resume_ref=resume_ref)
+    _publish_started_run(
+        cfg,
+        root,
+        unit_run_dir,
+        handle,
+        spec,
+        backend_name=adapter.stem,
+        resume_ref=resume_ref,
+    )
 
     timed_out = False
     try:

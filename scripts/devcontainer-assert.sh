@@ -52,14 +52,17 @@ assert_unit() {
         grep -q "^${1}=" "$2"
     }
 
-    local bot_allow=(GH_TOKEN CLAUDE_CODE_OAUTH_TOKEN AGENT_DECK_TELEGRAM_KEY)
+    local bot_allow=(GH_TOKEN CLAUDE_CODE_OAUTH_TOKEN FOREMAN_DEEPSEEK_API_KEY AGENT_DECK_TELEGRAM_KEY)
     local dev_allow=(TS_AUTHKEY GH_TOKEN CLAUDE_CODE_OAUTH_TOKEN AGENT_DECK_TELEGRAM_KEY)
 
     # 1. Bot strips TS_AUTHKEY from the host env; keeps an allowed var.
     env_file="${work_dir}/env-bot-strip"
     : >"$env_file"
-    TS_AUTHKEY=fake GH_TOKEN=fake bash "$init_env" "$env_file" "${bot_allow[@]}"
+    TS_AUTHKEY=fake GH_TOKEN=fake FOREMAN_DEEPSEEK_API_KEY=fake \
+        bash "$init_env" "$env_file" "${bot_allow[@]}"
     has_var GH_TOKEN "$env_file" || fail "bot profile dropped allowed GH_TOKEN"
+    has_var FOREMAN_DEEPSEEK_API_KEY "$env_file" ||
+        fail "bot profile dropped allowed FOREMAN_DEEPSEEK_API_KEY"
     if has_var TS_AUTHKEY "$env_file"; then
         fail "bot profile leaked TS_AUTHKEY into the env-file"
     fi

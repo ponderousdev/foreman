@@ -51,6 +51,7 @@ class AgentEnvAllowlist(unittest.TestCase):
                 "GITHUB_TOKEN": "WRITE-token-2",
                 "ANTHROPIC_API_KEY": "api-key",
                 "ANTHROPIC_AUTH_TOKEN": "auth-token",
+                "DEEPSEEK_API_KEY": "deepseek-key",
                 "SOME_RANDOM_SECRET": "nope",
                 # An operator-only FOREMAN_* control must NOT leak by prefix —
                 # the allowlist is explicit, not a sweep.
@@ -66,6 +67,7 @@ class AgentEnvAllowlist(unittest.TestCase):
         self.assertNotIn("GITHUB_TOKEN", env)
         self.assertNotIn("ANTHROPIC_API_KEY", env)
         self.assertNotIn("ANTHROPIC_AUTH_TOKEN", env)
+        self.assertNotIn("DEEPSEEK_API_KEY", env)
         self.assertNotIn("SOME_RANDOM_SECRET", env)
         # No blanket FOREMAN_* forwarding: operator-only vars stay out.
         self.assertNotIn("FOREMAN_SANDBOXED", env)
@@ -90,6 +92,19 @@ class AgentEnvAllowlist(unittest.TestCase):
         )
         env = backend_mod.agent_env(Config(billing="api"))
         self.assertEqual(env["FOREMAN_ANTHROPIC_API_KEY"], "unit-budget-key")
+
+    def test_deepseek_key_flows_only_as_foreman_var(self):
+        os.environ.update(
+            {
+                "PATH": "/usr/bin",
+                "FOREMAN_AGENT_GH_TOKEN": "read-token",
+                "FOREMAN_DEEPSEEK_API_KEY": "deepseek-unit-key",
+                "DEEPSEEK_API_KEY": "raw-key-must-not-flow",
+            }
+        )
+        env = backend_mod.agent_env(Config(backend="claude-code-deepseek"))
+        self.assertEqual(env["FOREMAN_DEEPSEEK_API_KEY"], "deepseek-unit-key")
+        self.assertNotIn("DEEPSEEK_API_KEY", env)
 
 
 if __name__ == "__main__":

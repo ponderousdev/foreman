@@ -52,6 +52,7 @@ Variables per profile:
 | `GH_TOKEN` | ✅ | ✅ | `gh` CLI / API (the bot's write PAT) |
 | `FOREMAN_AGENT_GH_TOKEN` | ✅ | — | read-only PAT handed to dispatched agents as their `GH_TOKEN` (#13); dispatch refuses without it |
 | `CLAUDE_CODE_OAUTH_TOKEN` | ✅ | ✅ | Claude Code |
+| `FOREMAN_DEEPSEEK_API_KEY` | ✅ | — | DeepSeek API credential consumed only by Foreman's `claude-code-deepseek` adapter |
 | `AGENT_DECK_TELEGRAM_KEY` | ✅ | ✅ | agent-deck bridge (optional) |
 | `TS_AUTHKEY` | — | ✅ | Tailscale (dev only) |
 
@@ -86,6 +87,7 @@ repo** (one template serves every repo). To stand this repo up in Coder:
    - **repo** → `https://github.com/ponderousdev/foreman`
    - secrets → `GH_TOKEN`, `FOREMAN_AGENT_GH_TOKEN` (the read-only agent
      PAT — dispatch refuses without it, #13), `CLAUDE_CODE_OAUTH_TOKEN`,
+     `FOREMAN_DEEPSEEK_API_KEY` (when using the DeepSeek adapter),
      `AGENT_DECK_TELEGRAM_KEY` (+ `TS_AUTHKEY` if you want Tailscale). Coder
      passes these into the workspace's host environment, where `init-env.sh`
      picks them up.

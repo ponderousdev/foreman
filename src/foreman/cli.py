@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -106,6 +107,7 @@ def _parser() -> argparse.ArgumentParser:
         "attach", help="resume a preserved failed unit in place (runner-polymorphic)"
     )
     p_attach.add_argument("--unit", type=int, required=True)
+    p_attach.add_argument("--execute", action="store_true", help=argparse.SUPPRESS)
 
     sub.add_parser(
         "cleanup", help="prune worktrees + foreman branches for closed units"
@@ -731,8 +733,10 @@ def cmd_attach(args: argparse.Namespace) -> int:
     """Local triage (#37): a dead subprocess cannot be re-entered, so local
     'attach' is 'go to where the state is and resume'. The preserved
     worktree and the Claude session under ~/.claude are what survive; this
-    prints the exact resume command rather than pretending to attach to a
-    process that is gone. Never appears to succeed while doing nothing."""
+    prints an exact Foreman-owned resume command rather than exposing provider
+    configuration or pretending to attach to a process that is gone. The
+    hidden execution step launches the recorded adapter with the same
+    allowlisted environment used for agent work."""
     cfg, root, _gh = _context(read_only=True)
     if cfg.runner != "local":
         error(
@@ -758,7 +762,23 @@ def cmd_attach(args: argparse.Namespace) -> int:
         )
         return 1
     wt_path = wt_glob[0]
+    backend_name = backend_mod.recorded_backend(cfg, root, args.unit, cfg.backend)
+    backend_mod.assert_backend_version(cfg, backend_name)
+    adapter = backend_mod.adapter_path(backend_name)
+    if "attach" not in backend_mod.capabilities(adapter):
+        error(f"backend '{backend_name}' does not support local attach")
+        return 1
     resume_state = run_dir / "resume-state.md"
+    if getattr(args, "execute", False):
+        adapter_args = [str(adapter), "attach"]
+        if session_ref:
+            adapter_args.extend(["--session-file", str(session_file)])
+        env = backend_mod.agent_env(cfg)
+        env["FOREMAN_BILLING"] = cfg.billing
+        return subprocess.run(
+            adapter_args, cwd=wt_path, env=env, check=False
+        ).returncode
+
     print(f"Local triage for unit #{args.unit} (no live process to attach to):")
     print(f"  worktree:     {wt_path}")
     if resume_state.exists():
@@ -766,13 +786,13 @@ def cmd_attach(args: argparse.Namespace) -> int:
     print()
     if session_ref:
         print("  Resume the preserved Claude session in the worktree:")
-        print(f"    cd {wt_path} && claude --resume {session_ref}")
+        print(f"    foreman attach --unit {args.unit} --execute")
     else:
         print(
             "  No captured session ref — start a fresh session in the "
             "worktree and hand it the resume state:"
         )
-        print(f"    cd {wt_path} && claude")
+        print(f"    foreman attach --unit {args.unit} --execute")
         if resume_state.exists():
             print(f"    # then paste the context from {resume_state}")
     return 0

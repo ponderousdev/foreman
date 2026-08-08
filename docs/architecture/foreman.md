@@ -257,12 +257,46 @@ persistent container is the reliable substrate). Cron invoking
 `foreman:dispatch` + `foreman:shepherd` on a schedule is equivalent to the
 live loop — statelessness makes the runtime substrate interchangeable.
 
-**Billing**: `billing = "subscription"` (default) inherits the container's
-`CLAUDE_CODE_OAUTH_TOKEN`; USD budgets are inert (timeout/turns bind) and the
-quota-wait signature turns usage-window exhaustion into planned pauses.
-`billing = "api"` exports `FOREMAN_ANTHROPIC_API_KEY` **only inside the
-adapter process** (the container-wide `ANTHROPIC_API_KEY` strip stays), and
-USD budgets bind. Switching is a config flip plus one secret.
+**Billing**: `billing = "subscription"` (default) lets the `claude` adapter
+inherit the container's `CLAUDE_CODE_OAUTH_TOKEN`; USD budgets are inert
+(timeout/turns bind) and the quota-wait signature turns usage-window
+exhaustion into planned pauses. `billing = "api"` lets each adapter consume its
+dedicated `FOREMAN_*_API_KEY` and translate it **only inside the adapter
+process**; raw provider variables remain excluded from the unit environment.
+The `claude` adapter reports verified cost and binds USD budgets. Provider
+wrappers that do not advertise `cost`, including `claude-code-deepseek`, bind
+through timeout/turn limits instead of pretending an unverified cost is exact.
+
+### Claude Code with DeepSeek
+
+`backend = "claude-code-deepseek"` selects the production provider wrapper.
+It requires `billing = "api"` and `FOREMAN_DEEPSEEK_API_KEY` in the bot
+devcontainer environment. There is no password-manager fallback in the adapter:
+a missing key fails before Claude Code starts. The wrapper removes its
+provisioning variable, raw DeepSeek/Anthropic credentials, and the Claude OAuth
+token from the child environment, then configures DeepSeek's official
+Anthropic-compatible endpoint.
+
+The adapter fixes the model family to DeepSeek: V4 Pro with the 1M-context
+model ID handles primary/Opus/Sonnet work, while V4 Flash handles Haiku and
+subagents. This follows DeepSeek's
+[official Claude Code integration](https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code/);
+advisory labels cannot change the family. The validated harness baseline is the
+bot image's Claude Code `2.1.167` pin and DeepSeek's V4 Anthropic API/model IDs
+as documented on 2026-08-08. Pin `backend_version = "2.1.167"` until a newer
+CLI has passed the adapter contract tests.
+
+```toml
+backend = "claude-code-deepseek"
+backend_version = "2.1.167"
+billing = "api"
+```
+
+The adapter advertises `resume` because Claude Code's session reference works
+under the same fixed provider configuration. It deliberately does not advertise
+`cost`: the custom-provider stream has no cost value Foreman can independently
+verify. Provider errors remain in `agent.log`, and Foreman's runner owns the
+unchanged timeout/kill path.
 
 ## Security model
 
@@ -437,9 +471,10 @@ every consumer's next `uvx` resolution. See
 ## Extending
 
 - **Backends**: `src/foreman/backends/<name>.sh` is the entire vendor
-  surface (`run` / `resume <ref>` / `capabilities`). v2.0 ships `claude.sh`
-  and `mock.sh` (hermetic seam proof). A new vendor is one small file, added
-  when concretely needed.
+  surface (`run` / `resume <ref>` / `capabilities`). Production adapters are
+  `claude.sh` and `claude-code-deepseek.sh`; `mock.sh` is a hermetic seam proof.
+  Claude Code adapters share only execution mechanics under `backends/lib/`;
+  provider credentials and model wiring remain in the named adapter.
 - **Runners**: implement the `Runner` protocol (`src/foreman/runner/`) and
   pair it with a commit-handoff strategy in `foreman.runner.select`. Nothing
   in dispatch changes.

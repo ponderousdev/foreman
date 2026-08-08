@@ -29,9 +29,9 @@ trusted_actors = ["evanharmon1", "evanharmon1-bot", "AdmiralFraggle", "admiralfr
 # on this public repo regardless of this list (see the runner note above).
 required_capabilities = []
 
-# subscription (default): adapters inherit CLAUDE_CODE_OAUTH_TOKEN; USD
-# budgets are inert. api: adapters export FOREMAN_ANTHROPIC_API_KEY
-# process-locally and USD budgets bind.
+# subscription (default): claude inherits CLAUDE_CODE_OAUTH_TOKEN; USD budgets
+# are inert. api: adapters consume their dedicated FOREMAN_*_API_KEY
+# process-locally. Only adapters advertising verified cost bind USD budgets.
 billing = "subscription"
 
 # Set FOREMAN_SANDBOXED=1 (env) inside the egress-limited bot devcontainer
