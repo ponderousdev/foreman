@@ -50,7 +50,10 @@ BACKENDS_DIR = Path(__file__).resolve().parent / "backends"
 RESULT_STATUSES = ("completed", "blocked")
 
 # Environment names copied verbatim from Foreman's environment when present.
-AGENT_ENV_BASE = ("PATH", "HOME", "USER", "LANG", "TERM")
+# CODEX_HOME is a non-secret path: when an operator relocates Codex's home
+# (login + config.toml), the codex-cli adapter must see it or it silently falls
+# back to $HOME/.codex and loses the subscription login and configuration.
+AGENT_ENV_BASE = ("PATH", "HOME", "USER", "LANG", "TERM", "CODEX_HOME")
 # The read-only token Foreman's operator provisions for agents; handed to
 # the unit as GH_TOKEN. Required before any dispatch (#13).
 AGENT_TOKEN_VAR = "FOREMAN_AGENT_GH_TOKEN"

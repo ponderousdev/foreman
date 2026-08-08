@@ -151,6 +151,19 @@ class AgentEnvAllowlist(unittest.TestCase):
         self.assertEqual(env["FOREMAN_OPENAI_API_KEY"], "openai-unit-key")
         self.assertNotIn("OPENAI_API_KEY", env)
 
+    def test_codex_home_forwards_when_set(self):
+        # A relocated Codex home (login + config.toml) must reach the adapter,
+        # else codex-cli falls back to $HOME/.codex and loses the login/config.
+        os.environ.update(
+            {
+                "PATH": "/usr/bin",
+                "FOREMAN_AGENT_GH_TOKEN": "read-token",
+                "CODEX_HOME": "/opt/codex-home",
+            }
+        )
+        env = backend_mod.agent_env(Config(backend="codex-cli"))
+        self.assertEqual(env["CODEX_HOME"], "/opt/codex-home")
+
     def test_codex_model_flows_as_runner_config_var(self):
         # The codex-cli model knob is non-secret runner configuration; it must
         # reach the adapter but only via its explicit FOREMAN_* name.

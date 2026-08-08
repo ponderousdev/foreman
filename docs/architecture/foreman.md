@@ -402,10 +402,26 @@ variable is unset the adapter arms no model and Codex falls back to its own
 no path to the model — the adapter reads no labels.
 
 **Sandbox.** `codex exec resume` accepts neither `--sandbox` nor `--add-dir`, so
-the adapter drives both through `-c` overrides shared by run and resume:
-`sandbox_mode = workspace-write` with the run directory added to
-`sandbox_workspace_write.writable_roots` (the result contract lives outside the
-worktree), or `sandbox_mode = read-only` for vet's read-only analysis mode.
+the adapter drives the policy through `-c` overrides shared by run and resume.
+Headless runs use `sandbox_mode = workspace-write` with two extra
+`sandbox_workspace_write.writable_roots` beyond the worktree: the result-contract
+directory (outside the worktree) and the worktree's real Git-metadata directory
+(`git rev-parse --git-common-dir`) — Foreman's linked worktrees keep
+`.git/worktrees/<wt>` and the object store outside the worktree, so under
+`workspace-write` (which keeps `.git` read-only) `git commit` fails without it.
+`sandbox_workspace_write.network_access = true` mirrors the runner's intent (the
+read-only `GH_TOKEN`, dependency fetches, test services): **the runner — not
+Codex's internal sandbox — is Foreman's isolation boundary, exactly as for the
+`claude` adapter** (roots and network are TOML-escaped and validated). Vet uses
+`sandbox_mode = read-only` with no extra roots and no network.
+
+**No turn cap.** `codex exec` has no per-turn limit, and this adapter reports no
+cost, so a configured `max_turns` would leave only the wall-clock timeout as a
+bound. Rather than silently ignore it, the adapter **fails closed** when a
+nonzero `max_turns` is requested — set `max_turns = 0` and bound Codex units via
+`timeout_min`. Session refs are validated as canonical UUIDs before they are
+persisted or passed back to Codex, so a corrupted agent-writable session ledger
+cannot smuggle an option-shaped value (e.g. `--last`) into a resume.
 
 The validated baseline is Codex CLI **0.147.x** (the `thread.started`/`--json`
 event shape this adapter parses). Codex is not on the `claude`-CLI version-pin

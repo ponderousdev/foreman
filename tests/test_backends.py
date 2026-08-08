@@ -585,6 +585,11 @@ class CodexCliAdapter(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        # A real repo so the adapter's `git rev-parse --git-common-dir` resolves
+        # (the worktree Git-metadata writable root); adapter cwd is self.root.
+        subprocess.run(
+            ["git", "init", "-q", str(self.root)], check=True, capture_output=True
+        )
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.capture = self.root / "codex.capture"
@@ -593,6 +598,8 @@ class CodexCliAdapter(unittest.TestCase):
         self.result = self.root / "result.json"
         self.session = self.root / "session"
         self.log = self.root / "agent.log"
+        # Codex thread ids are UUIDs; the adapter only persists a UUID SESSION_REF.
+        self.sid = "019fe240-8ec9-7283-8060-acf56ec96411"
         self.adapter = backend_mod.adapter_path("codex-cli")
         fake = self.bin / "codex"
         fake.write_text(
@@ -611,7 +618,7 @@ class CodexCliAdapter(unittest.TestCase):
                     [ "${CLAUDE_CODE_OAUTH_TOKEN+x}" = x ] && echo 'OAUTH_PRESENT=yes' || echo 'OAUTH_PRESENT=no'
                     [ "${DEEPSEEK_API_KEY+x}" = x ] && echo 'DEEPSEEK_PRESENT=yes' || echo 'DEEPSEEK_PRESENT=no'
                 } >"$FAKE_CODEX_CAPTURE"
-                printf '{"type":"thread.started","thread_id":"codex-session"}\\n'
+                printf '{"type":"thread.started","thread_id":"%s"}\\n' "${FAKE_CODEX_THREAD_ID:-019fe240-8ec9-7283-8060-acf56ec96411}"
                 printf '{"type":"turn.completed","usage":{"output_tokens":5}}\\n'
                 if [ -n "${FAKE_CODEX_ERROR:-}" ]; then
                     printf 'codex error: %s\\n' "$FAKE_CODEX_ERROR"
@@ -661,6 +668,12 @@ class CodexCliAdapter(unittest.TestCase):
         lines = self.capture.read_text(encoding="utf-8").splitlines()
         return dict(line.split("=", 1) for line in lines[1:])
 
+    def writable_roots_arg(self) -> str:
+        for a in self.capture_args():
+            if a.startswith("sandbox_workspace_write.writable_roots="):
+                return a
+        return ""
+
     def test_capabilities_are_exact_and_do_not_require_credentials(self):
         proc = self.run_adapter("capabilities", env={"PATH": os.environ["PATH"]})
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -678,28 +691,23 @@ class CodexCliAdapter(unittest.TestCase):
         self.assertEqual(capture["OAUTH_PRESENT"], "no")
         self.assertEqual(capture["DEEPSEEK_PRESENT"], "no")
         args = self.capture_args()
+        self.assertIn("forced_login_method=api", args)
+        self.assertIn("sandbox_mode=workspace-write", args)
+        # Network is enabled so the agent can use gh / fetch deps / reach test
+        # services — the runner, not Codex's sandbox, is the isolation boundary.
+        self.assertIn("sandbox_workspace_write.network_access=true", args)
+        # Writable roots grant the out-of-worktree result dir AND the worktree's
+        # real Git metadata dir (so `git commit` works under workspace-write).
+        roots = self.writable_roots_arg()
+        self.assertIn(f'"{self.root}"', roots)
+        self.assertIn("/.git", roots)
+        # Headless run streams JSONL and reads the prompt from stdin via `-`.
+        self.assertEqual(args[-4:], ["exec", "--json", "--skip-git-repo-check", "-"])
         self.assertEqual(
-            args,
-            [
-                "-c",
-                "forced_login_method=api",
-                "-c",
-                "sandbox_mode=workspace-write",
-                "-c",
-                f'sandbox_workspace_write.writable_roots=["{self.root}"]',
-                "exec",
-                "--json",
-                "--skip-git-repo-check",
-                "-",
-            ],
-        )
-        self.assertEqual(
-            self.session.read_text(encoding="utf-8"), "SESSION_REF=codex-session\n"
+            self.session.read_text(encoding="utf-8"), f"SESSION_REF={self.sid}\n"
         )
         self.assertNotIn("COST_USD", self.session.read_text(encoding="utf-8"))
-        self.assertIn(
-            '"thread_id":"codex-session"', self.log.read_text(encoding="utf-8")
-        )
+        self.assertIn(f'"thread_id":"{self.sid}"', self.log.read_text(encoding="utf-8"))
 
     def test_subscription_billing_uses_chatgpt_login_without_a_key(self):
         env = self.env(FOREMAN_BILLING="subscription")
@@ -735,44 +743,84 @@ class CodexCliAdapter(unittest.TestCase):
         )
 
     def test_resume_passes_the_session_ref(self):
-        proc = self.run_adapter("resume", "prior-session")
+        proc = self.run_adapter("resume", self.sid)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         args = self.capture_args()
         self.assertEqual(
             args[-6:],
-            [
-                "exec",
-                "resume",
-                "--json",
-                "--skip-git-repo-check",
-                "prior-session",
-                "-",
-            ],
+            ["exec", "resume", "--json", "--skip-git-repo-check", self.sid, "-"],
         )
         # The prompt still rides stdin via the trailing `-`.
         self.assertEqual(args[-1], "-")
-        self.assertIn("SESSION_REF=codex-session", self.session.read_text("utf-8"))
+        self.assertIn(f"SESSION_REF={self.sid}", self.session.read_text("utf-8"))
 
     def test_resume_requires_a_session_ref(self):
         proc = self.run_adapter("resume")
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("resume requires a session ref", proc.stderr)
 
-    def test_attach_uses_provider_environment_for_interactive_resume(self):
-        self.session.write_text("SESSION_REF=prior-session\n", encoding="utf-8")
+    def test_resume_rejects_option_shaped_session_ref(self):
+        # A corrupted agent-writable ledger must not smuggle `--last` (or any
+        # non-UUID) into Codex's positional parser and hijack another thread.
+        for bad in ("--last", "../etc", "codex-session"):
+            proc = self.run_adapter("resume", bad)
+            self.assertNotEqual(proc.returncode, 0, f"{bad!r} should be rejected")
+            self.assertIn("not a valid session id", proc.stderr)
+            self.assertFalse(self.capture.exists(), "codex must not launch")
+
+    def test_run_ignores_non_uuid_thread_id_from_stream(self):
+        # Only a UUID thread id becomes a resumable SESSION_REF.
+        proc = self.run_adapter("run", env=self.env(FAKE_CODEX_THREAD_ID="--last"))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(
+            self.session.exists() and self.session.read_text("utf-8").strip(),
+            "a non-UUID thread id must never be persisted as a session ref",
+        )
+
+    def test_attach_uses_provider_environment_without_sandbox_roots(self):
+        self.session.write_text(f"SESSION_REF={self.sid}\n", encoding="utf-8")
         proc = self.run_adapter("attach", "--session-file", str(self.session))
         self.assertEqual(proc.returncode, 0, proc.stderr)
         args = self.capture_args()
-        self.assertEqual(args[-2:], ["resume", "prior-session"])
+        self.assertEqual(args[-2:], ["resume", self.sid])
         self.assertIn("forced_login_method=api", args)
+        # Interactive attach takes no headless sandbox overrides — so it never
+        # broadens the sandbox with a writable root for an unused result path.
+        self.assertFalse(any(a.startswith("sandbox_") for a in args))
         self.assertEqual(self.capture_lines()["OPENAI_MATCH"], "yes")
+
+    def test_attach_rejects_option_shaped_ref_from_session_file(self):
+        self.session.write_text("SESSION_REF=--last\n", encoding="utf-8")
+        proc = self.run_adapter("attach", "--session-file", str(self.session))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("not a valid session id", proc.stderr)
+
+    def test_nonzero_max_turns_fails_closed(self):
+        # Codex exec has no turn cap; refuse rather than silently ignore a bound.
+        proc = self.run_adapter("run", env=self.env(FOREMAN_MAX_TURNS="5"))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("max_turns", proc.stderr)
+        self.assertFalse(self.capture.exists(), "codex must not launch")
+        # max_turns=0 (uncapped, the default) runs normally.
+        ok = self.run_adapter("run", env=self.env(FOREMAN_MAX_TURNS="0"))
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+
+    def test_writable_roots_are_toml_escaped(self):
+        # A result dir whose path contains a double quote must not break the
+        # writable_roots TOML array.
+        weird = self.root / 'a"b'
+        weird.mkdir()
+        env = self.env(FOREMAN_RESULT_FILE=str(weird / "result.json"))
+        proc = self.run_adapter("run", env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(r"a\"b", self.writable_roots_arg())
 
     def test_readonly_vet_uses_read_only_sandbox_and_no_json(self):
         proc = self.run_adapter("run", env=self.env(FOREMAN_READONLY="1"))
         self.assertEqual(proc.returncode, 0, proc.stderr)
         args = self.capture_args()
         self.assertIn("sandbox_mode=read-only", args)
-        # Vet never grants an extra writable root and never streams JSONL.
+        # Vet grants no writable root, enables no network, and streams no JSONL.
         self.assertFalse(any(a.startswith("sandbox_workspace_write") for a in args))
         self.assertNotIn("--json", args)
         self.assertEqual(args[-2:], ["--skip-git-repo-check", "-"])
