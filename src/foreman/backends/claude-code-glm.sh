@@ -37,10 +37,20 @@ foreman_claude_prepare() {
     export ANTHROPIC_DEFAULT_HAIKU_MODEL="glm-4.7"
     export ANTHROPIC_DEFAULT_FABLE_MODEL="glm-5.2[1m]"
     export CLAUDE_CODE_SUBAGENT_MODEL="glm-4.7"
-    # GLM responses can run long; give the Anthropic client a generous request
-    # timeout so it never aborts before foreman's own per-unit timeout
-    # (enforced in backend.py) governs the run.
-    export API_TIMEOUT_MS="3000000"
+    # GLM responses can run long. Keep the Anthropic client's per-request
+    # timeout above foreman's whole-unit budget (FOREMAN_TIMEOUT_MIN, enforced
+    # in backend.py) so the supervisor always owns the deadline and the client
+    # never aborts a request first. Fall back to a generous fixed value when the
+    # unit runs uncapped (timeout_min = 0) or the value is not a number.
+    _glm_timeout_min="${FOREMAN_TIMEOUT_MIN:-0}"
+    case "$_glm_timeout_min" in
+    '' | *[!0-9]*) _glm_timeout_min=0 ;;
+    esac
+    if [ "$_glm_timeout_min" -gt 0 ]; then
+        export API_TIMEOUT_MS="$(((_glm_timeout_min + 10) * 60 * 1000))"
+    else
+        export API_TIMEOUT_MS="3000000"
+    fi
     export CLAUDE_CODE_EFFORT_LEVEL="max"
     export ENABLE_CLAUDEAI_MCP_SERVERS="false"
 }

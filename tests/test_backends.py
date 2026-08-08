@@ -565,6 +565,16 @@ class GLMAdapter(unittest.TestCase):
             "provider error: overloaded", self.log.read_text(encoding="utf-8")
         )
 
+    def test_client_timeout_stays_above_foreman_deadline(self):
+        # The Anthropic client's per-request timeout must exceed foreman's
+        # whole-unit budget so the supervisor (backend.py) owns the deadline,
+        # never the client. Derived as (FOREMAN_TIMEOUT_MIN + 10 min) in ms.
+        self.run_adapter("run", env=self.env(FOREMAN_TIMEOUT_MIN="90"))
+        self.assertEqual(self.capture_lines()["TIMEOUT"], str((90 + 10) * 60 * 1000))
+        # Uncapped units (timeout_min = 0) fall back to a generous fixed value.
+        self.run_adapter("run", env=self.env(FOREMAN_TIMEOUT_MIN="0"))
+        self.assertEqual(self.capture_lines()["TIMEOUT"], "3000000")
+
 
 class BackendRunRecord(unittest.TestCase):
     def test_fresh_spawn_clears_stale_provider_session(self):
