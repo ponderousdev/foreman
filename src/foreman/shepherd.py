@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from foreman import backend as backend_mod
-from foreman import gate, gitops, report, spec, verify, worktree
+from foreman import gate, gitops, report, reviewer, spec, verify, worktree
 from foreman import signatures as signatures_mod
 from foreman import trust as trust_mod
 from foreman.config import Config
@@ -108,7 +108,9 @@ def classify_checks(rollup: list[dict] | None) -> tuple[str, list[dict]]:
 
 
 def automation_ready_now(
-    status: dict, review_threads: Callable[[], list[dict]]
+    status: dict,
+    review_threads: Callable[[], list[dict]],
+    reviewer_gate: Callable[[], reviewer.ReviewerVerdict] | None = None,
 ) -> bool:
     """One current-snapshot gate for automated readiness.
 
@@ -131,6 +133,28 @@ def automation_ready_now(
         and checks_state == "green"
         and structurally_ready
         and not any(not thread.get("isResolved") for thread in review_threads())
+        and (reviewer_gate is None or reviewer_gate().ready)
+    )
+
+
+def reviewer_verdict_now(gh: GitHub, status: dict) -> reviewer.ReviewerVerdict:
+    """Read and classify configured reviewer evidence for this exact head."""
+    if not gh.cfg.reviewer_login:
+        return reviewer.ReviewerVerdict("disabled", "external reviewer gate disabled")
+    return reviewer.reviewer_verdict(
+        gh.cfg,
+        status.get("headRefOid") or "",
+        gh.reviewer_evidence(status["number"]),
+    )
+
+
+def _automation_ready_for_gh(
+    gh: GitHub, status: dict, review_threads: Callable[[], list[dict]]
+) -> bool:
+    return automation_ready_now(
+        status,
+        review_threads,
+        lambda: reviewer_verdict_now(gh, status),
     )
 
 
@@ -144,7 +168,9 @@ def ready_for_review_now(gh: GitHub, status: dict) -> bool:
         not labels.isdisjoint(READY_FOR_REVIEW_LABELS)
         and current_label_bound
         and not status.get("isDraft")
-        and automation_ready_now(status, lambda: gh.review_threads(status["number"]))
+        and _automation_ready_for_gh(
+            gh, status, lambda: gh.review_threads(status["number"])
+        )
     )
 
 
@@ -180,8 +206,8 @@ def _demote_promoted_if_invalid(gh: GitHub, status: dict) -> bool:
         return False
     try:
         head = status.get("headRefOid") or ""
-        live_ready = bool(head) and automation_ready_now(
-            status, lambda: gh.review_threads(status["number"])
+        live_ready = bool(head) and _automation_ready_for_gh(
+            gh, status, lambda: gh.review_threads(status["number"])
         )
         recorded_head = _ready_head(status.get("body") or "")
         if not recorded_head and not status.get("isDraft") and live_ready:
@@ -205,8 +231,8 @@ def _recover_interrupted_promotion(gh: GitHub, status: dict) -> bool:
         return False
     head = status.get("headRefOid") or ""
     try:
-        if recorded_head == head and automation_ready_now(
-            status, lambda: gh.review_threads(status["number"])
+        if recorded_head == head and _automation_ready_for_gh(
+            gh, status, lambda: gh.review_threads(status["number"])
         ):
             return False
     except Exception:
@@ -246,7 +272,7 @@ def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str, dict | Non
             fresh_threads = gh.review_threads(status["number"])
         return fresh_threads
 
-    if not automation_ready_now(fresh, load_fresh_threads):
+    if not _automation_ready_for_gh(gh, fresh, load_fresh_threads):
         if had_ready_label or (started_draft and not fresh.get("isDraft")):
             _return_to_draft(gh, fresh)
         return (
@@ -291,8 +317,8 @@ def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str, dict | Non
             detail = "readiness changed before labeling compatibility PR"
         return False, detail, after
     try:
-        still_ready = automation_ready_now(
-            after, lambda: gh.review_threads(status["number"])
+        still_ready = _automation_ready_for_gh(
+            gh, after, lambda: gh.review_threads(status["number"])
         )
     except Exception:
         if must_return_to_draft:
@@ -324,7 +350,9 @@ def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str, dict | Non
             not final.get("isDraft")
             and final.get("headRefOid") == after_head
             and _ready_head(final.get("body") or "") == after_head
-            and automation_ready_now(final, lambda: gh.review_threads(status["number"]))
+            and _automation_ready_for_gh(
+                gh, final, lambda: gh.review_threads(status["number"])
+            )
         )
     except Exception:
         gh.draft_own_pr(status["number"])
@@ -835,12 +863,39 @@ def shepherd_pr(
             work.state, work.detail = "escalated", "adjudication agent failed"
         return work
 
-    if automation_ready_now(status, lambda: review_threads):
+    if _automation_ready_for_gh(gh, status, lambda: review_threads):
         ready, detail, revealed = _promote_ready_head(gh, status)
         revealed_merge_state = ((revealed or {}).get("mergeStateStatus") or "").upper()
         if not ready and revealed_merge_state in ("BEHIND", "DIRTY"):
             return _repair_merge_state(gh, cfg, root, selection, work)
         work.state, work.detail = ("ready" if ready else "settling", detail)
+    elif automation_ready_now(status, lambda: review_threads):
+        verdict = reviewer_verdict_now(gh, status)
+        if verdict.can_request:
+            attempt = verdict.next_attempt
+            assert attempt is not None
+            head = status.get("headRefOid") or ""
+            requested = gh.request_reviewer_own_pr(
+                work.number,
+                expected_head_oid=head,
+                body=reviewer.request_body(cfg, head, attempt),
+            )
+            if requested:
+                work.actions += 1
+                work.state, work.detail = (
+                    "settling",
+                    f"requested reviewer attempt {attempt} for current head",
+                )
+            else:
+                work.state, work.detail = (
+                    "settling",
+                    "head changed before reviewer request",
+                )
+        else:
+            work.state, work.detail = (
+                "settling",
+                f"reviewer {verdict.state}: {verdict.detail}",
+            )
     else:
         work.state, work.detail = "healthy", f"mergeState={merge_state or 'UNKNOWN'}"
     return work

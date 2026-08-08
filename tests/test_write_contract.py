@@ -44,6 +44,12 @@ def _mutations(gh):
         ),
         ("comment_own_pr", lambda: gh.comment_own_pr(1, "b")),
         (
+            "request_reviewer_own_pr",
+            lambda: gh.request_reviewer_own_pr(
+                1, expected_head_oid="abc", body="review"
+            ),
+        ),
+        (
             "upsert_status_comment",
             lambda: gh.upsert_status_comment(1, STATUS_MARKER + "\nb"),
         ),
@@ -206,6 +212,34 @@ class GuardedChannels(unittest.TestCase):
         self.assertEqual(
             edits, ["maintainer update\n<!-- foreman:ready-head:head -->\n"]
         )
+
+    def test_reviewer_request_requires_exact_current_head(self):
+        gh, runner = make_github()
+        runner.when(
+            ["pr", "view", "9"],
+            {
+                "number": 9,
+                "author": {"login": "bot"},
+                "labels": [],
+                "body": "",
+                "headRefOid": "new-head",
+                "isDraft": True,
+            },
+        )
+        self.assertFalse(
+            gh.request_reviewer_own_pr(
+                9, expected_head_oid="old-head", body="@review-bot review"
+            )
+        )
+        self.assertFalse(runner.called_with_prefix(["pr", "comment", "9"]))
+
+        runner.when(["pr", "comment", "9"], "")
+        self.assertTrue(
+            gh.request_reviewer_own_pr(
+                9, expected_head_oid="new-head", body="@review-bot review"
+            )
+        )
+        self.assertEqual(len(runner.called_with_prefix(["pr", "comment", "9"])), 1)
 
     def test_vet_comment_requires_human_approval(self):
         gh, runner = make_github()

@@ -4,7 +4,7 @@ Config is intent, not state: nothing here is written back by foreman.
 Python 3.11+ (tomllib).
 
 Plan-affecting configuration — runner, trusted_actors, required_capabilities,
-[verify] — is read from Foreman's OWN clone (the repo root it was invoked
+[reviewer], [verify] — is read from Foreman's OWN clone (the repo root it was invoked
 in, on the default branch), never from a dispatched branch: an agent must
 not be able to edit its own trust or its own gate (#14). Worktree copies of
 this file are never loaded.
@@ -49,6 +49,13 @@ class Config:
     # arming events are trusted (D4/D13). Empty = nobody is trusted: a
     # private repo with collaborators is then untrusted-input (fail closed).
     trusted_actors: list[str] = field(default_factory=list)
+    # Optional external-review gate. ``reviewer_login`` identifies the account
+    # whose GitHub-native evidence counts; ``reviewer_request`` is the exact
+    # provider-specific request text Foreman posts without interpreting it.
+    reviewer_login: str = ""
+    reviewer_request: str = ""
+    reviewer_timeout_min: int = 10
+    reviewer_max_attempts: int = 2
     max_parallel: int = 3
     dispatch_budget_usd: float = 20.0
     shepherd_budget_usd: float = 10.0
@@ -93,6 +100,12 @@ _ENV_OVERRIDES: dict[str, tuple[str, Callable[[str], object]]] = {
 }
 
 _TABLES = {
+    "reviewer": {
+        "login": "reviewer_login",
+        "request": "reviewer_request",
+        "timeout_min": "reviewer_timeout_min",
+        "max_attempts": "reviewer_max_attempts",
+    },
     "budgets": {
         "dispatch_usd": "dispatch_budget_usd",
         "shepherd_usd": "shepherd_budget_usd",
@@ -218,6 +231,41 @@ def _validate(cfg: Config) -> None:
         isinstance(login, str) and login for login in cfg.trusted_actors
     ):
         raise ForemanError("config: trusted_actors must be a list of logins")
+    if not isinstance(cfg.reviewer_login, str):
+        raise ForemanError("config: [reviewer].login must be a string")
+    if not isinstance(cfg.reviewer_request, str):
+        raise ForemanError("config: [reviewer].request must be a string")
+    if cfg.reviewer_login:
+        if not cfg.reviewer_login.strip():
+            raise ForemanError("config: [reviewer].login must be a non-empty login")
+        if cfg.reviewer_login != cfg.reviewer_login.strip():
+            raise ForemanError(
+                "config: [reviewer].login must not have surrounding whitespace"
+            )
+        if cfg.reviewer_login.startswith("@") or any(
+            char.isspace() for char in cfg.reviewer_login
+        ):
+            raise ForemanError(
+                "config: [reviewer].login is an account login, without @ or spaces"
+            )
+        if not cfg.reviewer_request.strip():
+            raise ForemanError(
+                "config: [reviewer].request is required when login is configured"
+            )
+        if "<!-- foreman:" in cfg.reviewer_request:
+            raise ForemanError(
+                "config: [reviewer].request must not contain Foreman markers"
+            )
+    elif cfg.reviewer_request:
+        raise ForemanError(
+            "config: [reviewer].login is required when request is configured"
+        )
+    for key, value in (
+        ("timeout_min", cfg.reviewer_timeout_min),
+        ("max_attempts", cfg.reviewer_max_attempts),
+    ):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise ForemanError(f"config: [reviewer].{key} must be an integer >= 1")
     if not isinstance(cfg.max_parallel, int) or isinstance(cfg.max_parallel, bool):
         raise ForemanError("config: max_parallel must be an integer")
     if cfg.max_parallel < 1:

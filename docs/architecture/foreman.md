@@ -189,6 +189,35 @@ Deterministic triggers → bounded agent actions on open foreman PRs:
   it is a human's turn; Foreman does not assert human approval or permission
   to merge, and performs no merge action of any kind.
 
+### Optional external-review gate
+
+`[reviewer]` adds one provider-neutral, current-head reviewer to the shared
+readiness predicate. Foreman does not parse provider prose or hard-code a bot.
+It accepts only GitHub-native terminal success from the configured `login`:
+an `APPROVED` review whose commit OID equals the current head, or a
+`THUMBS_UP` reaction on Foreman's own request comment. The request carries a
+hidden head-and-attempt marker, so reaction evidence cannot migrate across a
+push. An inline review comment, `CHANGES_REQUESTED`, or `THUMBS_DOWN` is a
+finding; success plus findings in the same attempt is contradictory and fails
+closed.
+
+Foreman requests review only after checks, merge state, and review threads are
+otherwise ready. Attempts are counted independently per head. A pending
+attempt waits for `timeout_min`; a timeout or fully dispositioned findings may
+start the next attempt up to `max_attempts`. Missing, stale, pending,
+contradictory, timed-out, or unreadable evidence blocks promotion and is shown
+as the shepherd detail. Status performs the same read-only revalidation and
+never requests review.
+
+| Evidence for the current head/attempt | Gate state |
+| --- | --- |
+| Exact-head `APPROVED`, or configured reviewer `THUMBS_UP` on the marked request | success |
+| Inline comments, `CHANGES_REQUESTED`, or `THUMBS_DOWN` | findings |
+| Both success and findings | contradictory |
+| Active request inside its time bound | pending |
+| No current request/evidence, stale-head evidence, or a retryable terminal result | request next bounded attempt |
+| Attempt bound exhausted or any evidence read is incomplete | blocked / fail closed |
+
 ### Draft-first compatibility
 
 PRs opened by current Foreman versions start as drafts. Already-open non-draft
@@ -249,14 +278,14 @@ USD budgets bind. Switching is a config flip plus one secret.
   `src/foreman/github.py` and nowhere else. Foreman may create/push its
   own branches, open draft PRs, promote its own drafts only through the
   current-head readiness gate, return its own PRs to draft when that evidence
-  is invalidated, edit its own PRs and their foreman-namespace labels, upsert
-  one marker-identified status comment per unit (snapshot + append-only event
-  log — one write primitive, still one comment), resolve threads it
-  dispositioned, post human-approved vet corrections, and ensure its label
-  definitions. It must never merge, close or reopen issues, edit issue
-  bodies/titles, touch human comments, or write fields/types/dependency edges
-  — those operations do not exist in the module, and the test suite greps to
-  keep them absent.
+  is invalidated, post bounded exact-head reviewer requests on its own PRs,
+  edit its own PRs and their foreman-namespace labels, upsert one
+  marker-identified status comment per unit (snapshot + append-only event log
+  — one write primitive, still one comment), resolve threads it dispositioned,
+  post human-approved vet corrections, and ensure its label definitions. It
+  must never merge, close or reopen issues, edit issue bodies/titles, touch
+  human comments, or write fields/types/dependency edges — those operations do
+  not exist in the module, and the test suite greps to keep them absent.
 - **Prompt-injection surface**: only trusted-actor comments (author in
   `trusted_actors`, or foreman's own) enter prompts, and untrusted authorship
   anywhere in the surface classifies the unit `untrusted-input` (D13);
@@ -321,6 +350,14 @@ expected_login = "your-bot"   # identity assertion; "" skips
 billing = "subscription"      # subscription | api
 sandboxed = false             # FOREMAN_SANDBOXED=1 env inside the bot container
 
+# Optional. Omit the table to preserve the default checks/threads/merge gate.
+# The account producing evidence may differ from the mention that requests it.
+[reviewer]
+login = "review-bot[bot]"
+request = "@review-bot review"
+timeout_min = 10
+max_attempts = 2
+
 # The composed verify gate (#29): a baseline plus capability-keyed additions.
 # The gate runs the baseline and every addition whose capability is present;
 # whatever does not run in-unit is GitHub Actions' job.
@@ -359,7 +396,7 @@ unit's requirements, so the unit is refused under `local` (naming `sprite`)
 and dispatchable under `sprite`. A repo is untrusted-input unless it is
 private *and* every account with access is a trusted actor (public ⇒ always
 untrusted; unenumerable ⇒ fail closed). Plan-affecting config — `runner`,
-`trusted_actors`, `required_capabilities`, `[verify]` — is read from the
+`trusted_actors`, `required_capabilities`, `[reviewer]`, `[verify]` — is read from the
 default branch of Foreman's own clone, never a dispatched branch.
 
 **Crash safety.** A unit's handle (PID + process start-time) is serialized
