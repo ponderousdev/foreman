@@ -107,8 +107,22 @@ task foreman:shepherd  # repair CI, adjudicate reviews, rebase, merge order
 task foreman:watch     # loop plan→dispatch→shepherd (-- --interval 5m)
 task foreman:status    # read-only snapshot + human-action queue
 task foreman:retry     # re-dispatch after a human closed a PR (-- --unit N)
+task foreman:attach    # local triage: inspect a preserved failure, then --execute (-- --unit N)
 task foreman:cleanup   # prune worktrees/branches for closed units
 ```
+
+`foreman attach` is a two-step **local-triage** flow, not managed execution.
+`foreman attach --unit N` inspects the preserved unit — worktree, resume-state,
+and the exact follow-up command — with no side effects; `foreman attach --unit N
+--execute` then starts the interactive attach. The `--execute` split is a
+deliberate confirmation: it launches an interactive provider session on the
+operator's machine, so nothing starts merely from inspecting. Foreman uses the
+backend recorded for the unit, requires that backend to advertise the `attach`
+capability, and launches it with the same Foreman-controlled, allowlisted
+environment used for agent work — the operator never re-supplies provider
+configuration or a session reference. This differs from `resume`, which Foreman
+drives itself during managed execution (e.g. the shepherd re-entering a unit's
+agent after a mechanical failure); `attach` is the human path for local triage.
 
 ## Per-unit flow
 
@@ -294,11 +308,12 @@ backend_version = "2.1.167"
 billing = "api"
 ```
 
-The adapter advertises `resume` because Claude Code's session reference works
-under the same fixed provider configuration. It deliberately does not advertise
-`cost`: the custom-provider stream has no cost value Foreman can independently
-verify. Provider errors remain in `agent.log`, and Foreman's runner owns the
-unchanged timeout/kill path.
+The adapter advertises `resume attach` because Claude Code's session reference
+works under the same fixed provider configuration — `resume` for managed
+re-entry during execution, `attach` for the two-step local-triage flow. It
+deliberately does not advertise `cost`: the custom-provider stream has no cost
+value Foreman can independently verify. Provider errors remain in `agent.log`,
+and Foreman's runner owns the unchanged timeout/kill path.
 
 ### Claude Code with Kimi
 
@@ -327,7 +342,7 @@ backend_version = "2.1.167"
 billing = "api"
 ```
 
-Like the DeepSeek wrapper, it advertises `resume` but not `cost`: the
+Like the DeepSeek wrapper, it advertises `resume attach` but not `cost`: the
 custom-provider stream carries no cost value Foreman can independently verify.
 Provider errors remain in `agent.log`, and Foreman's runner owns the unchanged
 timeout/kill path.
@@ -360,8 +375,8 @@ backend_version = "2.1.167"
 billing = "api"
 ```
 
-Like the other provider wrappers, it advertises `resume` but not `cost`: the
-custom-provider stream carries no cost value Foreman can independently verify.
+Like the other provider wrappers, it advertises `resume attach` but not `cost`:
+the custom-provider stream carries no cost value Foreman can independently verify.
 Provider errors remain in `agent.log`, and Foreman's runner owns the unchanged
 timeout/kill path.
 
@@ -608,10 +623,15 @@ every consumer's next `uvx` resolution. See
 ## Extending
 
 - **Backends**: `src/foreman/backends/<name>.sh` is the entire vendor
-  surface (`run` / `resume <ref>` / `capabilities`). Production adapters are
-  `claude.sh`, `claude-code-deepseek.sh`, `claude-code-kimi.sh`,
-  `claude-code-glm.sh`, and `codex-cli.sh` (OpenAI Codex CLI); `mock.sh` is a
-  hermetic seam proof.
+  surface (`run` / `resume <ref>` / `attach [session-ref | --session-file
+  <path>]` / `capabilities`). Each adapter's `capabilities` prints the tokens it
+  supports: `resume` (re-enter a session under the fixed provider config),
+  `cost` (report a verified USD figure), and `attach` (support the two-step
+  local-triage flow above). Production adapters are
+  `claude.sh` (`resume cost attach`), `claude-code-deepseek.sh`,
+  `claude-code-kimi.sh`, `claude-code-glm.sh`, and `codex-cli.sh`
+  (OpenAI Codex CLI) — the four provider wrappers advertise `resume attach`;
+  `mock.sh` is a hermetic seam proof.
   Claude Code adapters share only execution mechanics under `backends/lib/`;
   provider credentials and model wiring remain in the named adapter.
 - **Runners**: implement the `Runner` protocol (`src/foreman/runner/`) and

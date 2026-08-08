@@ -142,8 +142,33 @@ foreman status   --milestone 1 # read-only snapshot + the human-action queue
 
 Also: `foreman vet` (read-only agent analysis of the target that drafts
 correction comments for human approval), `foreman retry --unit N`,
-`foreman attach --unit N` (resume a preserved failed unit in place),
-`foreman cleanup`. Any target takes `--milestone <n|title>` or `--issue <n>`.
+`foreman attach --unit N` (local triage for a preserved failed unit — see
+below), `foreman cleanup`. Any target takes `--milestone <n|title>` or
+`--issue <n>`.
+
+### 4. Triage a preserved failure
+
+When a unit fails, Foreman preserves its worktree, the captured agent session,
+and a generated resume-state, and leaves the issue open. `foreman attach`
+re-enters that state locally in two deliberate steps:
+
+```bash
+foreman attach --unit 42            # inspect: prints the worktree, resume-state,
+                                    #   and the exact follow-up command. No side effects.
+foreman attach --unit 42 --execute  # start the interactive attach in the worktree.
+```
+
+The first command only reads and prints. `--execute` is a separate confirmation
+because it launches an interactive provider session on your machine — nothing
+starts merely from inspecting. Foreman uses the backend **recorded for that
+unit** and launches it with the same Foreman-controlled, allowlisted environment
+used for agent work, so you never re-supply provider configuration or a session
+reference by hand. It requires a backend that advertises the `attach` capability
+(every Claude Code adapter and `codex-cli` do).
+
+This is distinct from `resume`, which Foreman drives itself during managed
+execution (the shepherd re-entering a unit's agent after a mechanical failure).
+`attach` is the human-in-the-loop path for local triage.
 
 ## Setup
 
