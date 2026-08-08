@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from foreman import signatures as signatures_mod
 from foreman.config import Config
@@ -14,6 +15,10 @@ from foreman.github import (
     READY_FOR_REVIEW_LABEL,
 )
 from foreman.shepherd import (
+    _demote_promoted_if_invalid,
+    _promote_ready_head,
+    _recover_interrupted_promotion,
+    _return_to_draft,
     automation_ready_now,
     classify_checks,
     open_foreman_prs,
@@ -56,11 +61,23 @@ class LabelTransition(unittest.TestCase):
             "number": 9,
             "state": "OPEN",
             "isDraft": False,
+            "body": "<!-- foreman:ready-head:head -->",
+            "headRefOid": "head",
             "statusCheckRollup": [{"status": "COMPLETED", "conclusion": "SUCCESS"}],
             "mergeStateStatus": "CLEAN",
         }
         for label in (READY_FOR_REVIEW_LABEL, LEGACY_READY_FOR_REVIEW_LABEL):
-            status = dict(base, labels=[{"name": label}])
+            body = (
+                "<!-- foreman:ready-head:head -->"
+                if label == READY_FOR_REVIEW_LABEL
+                else ""
+            )
+            status = dict(
+                base,
+                body=body,
+                headRefOid="head",
+                labels=[{"name": label}],
+            )
             self.assertTrue(ready_for_review_now(gh, status), label)
 
         stale = dict(
@@ -88,20 +105,32 @@ class LabelTransition(unittest.TestCase):
 
     def test_shepherd_writes_only_namespaced_ready_label(self):
         gh, _runner = make_github()
-        gh.pr_status = lambda number: {  # type: ignore[method-assign]
-            "number": number,
+        status = {
+            "number": 9,
             "title": "feat: unit 1",
             "url": "https://github.com/owner/repo/pull/9",
             "headRefName": "foreman/feat/1-unit",
+            "headRefOid": "head",
+            "isDraft": False,
+            "labels": [],
             "statusCheckRollup": [{"status": "COMPLETED", "conclusion": "SUCCESS"}],
             "mergeStateStatus": "CLEAN",
             "mergeable": "MERGEABLE",
         }
+        gh.pr_status = lambda number: status  # type: ignore[method-assign]
         gh.review_threads = lambda number: []  # type: ignore[assignment]
+        gh.promote_own_pr = lambda *args, **kwargs: (True, False)  # type: ignore[method-assign]
+        gh.record_ready_head_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, expected_head_oid: (
+                status.update(body=f"<!-- foreman:ready-head:{expected_head_oid} -->")
+                or True
+            )
+        )
         writes = []
         gh.label_own_pr = (  # type: ignore[method-assign]
-            lambda number, *, add=None, remove=None: writes.append(
-                (number, add, remove)
+            lambda number, *, add=None, remove=None: (
+                writes.append((number, add, remove))
+                or status["labels"].extend({"name": name} for name in add or [])
             )
         )
         work = shepherd_pr(
@@ -125,7 +154,9 @@ class SharedReadinessGate(unittest.TestCase):
             "state": "OPEN",
             "isDraft": False,
             "labels": [{"name": READY_FOR_REVIEW_LABEL}],
+            "body": "<!-- foreman:ready-head:head -->",
             "headRefName": "foreman/feat/1-unit",
+            "headRefOid": "head",
             "statusCheckRollup": [{"status": "COMPLETED", "conclusion": "SUCCESS"}],
             "mergeStateStatus": merge_state,
             "mergeable": mergeable,
@@ -144,10 +175,22 @@ class SharedReadinessGate(unittest.TestCase):
                 status = self._status(merge_state, mergeable=mergeable)
                 gh.pr_status = lambda number, status=status: status  # type: ignore[method-assign]
                 gh.review_threads = lambda number: []  # type: ignore[assignment]
+                gh.promote_own_pr = lambda *args, **kwargs: (True, False)  # type: ignore[method-assign]
+                gh.record_ready_head_own_pr = (  # type: ignore[method-assign]
+                    lambda number, *, expected_head_oid, status=status: (
+                        status.update(
+                            body=f"<!-- foreman:ready-head:{expected_head_oid} -->"
+                        )
+                        or True
+                    )
+                )
                 writes = []
+                drafted = []
+                gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
                 gh.label_own_pr = (  # type: ignore[method-assign]
-                    lambda number, *, add=None, remove=None: writes.append(
-                        (number, add, remove)
+                    lambda number, *, add=None, remove=None: (
+                        writes.append((number, add, remove))
+                        or status["labels"].extend({"name": name} for name in add or [])
                     )
                 )
 
@@ -163,7 +206,11 @@ class SharedReadinessGate(unittest.TestCase):
 
                 self.assertEqual(work.state == "ready", expected)
                 self.assertEqual(displayed_ready, expected)
-                self.assertEqual(bool(writes), expected)
+                self.assertEqual(
+                    any(add == [READY_FOR_REVIEW_LABEL] for _, add, _ in writes),
+                    expected,
+                )
+                self.assertEqual(bool(drafted), not expected)
 
     def test_unstable_pending_checks_do_not_label_or_dispatch_a_fixer(self):
         gh, _runner = make_github()
@@ -177,6 +224,8 @@ class SharedReadinessGate(unittest.TestCase):
         ]
         gh.pr_status = lambda number: status  # type: ignore[method-assign]
         writes = []
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
         gh.label_own_pr = (  # type: ignore[method-assign]
             lambda number, *, add=None, remove=None: writes.append(
                 (number, add, remove)
@@ -194,7 +243,8 @@ class SharedReadinessGate(unittest.TestCase):
 
         self.assertEqual(work.state, "settling")
         self.assertEqual(work.actions, 0)
-        self.assertEqual(writes, [])
+        self.assertEqual(drafted, [9])
+        self.assertEqual(writes, [(9, None, [READY_FOR_REVIEW_LABEL])])
 
     def test_gate_rejects_unresolved_threads(self):
         status = self._status("CLEAN")
@@ -203,6 +253,487 @@ class SharedReadinessGate(unittest.TestCase):
                 status, lambda: [{"id": "thread", "isResolved": False}]
             )
         )
+
+
+class DraftLifecycle(unittest.TestCase):
+    def _status(
+        self,
+        *,
+        head: str = "head",
+        draft: bool = True,
+        checks: str = "SUCCESS",
+        labels: list[str] | None = None,
+        merge_state: str | None = None,
+    ) -> dict:
+        return {
+            "number": 9,
+            "title": "feat: unit 1",
+            "url": "https://github.com/owner/repo/pull/9",
+            "state": "OPEN",
+            "isDraft": draft,
+            "labels": [{"name": label} for label in labels or []],
+            "headRefName": "foreman/feat/1-unit",
+            "headRefOid": head,
+            "statusCheckRollup": [{"status": "COMPLETED", "conclusion": checks}],
+            "mergeStateStatus": merge_state or ("DRAFT" if draft else "CLEAN"),
+            "mergeable": "MERGEABLE",
+        }
+
+    def _shepherd(self, gh):
+        return shepherd_pr(
+            gh,
+            Config(remote="origin"),
+            Path("."),
+            None,  # type: ignore[arg-type]
+            {"number": 9, "_unit": 1},
+            [],
+        )
+
+    def test_draft_is_promoted_only_after_post_transition_revalidation(self):
+        gh, _runner = make_github()
+        statuses = iter(
+            [
+                self._status(),
+                self._status(),
+                self._status(draft=False),
+                dict(
+                    self._status(draft=False, labels=[READY_FOR_REVIEW_LABEL]),
+                    body="<!-- foreman:ready-head:head -->",
+                ),
+            ]
+        )
+        gh.pr_status = lambda number: next(statuses)  # type: ignore[method-assign]
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
+        promotions = []
+        gh.promote_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, expected_head_oid: (
+                promotions.append((number, expected_head_oid)) or (True, True)
+            )
+        )
+        gh.record_ready_head_own_pr = lambda *args, **kwargs: True  # type: ignore[method-assign]
+        writes = []
+        gh.label_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, add=None, remove=None: writes.append(
+                (number, add, remove)
+            )
+        )
+
+        work = self._shepherd(gh)
+
+        self.assertEqual(work.state, "ready")
+        self.assertIn("promoted", work.detail)
+        self.assertEqual(promotions, [(9, "head")])
+        self.assertEqual(writes, [(9, [READY_FOR_REVIEW_LABEL], None)])
+
+    def test_failed_checks_leave_draft_unpromoted(self):
+        gh, _runner = make_github()
+        gh.pr_status = lambda number: self._status(checks="FAILURE")  # type: ignore[method-assign]
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
+        promoted = []
+        gh.promote_own_pr = lambda *args, **kwargs: promoted.append(True)  # type: ignore[method-assign]
+
+        ready, detail, _revealed = _promote_ready_head(gh, self._status())
+
+        self.assertFalse(ready)
+        self.assertIn("keeping PR in draft", detail)
+        self.assertEqual(promoted, [])
+
+    def test_unresolved_threads_leave_draft_unpromoted(self):
+        gh, _runner = make_github()
+        gh.pr_status = lambda number: self._status()  # type: ignore[method-assign]
+        gh.review_threads = lambda number: [  # type: ignore[assignment]
+            {"id": "thread", "isResolved": False}
+        ]
+        promoted = []
+        gh.promote_own_pr = lambda *args, **kwargs: promoted.append(True)  # type: ignore[method-assign]
+
+        ready, detail, _revealed = _promote_ready_head(gh, self._status())
+
+        self.assertFalse(ready)
+        self.assertIn("keeping PR in draft", detail)
+        self.assertEqual(promoted, [])
+
+    def test_missing_head_is_indeterminate_and_stays_draft(self):
+        gh, _runner = make_github()
+        status = self._status()
+        status["headRefOid"] = ""
+        ready, detail, _revealed = _promote_ready_head(gh, status)
+        self.assertFalse(ready)
+        self.assertIn("indeterminate", detail)
+
+    def test_changed_head_during_promotion_is_returned_to_draft(self):
+        gh, _runner = make_github()
+        statuses = iter(
+            [
+                self._status(),
+                self._status(),
+                self._status(head="new-head", draft=False),
+            ]
+        )
+        gh.pr_status = lambda number: next(statuses)  # type: ignore[method-assign]
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
+        gh.promote_own_pr = lambda *args, **kwargs: (True, True)  # type: ignore[method-assign]
+        gh.record_ready_head_own_pr = lambda *args, **kwargs: True  # type: ignore[method-assign]
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
+
+        work = self._shepherd(gh)
+
+        self.assertEqual(work.state, "settling")
+        self.assertIn("returned PR to draft", work.detail)
+        self.assertEqual(drafted, [9])
+
+    def test_existing_non_draft_pr_uses_head_guard_without_transition(self):
+        gh, _runner = make_github()
+        status = self._status(draft=False)
+        gh.pr_status = lambda number: status  # type: ignore[method-assign]
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
+        promoted = []
+        gh.promote_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, expected_head_oid: (
+                promoted.append((number, expected_head_oid)) or (True, False)
+            )
+        )
+        gh.record_ready_head_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, expected_head_oid: (
+                status.update(body=f"<!-- foreman:ready-head:{expected_head_oid} -->")
+                or True
+            )
+        )
+        writes = []
+        gh.label_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, add=None, remove=None: (
+                writes.append((number, add, remove))
+                or status["labels"].extend({"name": name} for name in add or [])
+            )
+        )
+
+        work = self._shepherd(gh)
+
+        self.assertEqual(work.state, "ready")
+        self.assertEqual(promoted, [(9, "head")])
+        self.assertEqual(writes, [(9, [READY_FOR_REVIEW_LABEL], None)])
+
+    def test_already_draft_invalid_pr_loses_stale_readiness_label(self):
+        gh, _runner = make_github()
+        status = self._status(draft=True, labels=[READY_FOR_REVIEW_LABEL])
+        status["statusCheckRollup"] = [{"status": "PENDING", "conclusion": ""}]
+        gh.pr_status = lambda number: status  # type: ignore[method-assign]
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
+        writes = []
+        gh.label_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, add=None, remove=None: writes.append(
+                (number, add, remove)
+            )
+        )
+
+        work = self._shepherd(gh)
+
+        self.assertEqual(work.state, "settling")
+        self.assertEqual(drafted, [9])
+        self.assertEqual(writes, [(9, None, [READY_FOR_REVIEW_LABEL])])
+
+    def test_label_failure_after_promotion_returns_pr_to_draft(self):
+        gh, _runner = make_github()
+        statuses = iter([self._status(), self._status(draft=False)])
+        gh.pr_status = lambda number: next(statuses)  # type: ignore[method-assign]
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
+        gh.promote_own_pr = lambda *args, **kwargs: (True, True)  # type: ignore[method-assign]
+        gh.record_ready_head_own_pr = lambda *args, **kwargs: True  # type: ignore[method-assign]
+        gh.label_own_pr = (  # type: ignore[method-assign]
+            lambda *args, **kwargs: (_ for _ in ()).throw(ForemanError("boom"))
+        )
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(ForemanError, "boom"):
+            _promote_ready_head(gh, self._status())
+
+        self.assertEqual(drafted, [9])
+
+    def test_promotion_exception_propagates_after_facade_compensation(self):
+        gh, _runner = make_github()
+        gh.pr_status = lambda number: self._status()  # type: ignore[method-assign]
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
+
+        def failed_promotion(number, **_kwargs):
+            gh.draft_own_pr(number)
+            raise ForemanError("lost")
+
+        gh.promote_own_pr = failed_promotion  # type: ignore[method-assign]
+        gh.record_ready_head_own_pr = lambda *args, **kwargs: True  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(ForemanError, "lost"):
+            _promote_ready_head(gh, self._status())
+
+        self.assertEqual(drafted, [9])
+
+    def test_labeled_head_change_is_invalidated_during_fresh_read(self):
+        gh, _runner = make_github()
+        initial = self._status(draft=False, labels=[READY_FOR_REVIEW_LABEL])
+        gh.pr_status = lambda number: self._status(  # type: ignore[method-assign]
+            head="new", draft=False, labels=[READY_FOR_REVIEW_LABEL]
+        )
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
+        writes = []
+        gh.label_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, add=None, remove=None: writes.append(
+                (number, add, remove)
+            )
+        )
+
+        ready, _detail, _revealed = _promote_ready_head(gh, initial)
+
+        self.assertFalse(ready)
+        self.assertEqual(drafted, [9])
+        self.assertEqual(writes, [(9, None, [READY_FOR_REVIEW_LABEL])])
+
+    def test_labeled_head_change_after_guard_is_returned_to_draft(self):
+        gh, _runner = make_github()
+        initial = dict(
+            self._status(draft=False, labels=[READY_FOR_REVIEW_LABEL]),
+            body="<!-- foreman:ready-head:head -->",
+        )
+        statuses = iter(
+            [
+                initial,
+                dict(
+                    self._status(
+                        head="new", draft=False, labels=[READY_FOR_REVIEW_LABEL]
+                    ),
+                    body="<!-- foreman:ready-head:head -->",
+                ),
+            ]
+        )
+        gh.pr_status = lambda number: next(statuses)  # type: ignore[method-assign]
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
+        gh.record_ready_head_own_pr = lambda *args, **kwargs: True  # type: ignore[method-assign]
+        gh.promote_own_pr = lambda *args, **kwargs: (True, False)  # type: ignore[method-assign]
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
+        writes = []
+        gh.label_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, add=None, remove=None: writes.append(
+                (number, add, remove)
+            )
+        )
+
+        ready, detail, _revealed = _promote_ready_head(gh, initial)
+
+        self.assertFalse(ready)
+        self.assertIn("returned PR to draft", detail)
+        self.assertEqual(drafted, [9])
+        self.assertEqual(writes, [(9, None, [READY_FOR_REVIEW_LABEL])])
+
+    def test_label_cleanup_is_attempted_when_redraft_fails(self):
+        gh, _runner = make_github()
+        status = self._status(draft=False, labels=[READY_FOR_REVIEW_LABEL])
+        gh.draft_own_pr = lambda number: (_ for _ in ()).throw(  # type: ignore[method-assign]
+            ForemanError("draft unavailable")
+        )
+        writes = []
+
+        def fail_label_cleanup(number, *, add=None, remove=None):
+            writes.append((number, add, remove))
+            raise ForemanError("label cleanup unavailable")
+
+        gh.label_own_pr = fail_label_cleanup  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(ForemanError, "draft unavailable"):
+            _return_to_draft(gh, status)
+
+        self.assertEqual(writes, [(9, None, [READY_FOR_REVIEW_LABEL])])
+
+    def test_green_push_invalidates_persisted_ready_head_for_one_tick(self):
+        gh, _runner = make_github()
+        status = self._status(draft=False, labels=[READY_FOR_REVIEW_LABEL])
+        status["body"] = "<!-- foreman:ready-head:old -->"
+        gh.pr_status = lambda number: status  # type: ignore[method-assign]
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
+        writes = []
+        gh.label_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, add=None, remove=None: writes.append(
+                (number, add, remove)
+            )
+        )
+        gh.promote_own_pr = lambda *args, **kwargs: self.fail("re-promoted")  # type: ignore[method-assign]
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
+
+        work = self._shepherd(gh)
+
+        self.assertEqual(work.state, "settling")
+        self.assertEqual(drafted, [9])
+        self.assertEqual(writes, [(9, None, [READY_FOR_REVIEW_LABEL])])
+
+    def test_pre_marker_ready_pr_is_migrated_without_demotion(self):
+        gh, _runner = make_github()
+        status = self._status(draft=False, labels=[READY_FOR_REVIEW_LABEL])
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
+        recorded = []
+        gh.record_ready_head_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, expected_head_oid: (
+                recorded.append((number, expected_head_oid)) or True
+            )
+        )
+        gh.draft_own_pr = lambda number: self.fail("demoted")  # type: ignore[method-assign]
+
+        self.assertFalse(_demote_promoted_if_invalid(gh, status))
+        self.assertEqual(recorded, [(9, "head")])
+
+    def test_push_during_final_writes_is_returned_to_draft(self):
+        gh, _runner = make_github()
+        statuses = iter(
+            [
+                self._status(),
+                self._status(draft=False),
+                dict(
+                    self._status(
+                        head="new", draft=False, labels=[READY_FOR_REVIEW_LABEL]
+                    ),
+                    body="<!-- foreman:ready-head:head -->",
+                ),
+            ]
+        )
+        gh.pr_status = lambda number: next(statuses)  # type: ignore[method-assign]
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
+        gh.promote_own_pr = lambda *args, **kwargs: (True, True)  # type: ignore[method-assign]
+        gh.record_ready_head_own_pr = lambda *args, **kwargs: True  # type: ignore[method-assign]
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
+        writes = []
+        gh.label_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, add=None, remove=None: writes.append(
+                (number, add, remove)
+            )
+        )
+
+        ready, detail, _revealed = _promote_ready_head(gh, self._status())
+
+        self.assertFalse(ready)
+        self.assertIn("final writes", detail)
+        self.assertEqual(drafted, [9])
+        self.assertEqual(
+            writes,
+            [
+                (9, [READY_FOR_REVIEW_LABEL], None),
+                (9, None, [READY_FOR_REVIEW_LABEL]),
+            ],
+        )
+
+    def test_interrupted_promotion_with_invalid_evidence_is_recovered(self):
+        gh, _runner = make_github()
+        status = dict(
+            self._status(draft=False, checks="FAILURE"),
+            body="<!-- foreman:ready-head:head -->",
+        )
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
+
+        self.assertTrue(_recover_interrupted_promotion(gh, status))
+        self.assertEqual(drafted, [9])
+
+    def test_interrupted_promotion_thread_read_failure_returns_to_draft(self):
+        gh, _runner = make_github()
+        status = dict(
+            self._status(draft=False),
+            body="<!-- foreman:ready-head:head -->",
+        )
+        gh.review_threads = lambda number: (_ for _ in ()).throw(  # type: ignore[assignment]
+            ForemanError("threads unavailable")
+        )
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(ForemanError, "threads unavailable"):
+            _recover_interrupted_promotion(gh, status)
+
+        self.assertEqual(drafted, [9])
+
+    def test_initial_status_failure_demotes_from_pr_list_snapshot(self):
+        gh, _runner = make_github()
+        gh.pr_status = lambda number: (_ for _ in ()).throw(  # type: ignore[method-assign]
+            ForemanError("checks unavailable")
+        )
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
+        writes = []
+        gh.label_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, add=None, remove=None: writes.append(
+                (number, add, remove)
+            )
+        )
+        pr = {
+            "number": 9,
+            "_unit": 1,
+            "isDraft": False,
+            "body": "<!-- foreman:ready-head:head -->",
+            "labels": [{"name": READY_FOR_REVIEW_LABEL}],
+        }
+
+        with self.assertRaisesRegex(ForemanError, "checks unavailable"):
+            shepherd_pr(
+                gh,
+                Config(remote="origin"),
+                Path("."),
+                None,  # type: ignore[arg-type]
+                pr,
+                [],
+            )
+
+        self.assertEqual(drafted, [9])
+        self.assertEqual(writes, [(9, None, [READY_FOR_REVIEW_LABEL])])
+
+    def test_conflicting_draft_routes_directly_to_merge_repair(self):
+        gh, _runner = make_github()
+        status = self._status()
+        status["mergeable"] = "CONFLICTING"
+        gh.pr_status = lambda number: status  # type: ignore[method-assign]
+
+        def repaired(_gh, _cfg, _root, _selection, work):
+            work.state, work.detail = "rebased", "draft conflict repaired"
+            return work
+
+        with patch(
+            "foreman.shepherd._repair_merge_state", side_effect=repaired
+        ) as repair:
+            work = self._shepherd(gh)
+
+        self.assertEqual(work.state, "rebased")
+        repair.assert_called_once()
+
+    def test_draft_that_reveals_behind_is_routed_to_rebase(self):
+        gh, _runner = make_github()
+        statuses = iter(
+            [
+                self._status(),
+                self._status(),
+                self._status(draft=False, merge_state="BEHIND"),
+            ]
+        )
+        gh.pr_status = lambda number: next(statuses)  # type: ignore[method-assign]
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
+        gh.promote_own_pr = lambda *args, **kwargs: (True, True)  # type: ignore[method-assign]
+        gh.record_ready_head_own_pr = lambda *args, **kwargs: True  # type: ignore[method-assign]
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
+
+        def repaired(_gh, _cfg, _root, _selection, work):
+            work.state, work.detail = "rebased", "hidden behind state repaired"
+            return work
+
+        with patch(
+            "foreman.shepherd._repair_merge_state", side_effect=repaired
+        ) as repair:
+            work = self._shepherd(gh)
+
+        self.assertEqual(work.state, "rebased")
+        self.assertEqual(drafted, [9])
+        repair.assert_called_once()
 
 
 class ReviewThreadReads(unittest.TestCase):

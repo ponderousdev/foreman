@@ -142,11 +142,13 @@ task foreman:cleanup   # prune worktrees/branches for closed units
    bodies, and trusted comments) unchanged since dispatch, and no PR
    appeared meanwhile.
    Drift means no push and a flagged unit.
-8. **PR** — non-draft (review bots skip drafts), machine-readable marker,
-   `Closes #N` (or `Refs` when human tasks remain), test evidence, Handoff,
-   and human-only-tasks sections. On failure the worktree, session ref, and
-   a generated resume-state are preserved; the issue stays open so
-   dependents stay blocked.
+8. **PR** — a draft workbench with a machine-readable marker, `Closes #N`
+   (or `Refs` when human tasks remain), test evidence, Handoff, and
+   human-only-tasks sections. Checks, rebases, fixes, and thread adjudication
+   happen while draft. Only the shepherd's live readiness gate may promote
+   it for human review. On failure the worktree, session ref, and a generated
+   resume-state are preserved; the issue stays open so dependents stay
+   blocked.
 9. **Status comment** — exactly one foreman-owned comment per unit, found by
    marker and edited in place. Two sections split by a second marker
    (`<!-- foreman:event-log -->`): the regenerated **snapshot** (state,
@@ -179,10 +181,23 @@ Deterministic triggers → bounded agent actions on open foreman PRs:
   dispositions — its token is read-only — and foreman posts each reply and
   resolves each thread through the write contract, then re-checks
   disposition completeness deterministically.
-- **Green + adjudicated + mergeable** → `foreman:ready-for-review` plus a
-  dependency-aware suggested review order. This proves only that automation
-  is complete and it is a human's turn; Foreman does not assert human approval
-  or permission to merge, and performs no merge action of any kind.
+- **Green + adjudicated + mergeable on the exact current head** → promote the
+  draft, apply `foreman:ready-for-review`, and report a dependency-aware
+  suggested review order. The guarded mutation checks the head immediately
+  before promotion, and a post-transition read returns the PR to draft if a
+  push raced the transition. This proves only that automation is complete and
+  it is a human's turn; Foreman does not assert human approval or permission
+  to merge, and performs no merge action of any kind.
+
+### Draft-first compatibility
+
+PRs opened by current Foreman versions start as drafts. Already-open non-draft
+Foreman PRs remain eligible for shepherding and may receive the namespaced
+readiness label without a redundant promotion. Once Foreman has applied that
+label, a later push, failed or indeterminate check, stale merge state, or new
+unresolved thread invalidates the evidence: Foreman removes its current label
+and returns the PR to the draft workbench. Legacy readiness labels remain
+read-only throughout the label-migration compatibility period.
 
 ### PR-label migration compatibility
 
@@ -232,14 +247,16 @@ USD budgets bind. Switching is a config flip plus one secret.
   refuses to write.
 - **Write contract**: every GitHub mutation lives in
   `src/foreman/github.py` and nowhere else. Foreman may create/push its
-  own branches, open non-draft PRs, edit its own PRs and their
-  foreman-namespace labels, upsert one marker-identified status comment per
-  unit (snapshot + append-only event log — one write primitive, still one
-  comment), resolve threads it dispositioned, post human-approved vet
-  corrections, and ensure its label definitions. It must never merge, close
-  or reopen issues, edit issue bodies/titles, touch human comments, or write
-  fields/types/dependency edges — those operations do not exist in the
-  module, and the test suite greps to keep them absent.
+  own branches, open draft PRs, promote its own drafts only through the
+  current-head readiness gate, return its own PRs to draft when that evidence
+  is invalidated, edit its own PRs and their foreman-namespace labels, upsert
+  one marker-identified status comment per unit (snapshot + append-only event
+  log — one write primitive, still one comment), resolve threads it
+  dispositioned, post human-approved vet corrections, and ensure its label
+  definitions. It must never merge, close or reopen issues, edit issue
+  bodies/titles, touch human comments, or write fields/types/dependency edges
+  — those operations do not exist in the module, and the test suite greps to
+  keep them absent.
 - **Prompt-injection surface**: only trusted-actor comments (author in
   `trusted_actors`, or foreman's own) enter prompts, and untrusted authorship
   anywhere in the surface classifies the unit `untrusted-input` (D13);

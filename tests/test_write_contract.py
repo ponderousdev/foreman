@@ -28,6 +28,15 @@ def _mutations(gh):
             "create_pr",
             lambda: gh.create_pr(title="t", body="b", head="h", base="main", labels=[]),
         ),
+        (
+            "promote_own_pr",
+            lambda: gh.promote_own_pr(1, expected_head_oid="abc"),
+        ),
+        ("draft_own_pr", lambda: gh.draft_own_pr(1)),
+        (
+            "record_ready_head_own_pr",
+            lambda: gh.record_ready_head_own_pr(1, expected_head_oid="abc"),
+        ),
         ("edit_own_pr_body", lambda: gh.edit_own_pr_body(1, "b")),
         (
             "label_own_pr",
@@ -91,6 +100,113 @@ class LabelVocabulary(unittest.TestCase):
 
 
 class GuardedChannels(unittest.TestCase):
+    def test_pr_creation_is_always_draft(self):
+        gh, runner = make_github()
+        runner.when(["pr", "create"], "https://github.com/owner/repo/pull/9")
+        gh.create_pr(title="t", body="b", head="h", base="main", labels=[])
+        creates = runner.called_with_prefix(["pr", "create"])
+        self.assertEqual(len(creates), 1)
+        self.assertIn("--draft", creates[0])
+
+    def test_promotion_requires_the_exact_current_head(self):
+        gh, runner = make_github()
+        runner.when(
+            ["pr", "view", "9"],
+            {
+                "number": 9,
+                "author": {"login": "bot"},
+                "labels": [],
+                "body": "",
+                "headRefOid": "new-head",
+                "isDraft": True,
+            },
+        )
+        self.assertEqual(
+            gh.promote_own_pr(9, expected_head_oid="old-head"), (False, False)
+        )
+        self.assertFalse(runner.called_with_prefix(["pr", "ready"]))
+
+    def test_matching_head_promotes_and_non_ready_returns_to_draft(self):
+        gh, runner = make_github()
+        runner.when(
+            ["pr", "view", "9"],
+            {
+                "number": 9,
+                "author": {"login": "bot"},
+                "labels": [],
+                "body": "",
+                "headRefOid": "head",
+                "isDraft": True,
+            },
+        )
+        runner.when(["pr", "ready", "9"], "")
+        self.assertEqual(gh.promote_own_pr(9, expected_head_oid="head"), (True, True))
+        self.assertEqual(len(runner.called_with_prefix(["pr", "ready", "9"])), 1)
+
+        gh2, runner2 = make_github()
+        runner2.when(
+            ["pr", "view", "9"],
+            {
+                "number": 9,
+                "author": {"login": "bot"},
+                "labels": [],
+                "body": "",
+                "headRefOid": "head",
+                "isDraft": False,
+            },
+        )
+        runner2.when(["pr", "ready", "9", "--undo"], "")
+        gh2.draft_own_pr(9)
+        self.assertEqual(
+            runner2.called_with_prefix(["pr", "ready", "9", "--undo"]),
+            [["pr", "ready", "9", "--undo"]],
+        )
+
+    def test_indeterminate_promotion_attempts_compensating_draft(self):
+        gh, runner = make_github()
+        runner.when(
+            ["pr", "view", "9"],
+            {
+                "number": 9,
+                "author": {"login": "bot"},
+                "labels": [],
+                "body": "",
+                "headRefOid": "head",
+                "isDraft": True,
+            },
+        )
+        runner.when(["pr", "ready", "9"], "lost response", rc=1)
+
+        with self.assertRaises(ForemanError):
+            gh.promote_own_pr(9, expected_head_oid="head")
+
+        self.assertEqual(len(runner.called_with_prefix(["pr", "view", "9"])), 2)
+
+    def test_ready_head_marker_preserves_latest_body(self):
+        gh, runner = make_github()
+        runner.when(
+            ["pr", "view", "9"],
+            {
+                "number": 9,
+                "author": {"login": "bot"},
+                "labels": [],
+                "body": "maintainer update\n",
+                "headRefOid": "head",
+                "isDraft": False,
+            },
+        )
+        runner.when(["pr", "edit", "9", "--body-file", "-"], "")
+
+        self.assertTrue(gh.record_ready_head_own_pr(9, expected_head_oid="head"))
+        edits = [
+            body
+            for argv, body in runner.calls
+            if argv[:4] == ["pr", "edit", "9", "--body-file"]
+        ]
+        self.assertEqual(
+            edits, ["maintainer update\n<!-- foreman:ready-head:head -->\n"]
+        )
+
     def test_vet_comment_requires_human_approval(self):
         gh, runner = make_github()
         with self.assertRaises(ForemanError):

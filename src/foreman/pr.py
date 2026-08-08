@@ -150,8 +150,9 @@ def pr_body(
     lines.append("")
     lines.append("---")
     lines.append(
-        f"_Opened by foreman after a green `{verify_display}` in the unit's "
-        "worktree. Merging is a human decision; foreman never merges._"
+        f"_Opened by foreman as a draft after a green `{verify_display}` in "
+        "the unit's worktree. Foreman promotes only after its live readiness "
+        "gate; merging is a human decision and foreman never merges._"
     )
     return "\n".join(lines) + "\n"
 

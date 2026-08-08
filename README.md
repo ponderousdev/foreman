@@ -47,12 +47,13 @@ Design intent: [DESIGN.md](DESIGN.md) · architecture:
    capabilities. No side effects.
 2. **dispatch** — for each ready unit: isolate a git worktree, assemble a
    deterministic prompt, run the agent through the Runner, verify with the
-   composed gate in the worktree, and open a PR. Foreman opens PRs; the agent
-   never pushes.
+   composed gate in the worktree, and open a draft PR. Foreman opens PRs; the
+   agent never pushes.
 3. **shepherd** — keep open PRs healthy: retry environmental CI failures once,
    rebase cleanly, hand mechanical failures and review-bot threads back to a
-   bounded agent, and label automation-complete PRs
-   `foreman:ready-for-review` with a dependency-aware suggested review order.
+   bounded agent, and promote automation-complete drafts with the
+   `foreman:ready-for-review` label and a dependency-aware suggested review
+   order. A new push invalidates that evidence and returns the PR to draft.
 4. **You merge.** The next tick re-derives state from GitHub + git and
    discovers the newly-unblocked wave. During a merge freeze Foreman idles by
    design.

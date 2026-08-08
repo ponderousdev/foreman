@@ -1,10 +1,12 @@
 """All GitHub access — every read and every mutation lives here, nowhere else.
 
 Write contract (docs/architecture/foreman.md): foreman MAY create/push its own
-branches, open non-draft PRs, edit its OWN PRs and their foreman-namespace
-labels, create/edit the single marker-identified status comment per unit,
-resolve review threads it dispositioned, post human-approved vet
-correction comments, and idempotently ensure its label definitions exist.
+branches, open draft PRs, promote its OWN drafts after the readiness gate,
+return its OWN PRs to draft when readiness is invalidated, edit its OWN PRs
+and their foreman-namespace labels, create/edit the single marker-identified
+status comment per unit, resolve review threads it dispositioned, post
+human-approved vet correction comments, and idempotently ensure its label
+definitions exist.
 
 Foreman MUST NEVER: merge anything, close/reopen issues, edit issue
 titles/bodies/milestones, edit or delete human or third-party comments,
@@ -41,6 +43,7 @@ _ACTIONS_APP_ID = 15368
 # Legacy names are read-only compatibility aliases: never ensure or write them.
 DISPATCHED_LABEL = "foreman:dispatched"
 READY_FOR_REVIEW_LABEL = "foreman:ready-for-review"
+READY_HEAD_PREFIX = "<!-- foreman:ready-head:"
 LEGACY_DISPATCHED_LABEL = "foreman-dispatched"
 LEGACY_READY_FOR_REVIEW_LABEL = "ready-to-merge"
 DISPATCHED_LABELS = (DISPATCHED_LABEL, LEGACY_DISPATCHED_LABEL)
@@ -774,6 +777,7 @@ class GitHub:
             head,
             "--base",
             base,
+            "--draft",
         ]
         for label in labels:
             args += ["--label", label]
@@ -781,12 +785,61 @@ class GitHub:
         return out.strip().splitlines()[-1] if out.strip() else ""
 
     def _own_pr_guard(self, number: int, action: str) -> dict:
-        pr = self.pr_view(number, "number,author,labels,body")
+        pr = self.pr_view(number, "number,author,labels,body,headRefOid,isDraft")
         if pr["author"]["login"] != self.viewer():
             raise ForemanError(
                 f"write contract: '{action}' on PR #{number} not authored by foreman"
             )
         return pr
+
+    def promote_own_pr(
+        self, number: int, *, expected_head_oid: str
+    ) -> tuple[bool, bool]:
+        """Promote an own draft only when its head still matches the gate.
+
+        GitHub's ready mutation has no compare-and-swap parameter, so the own
+        PR guard performs the last possible head read immediately before it.
+        The caller performs a post-transition read to catch the remaining
+        network-sized race window.
+        """
+        self._assert_writable("promote own PR")
+        pr = self._own_pr_guard(number, "promote draft")
+        actual_head = pr.get("headRefOid") or ""
+        if not expected_head_oid or actual_head != expected_head_oid:
+            return False, False
+        transitioned = bool(pr.get("isDraft"))
+        if transitioned:
+            try:
+                self.gh.call(["pr", "ready", str(number)])
+            except Exception:
+                # The mutation may have reached GitHub even when its response
+                # was lost. The guarded read knows this call could transition,
+                # so compensate here before propagating the indeterminate result.
+                self.draft_own_pr(number)
+                raise
+        return True, transitioned
+
+    def draft_own_pr(self, number: int) -> None:
+        """Return an own PR to its draft workbench (a fail-closed mutation)."""
+        self._assert_writable("return own PR to draft")
+        pr = self._own_pr_guard(number, "return to draft")
+        if not pr.get("isDraft"):
+            self.gh.call(["pr", "ready", str(number), "--undo"])
+
+    def record_ready_head_own_pr(self, number: int, *, expected_head_oid: str) -> bool:
+        """Record readiness using the body read by the guarded mutation."""
+        self._assert_writable("record own PR ready head")
+        pr = self._own_pr_guard(number, "record ready head")
+        if (pr.get("headRefOid") or "") != expected_head_oid:
+            return False
+        lines = [
+            line
+            for line in (pr.get("body") or "").splitlines()
+            if not line.startswith(READY_HEAD_PREFIX)
+        ]
+        body = "\n".join([*lines, f"{READY_HEAD_PREFIX}{expected_head_oid} -->", ""])
+        self.gh.call(["pr", "edit", str(number), "--body-file", "-"], input_text=body)
+        return True
 
     def edit_own_pr_body(self, number: int, body: str) -> None:
         self._assert_writable("edit own PR body")
