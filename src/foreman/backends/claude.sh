@@ -27,6 +27,7 @@ foreman_claude_prepare() {
     # A unit may receive more than one explicitly provisioned adapter secret;
     # keep unrelated provider credentials out of Claude Code's child process.
     unset FOREMAN_DEEPSEEK_API_KEY DEEPSEEK_API_KEY
+    unset FOREMAN_KIMI_API_KEY MOONSHOT_API_KEY KIMI_API_KEY
     if [ "${FOREMAN_BILLING:-subscription}" = "api" ]; then
         [ -n "${FOREMAN_ANTHROPIC_API_KEY:-}" ] || {
             _foreman_claude_fail "billing=api needs FOREMAN_ANTHROPIC_API_KEY"

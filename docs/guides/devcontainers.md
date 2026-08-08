@@ -53,6 +53,7 @@ Variables per profile:
 | `FOREMAN_AGENT_GH_TOKEN` | ✅ | — | read-only PAT handed to dispatched agents as their `GH_TOKEN` (#13); dispatch refuses without it |
 | `CLAUDE_CODE_OAUTH_TOKEN` | ✅ | ✅ | Claude Code |
 | `FOREMAN_DEEPSEEK_API_KEY` | ✅ | — | DeepSeek API credential consumed only by Foreman's `claude-code-deepseek` adapter |
+| `FOREMAN_KIMI_API_KEY` | ✅ | — | Kimi (Moonshot) API credential consumed only by Foreman's `claude-code-kimi` adapter |
 | `AGENT_DECK_TELEGRAM_KEY` | ✅ | ✅ | agent-deck bridge (optional) |
 | `TS_AUTHKEY` | — | ✅ | Tailscale (dev only) |
 
@@ -88,6 +89,7 @@ repo** (one template serves every repo). To stand this repo up in Coder:
    - secrets → `GH_TOKEN`, `FOREMAN_AGENT_GH_TOKEN` (the read-only agent
      PAT — dispatch refuses without it, #13), `CLAUDE_CODE_OAUTH_TOKEN`,
      `FOREMAN_DEEPSEEK_API_KEY` (when using the DeepSeek adapter),
+     `FOREMAN_KIMI_API_KEY` (when using the Kimi adapter),
      `AGENT_DECK_TELEGRAM_KEY` (+ `TS_AUTHKEY` if you want Tailscale). Coder
      passes these into the workspace's host environment, where `init-env.sh`
      picks them up.
