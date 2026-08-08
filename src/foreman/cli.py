@@ -765,9 +765,15 @@ def cmd_attach(args: argparse.Namespace) -> int:
     if "attach" not in backend_mod.capabilities(adapter):
         error(f"backend '{backend_name}' does not support local attach")
         return 1
-    attach_cmd = (
-        f"FOREMAN_BILLING={shlex.quote(cfg.billing)} {shlex.quote(str(adapter))} attach"
+    # Config validation restricts this to two public mode names. Select a
+    # literal here as well so neither the generated command nor static dataflow
+    # analysis can mistake arbitrary config content for a printed secret.
+    billing_assignment = (
+        "FOREMAN_BILLING=api"
+        if cfg.billing == "api"
+        else "FOREMAN_BILLING=subscription"
     )
+    attach_cmd = f"{billing_assignment} {shlex.quote(str(adapter))} attach"
     resume_state = run_dir / "resume-state.md"
     print(f"Local triage for unit #{args.unit} (no live process to attach to):")
     print(f"  worktree:     {wt_path}")
