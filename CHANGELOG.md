@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are intentional: release-please maintains a rolling release PR from
 conventional commits, and merging it cuts the tag, GitHub release, and this
 changelog (`task release:*` remains as a manual override).
+## [2.5.0](https://github.com/ponderousdev/foreman/compare/v2.4.0...v2.5.0) (2026-08-08)
+
+
+### Features
+
+* **backend:** extend responsive-dispatch liveness to vet and shepherd ([#161](https://github.com/ponderousdev/foreman/issues/161)) ([8b429e5](https://github.com/ponderousdev/foreman/commit/8b429e5f393b4ffe9384f6ddb4c71aa8ed20c318)), closes [#125](https://github.com/ponderousdev/foreman/issues/125)
+
 ## [2.4.0](https://github.com/ponderousdev/foreman/compare/v2.3.0...v2.4.0) (2026-08-08)
 
 
