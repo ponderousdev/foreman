@@ -20,7 +20,7 @@ specs, and conversation. (Quick lookups also live in
 | **Capability** | A property computed per environment — `docker` (a daemon is reachable), `ports` (may bind ports), `untrusted-input` (the boundary can hold a compromised agent). Runners *advertise* capabilities; policy consumes them. |
 | **UnitSpec / Handle** | What a runner needs to start a unit (image, workdir, env, cmd, timeout) / an opaque, liveness-checkable reference to the spawned unit, persisted so a restarted Foreman can reattach. |
 | **Composed gate** | The verify command list, built from `[verify]` — a baseline plus capability-keyed additions run where their capability is present. |
-| **Backend / adapter** | The agent-vendor seam: `backends/<name>.sh` (`run` / `resume` / `capabilities`). Production adapters include Claude Code direct and its fixed-family DeepSeek and Kimi wrappers; `mock.sh` is a hermetic seam proof. |
+| **Backend / adapter** | The agent-vendor seam: `backends/<name>.sh` (`run` / `resume` / `capabilities`). Production adapters include Claude Code direct and its fixed-family DeepSeek, Kimi, and GLM wrappers; `mock.sh` is a hermetic seam proof. |
 | **Result contract** | The sidecar `result.json` an agent must write (status, summary, handoff, human tasks, AC→test map). Exit-0 without it counts as a crash. |
 | **Handoff** | Two senses: the commit-return *strategy* per runner (local shares the worktree; sprite bundles), and the PR `## Handoff` section that carries context to dependent units. |
 | **Doneness** | Whether a dependency is satisfied — deterministic, hardened (see rules below). |

@@ -69,6 +69,7 @@ AGENT_FOREMAN_ENV = (
     "FOREMAN_ANTHROPIC_API_KEY",
     "FOREMAN_DEEPSEEK_API_KEY",
     "FOREMAN_KIMI_API_KEY",
+    "FOREMAN_GLM_API_KEY",
     "FOREMAN_READONLY",
 )
 # Reaping window after kill(): the group is already dead or dying; this only
