@@ -52,6 +52,7 @@ class AgentEnvAllowlist(unittest.TestCase):
                 "ANTHROPIC_API_KEY": "api-key",
                 "ANTHROPIC_AUTH_TOKEN": "auth-token",
                 "DEEPSEEK_API_KEY": "deepseek-key",
+                "MOONSHOT_API_KEY": "moonshot-key",
                 "SOME_RANDOM_SECRET": "nope",
                 # An operator-only FOREMAN_* control must NOT leak by prefix —
                 # the allowlist is explicit, not a sweep.
@@ -68,6 +69,7 @@ class AgentEnvAllowlist(unittest.TestCase):
         self.assertNotIn("ANTHROPIC_API_KEY", env)
         self.assertNotIn("ANTHROPIC_AUTH_TOKEN", env)
         self.assertNotIn("DEEPSEEK_API_KEY", env)
+        self.assertNotIn("MOONSHOT_API_KEY", env)
         self.assertNotIn("SOME_RANDOM_SECRET", env)
         # No blanket FOREMAN_* forwarding: operator-only vars stay out.
         self.assertNotIn("FOREMAN_SANDBOXED", env)
@@ -105,6 +107,19 @@ class AgentEnvAllowlist(unittest.TestCase):
         env = backend_mod.agent_env(Config(backend="claude-code-deepseek"))
         self.assertEqual(env["FOREMAN_DEEPSEEK_API_KEY"], "deepseek-unit-key")
         self.assertNotIn("DEEPSEEK_API_KEY", env)
+
+    def test_kimi_key_flows_only_as_foreman_var(self):
+        os.environ.update(
+            {
+                "PATH": "/usr/bin",
+                "FOREMAN_AGENT_GH_TOKEN": "read-token",
+                "FOREMAN_KIMI_API_KEY": "kimi-unit-key",
+                "MOONSHOT_API_KEY": "raw-key-must-not-flow",
+            }
+        )
+        env = backend_mod.agent_env(Config(backend="claude-code-kimi"))
+        self.assertEqual(env["FOREMAN_KIMI_API_KEY"], "kimi-unit-key")
+        self.assertNotIn("MOONSHOT_API_KEY", env)
 
 
 if __name__ == "__main__":

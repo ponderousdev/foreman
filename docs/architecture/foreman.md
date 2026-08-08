@@ -264,8 +264,9 @@ exhaustion into planned pauses. `billing = "api"` lets each adapter consume its
 dedicated `FOREMAN_*_API_KEY` and translate it **only inside the adapter
 process**; raw provider variables remain excluded from the unit environment.
 The `claude` adapter reports verified cost and binds USD budgets. Provider
-wrappers that do not advertise `cost`, including `claude-code-deepseek`, bind
-through timeout/turn limits instead of pretending an unverified cost is exact.
+wrappers that do not advertise `cost`, including `claude-code-deepseek` and
+`claude-code-kimi`, bind through timeout/turn limits instead of pretending an
+unverified cost is exact.
 
 ### Claude Code with DeepSeek
 
@@ -297,6 +298,38 @@ under the same fixed provider configuration. It deliberately does not advertise
 `cost`: the custom-provider stream has no cost value Foreman can independently
 verify. Provider errors remain in `agent.log`, and Foreman's runner owns the
 unchanged timeout/kill path.
+
+### Claude Code with Kimi
+
+`backend = "claude-code-kimi"` selects the production provider wrapper for
+Moonshot's Kimi family. It requires `billing = "api"` and `FOREMAN_KIMI_API_KEY`
+in the bot devcontainer environment. There is no password-manager fallback in
+the adapter: a missing key fails before Claude Code starts. The wrapper removes
+its provisioning variable, raw Kimi/Moonshot/DeepSeek/Anthropic credentials, and
+the Claude OAuth token from the child environment, then configures Kimi's
+official Anthropic-compatible endpoint (`https://api.moonshot.ai/anthropic` — the
+`/v1` base is Moonshot's OpenAI-compatible surface, not the Anthropic one Claude
+Code speaks).
+
+The adapter fixes the model family to Kimi: `kimi-k3[1m]` (the 1M-context
+flagship) handles primary/Opus/Sonnet work, while `kimi-k2.7-code-highspeed`
+handles Haiku and subagents. This follows Kimi's
+[official Claude Code integration](https://platform.kimi.ai/docs/guide/claude-code-kimi);
+advisory labels cannot change the family. The validated harness baseline is the
+bot image's Claude Code `2.1.167` pin and Kimi's Anthropic API/model IDs as
+documented on 2026-08-08. Pin `backend_version = "2.1.167"` until a newer CLI has
+passed the adapter contract tests.
+
+```toml
+backend = "claude-code-kimi"
+backend_version = "2.1.167"
+billing = "api"
+```
+
+Like the DeepSeek wrapper, it advertises `resume` but not `cost`: the
+custom-provider stream carries no cost value Foreman can independently verify.
+Provider errors remain in `agent.log`, and Foreman's runner owns the unchanged
+timeout/kill path.
 
 ## Security model
 
@@ -472,7 +505,8 @@ every consumer's next `uvx` resolution. See
 
 - **Backends**: `src/foreman/backends/<name>.sh` is the entire vendor
   surface (`run` / `resume <ref>` / `capabilities`). Production adapters are
-  `claude.sh` and `claude-code-deepseek.sh`; `mock.sh` is a hermetic seam proof.
+  `claude.sh`, `claude-code-deepseek.sh`, and `claude-code-kimi.sh`; `mock.sh`
+  is a hermetic seam proof.
   Claude Code adapters share only execution mechanics under `backends/lib/`;
   provider credentials and model wiring remain in the named adapter.
 - **Runners**: implement the `Runner` protocol (`src/foreman/runner/`) and
