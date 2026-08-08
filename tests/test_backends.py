@@ -15,6 +15,7 @@ from foreman import backend as backend_mod
 from foreman.config import Config
 from foreman.runner import Handle, UnitSpec
 from foreman.util import ForemanError
+from tests.mock_runner import MockRunner
 
 
 class DeepSeekAdapter(unittest.TestCase):
@@ -216,6 +217,46 @@ class DeepSeekAdapter(unittest.TestCase):
 
 
 class BackendRunRecord(unittest.TestCase):
+    def test_fresh_spawn_clears_stale_provider_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = root / ".foreman" / "units" / "9"
+            run_dir.mkdir(parents=True)
+            worktree = root / "worktree"
+            worktree.mkdir()
+            prompt = run_dir / "prompt.md"
+            prompt.write_text("work\n", encoding="utf-8")
+            session = run_dir / "session"
+            session.write_text("SESSION_REF=old-provider-session\n", encoding="utf-8")
+
+            def new_session(spec: UnitSpec) -> int:
+                with Path(spec.env["FOREMAN_SESSION_FILE"]).open(
+                    "a", encoding="utf-8"
+                ) as session_stream:
+                    session_stream.write("SESSION_REF=new-provider-session\n")
+                return 0
+
+            with (
+                mock.patch.object(backend_mod, "agent_env", return_value={}),
+                mock.patch.object(backend_mod, "backend_cli_version", return_value=""),
+            ):
+                result = backend_mod.run_backend(
+                    Config(),
+                    root,
+                    MockRunner(agent=new_session),
+                    backend_mod.adapter_path("claude-code-deepseek"),
+                    unit_number=9,
+                    cwd=worktree,
+                    unit_run_dir=run_dir,
+                    prompt_file=prompt,
+                    timeout_min=1,
+                )
+            self.assertEqual(result.session_ref, "new-provider-session")
+            self.assertEqual(
+                session.read_text(encoding="utf-8"),
+                "SESSION_REF=new-provider-session\n",
+            )
+
     def test_records_selected_adapter_instead_of_repository_default(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)

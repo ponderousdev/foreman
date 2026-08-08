@@ -274,6 +274,11 @@ def run_backend(
     result_file = unit_run_dir / "result.json"
     if result_file.exists():
         result_file.unlink()
+    # A non-resume spawn starts a new provider/session lineage. Keeping the
+    # prior ledger would make shepherd's first SESSION_REF belong to an older
+    # backend after retry or a per-unit backend change.
+    if resume_ref is None:
+        session_file.unlink(missing_ok=True)
 
     env = agent_env(cfg)
     env.update(
@@ -301,9 +306,9 @@ def run_backend(
         # process runs the gate in the worktree after the agent exits.
         gate_cmds=tuple(tuple(c) for c in (gate_cmds or [])),
     )
-    # Snapshot the session file BEFORE the spawn (#54): the file persists
-    # across resumes, and a run that dies before emitting its own COST_USD
-    # must not be billed the previous invocation's last cost line.
+    # Snapshot the session file BEFORE the spawn (#54): it persists only
+    # across true resumes, and a run that dies before emitting its own
+    # COST_USD must not be billed the previous invocation's last cost line.
     session_offset = session_file.stat().st_size if session_file.exists() else 0
 
     handle = runner.spawn(spec)
