@@ -148,23 +148,31 @@ below), `foreman cleanup`. Any target takes `--milestone <n|title>` or
 
 ### 4. Triage a preserved failure
 
-When a unit fails, Foreman preserves its worktree, the captured agent session,
-and a generated resume-state, and leaves the issue open. `foreman attach`
-re-enters that state locally in two deliberate steps:
+When a unit fails, Foreman preserves its worktree, the captured agent session
+(when the agent emitted one before it was killed), and a generated resume-state,
+and leaves the issue open. `foreman attach` re-enters that state locally in two
+deliberate steps:
 
 ```bash
 foreman attach --unit 42            # inspect: prints the worktree, resume-state,
-                                    #   and the exact follow-up command. No side effects.
+                                    #   and the exact follow-up command. Does not
+                                    #   launch an interactive session.
 foreman attach --unit 42 --execute  # start the interactive attach in the worktree.
 ```
 
-The first command only reads and prints. `--execute` is a separate confirmation
-because it launches an interactive provider session on your machine — nothing
-starts merely from inspecting. Foreman uses the backend **recorded for that
-unit** and launches it with the same Foreman-controlled, allowlisted environment
+The first command inspects and prints — it launches no interactive session
+(it does touch bookkeeping: it ensures the unit's run directory exists and
+migrates a legacy session ledger once). `--execute` is a separate confirmation
+because it starts an interactive provider session on your machine — nothing
+provider-facing runs merely from inspecting. Foreman launches the backend
+**recorded for that unit** (units dispatched before backend-selection recording
+fall back to the repo's current default `backend`, so pin it deliberately when
+triaging old failures) with the same Foreman-controlled, allowlisted environment
 used for agent work, so you never re-supply provider configuration or a session
-reference by hand. It requires a backend that advertises the `attach` capability
-(every Claude Code adapter and `codex-cli` do).
+reference by hand. If no session was captured, `--execute` opens a fresh session
+in the worktree and points you at the resume-state to paste in. It requires a
+backend that advertises the `attach` capability (every Claude Code adapter and
+`codex-cli` do).
 
 This is distinct from `resume`, which Foreman drives itself during managed
 execution (the shepherd re-entering a unit's agent after a mechanical failure).

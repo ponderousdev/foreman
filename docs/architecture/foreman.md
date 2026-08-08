@@ -113,16 +113,22 @@ task foreman:cleanup   # prune worktrees/branches for closed units
 
 `foreman attach` is a two-step **local-triage** flow, not managed execution.
 `foreman attach --unit N` inspects the preserved unit — worktree, resume-state,
-and the exact follow-up command — with no side effects; `foreman attach --unit N
---execute` then starts the interactive attach. The `--execute` split is a
-deliberate confirmation: it launches an interactive provider session on the
-operator's machine, so nothing starts merely from inspecting. Foreman uses the
-backend recorded for the unit, requires that backend to advertise the `attach`
-capability, and launches it with the same Foreman-controlled, allowlisted
-environment used for agent work — the operator never re-supplies provider
-configuration or a session reference. This differs from `resume`, which Foreman
-drives itself during managed execution (e.g. the shepherd re-entering a unit's
-agent after a mechanical failure); `attach` is the human path for local triage.
+and the exact follow-up command — and launches no interactive session (it does
+ensure the unit's run directory exists and migrate a legacy session ledger once,
+so it is not strictly read-only); `foreman attach --unit N --execute` then starts
+the interactive attach. The `--execute` split is a deliberate confirmation: it
+starts an interactive provider session on the operator's machine, so nothing
+provider-facing runs merely from inspecting. Foreman launches the backend
+recorded for the unit — units dispatched before backend-selection recording fall
+back to the repository's current default `backend` — requires that backend to
+advertise the `attach` capability, and launches it with the same
+Foreman-controlled, allowlisted environment used for agent work; the operator
+never re-supplies provider configuration or a session reference. When no session
+was captured (the agent was killed before its first session event), `--execute`
+opens a fresh session in the worktree and points the operator at the resume-state.
+This differs from `resume`, which Foreman drives itself during managed execution
+(e.g. the shepherd re-entering a unit's agent after a mechanical failure);
+`attach` is the human path for local triage.
 
 ## Per-unit flow
 
