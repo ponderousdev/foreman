@@ -266,8 +266,8 @@ process**; raw provider variables remain excluded from the unit environment.
 The `claude` adapter reports verified cost and binds USD budgets. Adapters that
 do not advertise `cost`, including `claude-code-deepseek`, `claude-code-kimi`,
 `claude-code-glm`, and `codex-cli`, bind through timeout/turn limits instead of
-pretending an unverified cost is exact. `codex-cli` additionally supports
-`billing = "subscription"` (the ChatGPT login under `$CODEX_HOME`).
+pretending an unverified cost is exact. `codex-cli` runs `billing = "subscription"`
+only (the ChatGPT login under `$CODEX_HOME`); it fails closed on `billing = "api"`.
 
 ### Claude Code with DeepSeek
 
@@ -376,22 +376,20 @@ stream reports token usage, not a verified USD figure. The adapter captures the
 session ref from Codex's first `thread.started` event (early enough that a
 killed agent is still resumable) and streams the JSONL to `agent.log`.
 
-**Credentials.** Both billing modes are supported:
+**Credentials — subscription only.** `billing = "subscription"` (the default)
+uses the ChatGPT login persisted under `$CODEX_HOME` (`codex login`, stored in
+`auth.json`); the adapter pins `forced_login_method = chatgpt`. The adapter also
+strips every competing vendor credential (Anthropic/Claude OAuth, DeepSeek,
+Kimi/Moonshot, GLM/Z.ai) **and any OpenAI key** from Codex's child process.
 
-- `billing = "subscription"` (default) uses the ChatGPT login persisted under
-  `$CODEX_HOME` (`codex login`, stored in `auth.json`). The adapter pins
-  `forced_login_method = chatgpt` and drops any stray `OPENAI_API_KEY` so a
-  leftover key cannot silently switch billing.
-- `billing = "api"` requires `FOREMAN_OPENAI_API_KEY` in the bot devcontainer
-  environment; the adapter exports it as `OPENAI_API_KEY`, pins
-  `forced_login_method = api`, and **fails closed without echoing the secret**
-  when the key is absent. There is no password-manager fallback.
-
-Either way the adapter strips competing vendor credentials (Anthropic/Claude
-OAuth, DeepSeek, Kimi/Moonshot, GLM/Z.ai) from Codex's child process, and the
-raw `OPENAI_API_KEY` is never forwarded to the unit environment — only the
-dedicated `FOREMAN_OPENAI_API_KEY` provisioning variable is, and the adapter
-consumes it.
+`billing = "api"` **fails closed** and is deliberately unsupported for now: on
+codex 0.147.0 an exported `OPENAI_API_KEY` is passed into the environment of the
+model's own shell commands (verified), and this adapter enables network access,
+so an agent-generated command could exfiltrate the provider key. Restoring API
+billing requires a verified *non-inherited* credential path (e.g.
+`codex login --with-api-key` into an isolated `$CODEX_HOME`) so the key never
+reaches model-run shells. The `FOREMAN_OPENAI_API_KEY` wiring remains in place,
+provisioned but unused, ready for that follow-up.
 
 **Model selection is runner configuration.** The bot pins the model with the
 non-secret `FOREMAN_CODEX_MODEL` in its devcontainer environment; the adapter
@@ -434,7 +432,7 @@ tests before adopting a newer Codex release.
 
 ```toml
 backend = "codex-cli"
-billing = "subscription"   # or "api" with FOREMAN_OPENAI_API_KEY
+billing = "subscription"   # api billing fails closed (see above)
 # Model is set out-of-band: FOREMAN_CODEX_MODEL=gpt-5.6-sol in the bot env.
 ```
 

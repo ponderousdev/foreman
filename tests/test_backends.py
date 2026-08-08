@@ -637,8 +637,11 @@ class CodexCliAdapter(unittest.TestCase):
             "FOREMAN_RESULT_FILE": str(self.result),
             "FOREMAN_SESSION_FILE": str(self.session),
             "FOREMAN_LOG_FILE": str(self.log),
-            "FOREMAN_BILLING": "api",
-            "FOREMAN_OPENAI_API_KEY": "test-openai-key",
+            # Subscription is the only supported billing (ChatGPT login).
+            "FOREMAN_BILLING": "subscription",
+            # A stray provider key must be stripped, never reach Codex/its shell.
+            "FOREMAN_OPENAI_API_KEY": "stray-openai-key",
+            "OPENAI_API_KEY": "stray-raw-openai-key",
             # Competing provider credentials that must never reach Codex.
             "FOREMAN_ANTHROPIC_API_KEY": "competing-anthropic-key",
             "ANTHROPIC_API_KEY": "raw-anthropic-key",
@@ -679,19 +682,20 @@ class CodexCliAdapter(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.strip().split(), ["resume", "attach"])
 
-    def test_run_uses_api_key_and_strips_competing_credentials(self):
+    def test_run_uses_chatgpt_login_and_strips_all_provider_keys(self):
         proc = self.run_adapter("run")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         capture = self.capture_lines()
-        self.assertEqual(capture["OPENAI_MATCH"], "yes")
-        # The dedicated provisioning var is consumed, never handed to Codex.
+        # Subscription uses the ChatGPT login; NO OpenAI key (stray or
+        # provisioning) survives into Codex or, through it, the model's shell.
+        self.assertEqual(capture["OPENAI_PRESENT"], "no")
         self.assertEqual(capture["FOREMAN_KEY_PRESENT"], "no")
         # No competing vendor credential survives into Codex's child process.
         self.assertEqual(capture["ANTHROPIC_KEY_PRESENT"], "no")
         self.assertEqual(capture["OAUTH_PRESENT"], "no")
         self.assertEqual(capture["DEEPSEEK_PRESENT"], "no")
         args = self.capture_args()
-        self.assertIn("forced_login_method=api", args)
+        self.assertIn("forced_login_method=chatgpt", args)
         self.assertIn("sandbox_mode=workspace-write", args)
         # Network is enabled so the agent can use gh / fetch deps / reach test
         # services — the runner, not Codex's sandbox, is the isolation boundary.
@@ -709,26 +713,15 @@ class CodexCliAdapter(unittest.TestCase):
         self.assertNotIn("COST_USD", self.session.read_text(encoding="utf-8"))
         self.assertIn(f'"thread_id":"{self.sid}"', self.log.read_text(encoding="utf-8"))
 
-    def test_subscription_billing_uses_chatgpt_login_without_a_key(self):
-        env = self.env(FOREMAN_BILLING="subscription")
-        env.pop("FOREMAN_OPENAI_API_KEY")
-        proc = self.run_adapter("run", env=env)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        capture = self.capture_lines()
-        # Subscription mode relies on the ChatGPT login under $CODEX_HOME; no
-        # API key is exported and billing is pinned to chatgpt.
-        self.assertEqual(capture["OPENAI_PRESENT"], "no")
-        self.assertIn("forced_login_method=chatgpt", self.capture_args())
-
-    def test_subscription_billing_drops_a_stray_openai_key(self):
-        # A stray key must not silently flip subscription billing to api.
-        proc = self.run_adapter(
-            "run",
-            env=self.env(FOREMAN_BILLING="subscription", OPENAI_API_KEY="stray-key"),
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(self.capture_lines()["OPENAI_PRESENT"], "no")
-        self.assertIn("forced_login_method=chatgpt", self.capture_args())
+    def test_api_billing_fails_closed_to_protect_the_provider_key(self):
+        # api billing is unsupported: an exported OPENAI_API_KEY would reach the
+        # model's shell commands (verified on codex 0.147.0) with network on.
+        proc = self.run_adapter("run", env=self.env(FOREMAN_BILLING="api"))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("does not support billing=api", proc.stderr)
+        # Fail closed WITHOUT echoing any secret material, before launching codex.
+        self.assertNotIn("stray-openai-key", proc.stderr)
+        self.assertFalse(self.capture.exists(), "codex must not launch under api")
 
     def test_model_is_runner_configuration_not_a_label(self):
         # Set → an explicit runner-config model flows to Codex as `-c model=`.
@@ -783,11 +776,11 @@ class CodexCliAdapter(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         args = self.capture_args()
         self.assertEqual(args[-2:], ["resume", self.sid])
-        self.assertIn("forced_login_method=api", args)
+        self.assertIn("forced_login_method=chatgpt", args)
         # Interactive attach takes no headless sandbox overrides — so it never
         # broadens the sandbox with a writable root for an unused result path.
         self.assertFalse(any(a.startswith("sandbox_") for a in args))
-        self.assertEqual(self.capture_lines()["OPENAI_MATCH"], "yes")
+        self.assertEqual(self.capture_lines()["OPENAI_PRESENT"], "no")
 
     def test_attach_without_ref_starts_a_fresh_session(self):
         # No ref (unit died before emitting one) → a fresh interactive session,
@@ -796,7 +789,7 @@ class CodexCliAdapter(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         args = self.capture_args()
         self.assertNotIn("resume", args)
-        self.assertIn("forced_login_method=api", args)
+        self.assertIn("forced_login_method=chatgpt", args)
 
     def test_attach_rejects_option_shaped_ref_from_session_file(self):
         self.session.write_text("SESSION_REF=--last\n", encoding="utf-8")
@@ -833,16 +826,6 @@ class CodexCliAdapter(unittest.TestCase):
         self.assertFalse(any(a.startswith("sandbox_workspace_write") for a in args))
         self.assertNotIn("--json", args)
         self.assertEqual(args[-2:], ["--skip-git-repo-check", "-"])
-
-    def test_missing_key_in_api_billing_fails_closed_without_secret_echo(self):
-        env = self.env()
-        env.pop("FOREMAN_OPENAI_API_KEY")
-        proc = self.run_adapter("run", env=env)
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("FOREMAN_OPENAI_API_KEY", proc.stderr)
-        # The failure must never echo any competing secret material.
-        self.assertNotIn("competing-anthropic-key", proc.stderr)
-        self.assertFalse(self.capture.exists(), "codex must not launch without a key")
 
     def test_provider_failure_preserves_log_and_exit_status(self):
         proc = self.run_adapter(

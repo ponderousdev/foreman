@@ -11,7 +11,8 @@
 #
 # Env in:  FOREMAN_PROMPT_FILE FOREMAN_RESULT_FILE FOREMAN_SESSION_FILE
 #          FOREMAN_LOG_FILE FOREMAN_BILLING FOREMAN_READONLY FOREMAN_MAX_TURNS
-#          FOREMAN_OPENAI_API_KEY (billing=api) FOREMAN_CODEX_MODEL (optional)
+#          FOREMAN_CODEX_MODEL (optional). Only billing=subscription is
+#          supported (ChatGPT login under $CODEX_HOME); billing=api fails closed.
 # Out:     SESSION_REF=<thread-id> appended to $FOREMAN_SESSION_FILE from the
 #          FIRST `thread.started` event (killed agents emit no final event, and
 #          resuming a dead agent is exactly when the ref matters).
@@ -54,39 +55,36 @@ _toml_str() {
     s="${s//$'\f'/\\f}"
     s="${s//$'\r'/\\r}"
     case "$s" in
-    *[$'\001'-$'\037']*) _fail "path contains an unsupported control character" ;;
+    *[$'\001'-$'\037'$'\177']*) _fail "path contains an unsupported control character" ;;
     esac
     printf '"%s"' "$s"
 }
 
-# Credential isolation + auth-method selection into AUTH_CONFIG. Codex reads
-# OPENAI_API_KEY for API-key billing and the ChatGPT login under $CODEX_HOME for
-# subscription billing; `forced_login_method` pins which one so a stray key can
-# never silently switch billing. Competing provider credentials are stripped so
-# a multi-secret unit never hands Codex another vendor's key.
+# Credential isolation + auth-method selection into AUTH_CONFIG. Subscription
+# billing uses the ChatGPT login persisted under $CODEX_HOME (auth.json).
+# Competing provider credentials are stripped so a multi-secret unit never
+# hands Codex another vendor's key.
+#
+# billing=api is deliberately NOT supported: Codex passes an exported
+# OPENAI_API_KEY into the environment of the model's own shell commands
+# (verified on codex 0.147.0) and this adapter enables network access, so an
+# agent-generated command could exfiltrate the provider key. Until a verified
+# non-inherited credential path exists (codex login --with-api-key into an
+# isolated CODEX_HOME), api billing fails closed rather than leak the key.
 AUTH_CONFIG=()
 _prepare_auth() {
     unset FOREMAN_ANTHROPIC_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN
     unset FOREMAN_DEEPSEEK_API_KEY DEEPSEEK_API_KEY
     unset FOREMAN_KIMI_API_KEY MOONSHOT_API_KEY KIMI_API_KEY
     unset FOREMAN_GLM_API_KEY ZAI_API_KEY ZHIPUAI_API_KEY GLM_API_KEY
+    # api billing is unsupported (see above); never let a key reach Codex or,
+    # through it, the model's shell.
+    unset FOREMAN_OPENAI_API_KEY OPENAI_API_KEY
 
-    local api_key="${FOREMAN_OPENAI_API_KEY:-}"
     if [ "${FOREMAN_BILLING:-subscription}" = "api" ]; then
-        if [ -z "$api_key" ]; then
-            # Fail closed WITHOUT echoing any secret material.
-            _fail "billing=api needs FOREMAN_OPENAI_API_KEY"
-        fi
-        export OPENAI_API_KEY="$api_key"
-        AUTH_CONFIG=(-c "forced_login_method=api")
-    else
-        # Subscription billing uses the ChatGPT login persisted under
-        # $CODEX_HOME (auth.json). Drop any API key so it cannot flip billing.
-        unset OPENAI_API_KEY
-        AUTH_CONFIG=(-c "forced_login_method=chatgpt")
+        _fail "codex-cli does not support billing=api (the OPENAI_API_KEY would reach model-run shell commands); use billing=subscription with a codex login"
     fi
-    # The provisioning variable never reaches Codex's child process.
-    unset FOREMAN_OPENAI_API_KEY
+    AUTH_CONFIG=(-c "forced_login_method=chatgpt")
 
     # Model selection is RUNNER configuration: an operator-set FOREMAN_CODEX_MODEL
     # (or Codex's own config.toml when unset), never an advisory suggest:* label.

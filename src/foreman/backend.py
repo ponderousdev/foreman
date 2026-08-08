@@ -162,8 +162,20 @@ def session_ledger(unit_run_dir: Path) -> Path:
     recorded here. A buggy or adversarial unit could then forge a `SESSION_REF`
     for another unit's session. Placing the ledger beside the run dir keeps it
     outside every writable root the adapter grants while staying derivable from
-    the run dir alone, so writers (backend) and readers (cli/shepherd) agree."""
-    return unit_run_dir.parent / f"{unit_run_dir.name}.session"
+    the run dir alone, so writers (backend) and readers (cli/shepherd) agree.
+
+    A unit dispatched before this change kept its ledger at the legacy in-run-dir
+    path; migrate it (atomic rename) on first access so an in-flight resume,
+    attach, or cost read after upgrade still finds the recorded ref. Falls back
+    to the legacy path if the migration cannot be performed."""
+    ledger = unit_run_dir.parent / f"{unit_run_dir.name}.session"
+    legacy = unit_run_dir / "session"
+    if not ledger.exists() and legacy.exists():
+        try:
+            legacy.replace(ledger)
+        except OSError:
+            return legacy
+    return ledger
 
 
 def _backend_selection_path(cfg: Config, root: Path, unit: int) -> Path:
