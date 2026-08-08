@@ -264,9 +264,9 @@ exhaustion into planned pauses. `billing = "api"` lets each adapter consume its
 dedicated `FOREMAN_*_API_KEY` and translate it **only inside the adapter
 process**; raw provider variables remain excluded from the unit environment.
 The `claude` adapter reports verified cost and binds USD budgets. Provider
-wrappers that do not advertise `cost`, including `claude-code-deepseek` and
-`claude-code-kimi`, bind through timeout/turn limits instead of pretending an
-unverified cost is exact.
+wrappers that do not advertise `cost`, including `claude-code-deepseek`,
+`claude-code-kimi`, and `claude-code-glm`, bind through timeout/turn limits
+instead of pretending an unverified cost is exact.
 
 ### Claude Code with DeepSeek
 
@@ -327,6 +327,39 @@ billing = "api"
 ```
 
 Like the DeepSeek wrapper, it advertises `resume` but not `cost`: the
+custom-provider stream carries no cost value Foreman can independently verify.
+Provider errors remain in `agent.log`, and Foreman's runner owns the unchanged
+timeout/kill path.
+
+### Claude Code with GLM
+
+`backend = "claude-code-glm"` selects the production provider wrapper for Z.ai's
+GLM family. It requires `billing = "api"` and `FOREMAN_GLM_API_KEY` in the bot
+devcontainer environment. There is no password-manager fallback in the adapter:
+a missing key fails before Claude Code starts. The wrapper removes its
+provisioning variable, raw GLM/Z.ai/Kimi/DeepSeek/Anthropic credentials, and the
+Claude OAuth token from the child environment, then configures Z.ai's official
+Anthropic-compatible endpoint (`https://api.z.ai/api/anthropic`).
+
+The adapter fixes the model family to GLM: `glm-5.2[1m]` (the 1M-context
+flagship) handles primary/Opus/Sonnet work, while `glm-4.7` handles Haiku and
+subagents. This follows Z.ai's
+[official Claude Code integration](https://docs.z.ai/scenario-example/develop-tools/claude);
+advisory labels cannot change the family. It also derives the client
+`API_TIMEOUT_MS` from foreman's per-unit budget (`FOREMAN_TIMEOUT_MIN` + a
+margin) so a slow GLM response is never aborted by the client before foreman's
+own timeout governs the run. The validated harness baseline is the bot
+image's Claude Code `2.1.167` pin and Z.ai's GLM Anthropic API/model IDs as
+documented on 2026-08-08. Pin `backend_version = "2.1.167"` until a newer CLI has
+passed the adapter contract tests.
+
+```toml
+backend = "claude-code-glm"
+backend_version = "2.1.167"
+billing = "api"
+```
+
+Like the other provider wrappers, it advertises `resume` but not `cost`: the
 custom-provider stream carries no cost value Foreman can independently verify.
 Provider errors remain in `agent.log`, and Foreman's runner owns the unchanged
 timeout/kill path.
@@ -505,8 +538,8 @@ every consumer's next `uvx` resolution. See
 
 - **Backends**: `src/foreman/backends/<name>.sh` is the entire vendor
   surface (`run` / `resume <ref>` / `capabilities`). Production adapters are
-  `claude.sh`, `claude-code-deepseek.sh`, and `claude-code-kimi.sh`; `mock.sh`
-  is a hermetic seam proof.
+  `claude.sh`, `claude-code-deepseek.sh`, `claude-code-kimi.sh`, and
+  `claude-code-glm.sh`; `mock.sh` is a hermetic seam proof.
   Claude Code adapters share only execution mechanics under `backends/lib/`;
   provider credentials and model wiring remain in the named adapter.
 - **Runners**: implement the `Runner` protocol (`src/foreman/runner/`) and

@@ -195,7 +195,7 @@ the hood and syncs the venv automatically. New here? Start with
 │   ├── runner/          #   the Runner seam (protocol, handle store, LocalRunner)
 │   ├── dispatch.py      #   per-unit pipeline; shepherd.py, watch.py, graph.py, …
 │   ├── trust.py         #   D4/D13 trust; capabilities.py, gate.py, preflight.py
-│   └── backends/        #   agent adapters (Claude direct/DeepSeek/Kimi; mock seam proof)
+│   └── backends/        #   agent adapters (Claude direct/DeepSeek/Kimi/GLM; mock seam proof)
 ├── docs/                # Documentation (see docs/README.md)
 ├── scripts/             # Repo utility scripts (hygiene, status, summaries)
 ├── specs/               # Specifications (specs/foreman-v2.md)

@@ -26,9 +26,9 @@ foreman_claude_prepare() {
 
     # Keep the provisioning variable and every competing auth route out of the
     # child environment. Only the provider-compatible token survives.
-    unset FOREMAN_DEEPSEEK_API_KEY FOREMAN_ANTHROPIC_API_KEY FOREMAN_KIMI_API_KEY
+    unset FOREMAN_DEEPSEEK_API_KEY FOREMAN_ANTHROPIC_API_KEY FOREMAN_KIMI_API_KEY FOREMAN_GLM_API_KEY
     unset DEEPSEEK_API_KEY ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN
-    unset MOONSHOT_API_KEY KIMI_API_KEY
+    unset MOONSHOT_API_KEY KIMI_API_KEY ZAI_API_KEY ZHIPUAI_API_KEY GLM_API_KEY
     export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
     export ANTHROPIC_AUTH_TOKEN="$api_key"
     export ANTHROPIC_MODEL="deepseek-v4-pro[1m]"

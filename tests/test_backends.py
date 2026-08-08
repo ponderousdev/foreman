@@ -390,6 +390,192 @@ class KimiAdapter(unittest.TestCase):
         )
 
 
+class GLMAdapter(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.capture = self.root / "claude.capture"
+        self.prompt = self.root / "prompt.md"
+        self.prompt.write_text("work\n", encoding="utf-8")
+        self.result = self.root / "result.json"
+        self.session = self.root / "session"
+        self.log = self.root / "agent.log"
+        self.adapter = backend_mod.adapter_path("claude-code-glm")
+        fake = self.bin / "claude"
+        fake.write_text(
+            textwrap.dedent(
+                """\
+                #!/usr/bin/env bash
+                set -euo pipefail
+                {
+                    printf 'ARGS'
+                    for arg in "$@"; do printf '\\t%s' "$arg"; done
+                    printf '\\n'
+                    printf 'BASE=%s\\n' "${ANTHROPIC_BASE_URL:-}"
+                    printf 'MODEL=%s\\n' "${ANTHROPIC_MODEL:-}"
+                    printf 'OPUS=%s\\n' "${ANTHROPIC_DEFAULT_OPUS_MODEL:-}"
+                    printf 'SONNET=%s\\n' "${ANTHROPIC_DEFAULT_SONNET_MODEL:-}"
+                    printf 'HAIKU=%s\\n' "${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}"
+                    printf 'FABLE=%s\\n' "${ANTHROPIC_DEFAULT_FABLE_MODEL:-}"
+                    printf 'SUBAGENT=%s\\n' "${CLAUDE_CODE_SUBAGENT_MODEL:-}"
+                    printf 'EFFORT=%s\\n' "${CLAUDE_CODE_EFFORT_LEVEL:-}"
+                    printf 'MCP=%s\\n' "${ENABLE_CLAUDEAI_MCP_SERVERS:-}"
+                    printf 'TIMEOUT=%s\\n' "${API_TIMEOUT_MS:-}"
+                    [ "${ANTHROPIC_AUTH_TOKEN:-}" = 'test-glm-key' ] && echo 'AUTH_MATCH=yes' || echo 'AUTH_MATCH=no'
+                    [ "${FOREMAN_GLM_API_KEY+x}" = x ] && echo 'FOREMAN_KEY_PRESENT=yes' || echo 'FOREMAN_KEY_PRESENT=no'
+                    [ "${ZAI_API_KEY+x}" = x ] && echo 'RAW_KEY_PRESENT=yes' || echo 'RAW_KEY_PRESENT=no'
+                    [ "${ANTHROPIC_API_KEY+x}" = x ] && echo 'ANTHROPIC_KEY_PRESENT=yes' || echo 'ANTHROPIC_KEY_PRESENT=no'
+                    [ "${CLAUDE_CODE_OAUTH_TOKEN+x}" = x ] && echo 'OAUTH_PRESENT=yes' || echo 'OAUTH_PRESENT=no'
+                } >"$FAKE_CLAUDE_CAPTURE"
+                printf '{"type":"system","session_id":"glm-session"}\\n'
+                printf '{"type":"result","total_cost_usd":99.99}\\n'
+                if [ -n "${FAKE_CLAUDE_ERROR:-}" ]; then
+                    printf 'provider error: %s\\n' "$FAKE_CLAUDE_ERROR"
+                fi
+                exit "${FAKE_CLAUDE_EXIT:-0}"
+                """
+            ),
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+
+    def env(self, **changes: str) -> dict[str, str]:
+        env = {
+            "PATH": f"{self.bin}:{os.environ['PATH']}",
+            "FOREMAN_PROMPT_FILE": str(self.prompt),
+            "FOREMAN_RESULT_FILE": str(self.result),
+            "FOREMAN_SESSION_FILE": str(self.session),
+            "FOREMAN_LOG_FILE": str(self.log),
+            "FOREMAN_PERMISSION_MODE": "acceptEdits",
+            "FOREMAN_BILLING": "api",
+            "FOREMAN_MAX_TURNS": "5",
+            "FOREMAN_GLM_API_KEY": "test-glm-key",
+            "FOREMAN_ANTHROPIC_API_KEY": "competing-anthropic-key",
+            "ZAI_API_KEY": "raw-glm-key",
+            "ANTHROPIC_API_KEY": "raw-anthropic-key",
+            "CLAUDE_CODE_OAUTH_TOKEN": "competing-oauth-token",
+            "FAKE_CLAUDE_CAPTURE": str(self.capture),
+        }
+        env.update(changes)
+        return env
+
+    def run_adapter(
+        self, *args: str, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(self.adapter), *args],
+            cwd=self.root,
+            env=env or self.env(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def capture_lines(self) -> dict[str, str]:
+        lines = self.capture.read_text(encoding="utf-8").splitlines()
+        return dict(line.split("=", 1) for line in lines[1:])
+
+    def test_capabilities_are_exact_and_do_not_require_credentials(self):
+        proc = self.run_adapter("capabilities", env={"PATH": os.environ["PATH"]})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip().split(), ["resume", "attach"])
+
+    def test_run_hardwires_glm_family_and_strips_competing_credentials(self):
+        proc = self.run_adapter("run")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        capture = self.capture_lines()
+        self.assertEqual(capture["BASE"], "https://api.z.ai/api/anthropic")
+        self.assertEqual(capture["MODEL"], "glm-5.2[1m]")
+        self.assertEqual(capture["OPUS"], "glm-5.2[1m]")
+        self.assertEqual(capture["SONNET"], "glm-5.2[1m]")
+        self.assertEqual(capture["HAIKU"], "glm-4.7")
+        self.assertEqual(capture["FABLE"], "glm-5.2[1m]")
+        self.assertEqual(capture["SUBAGENT"], "glm-4.7")
+        self.assertEqual(capture["EFFORT"], "max")
+        self.assertEqual(capture["MCP"], "false")
+        self.assertEqual(capture["TIMEOUT"], "3000000")
+        self.assertEqual(capture["AUTH_MATCH"], "yes")
+        self.assertEqual(capture["FOREMAN_KEY_PRESENT"], "no")
+        self.assertEqual(capture["RAW_KEY_PRESENT"], "no")
+        self.assertEqual(capture["ANTHROPIC_KEY_PRESENT"], "no")
+        self.assertEqual(capture["OAUTH_PRESENT"], "no")
+        args = self.capture.read_text(encoding="utf-8").splitlines()[0].split("\t")[1:]
+        self.assertEqual(
+            args,
+            [
+                "-p",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--permission-mode",
+                "acceptEdits",
+                "--add-dir",
+                str(self.root),
+                "--max-turns",
+                "5",
+            ],
+        )
+        self.assertEqual(
+            self.session.read_text(encoding="utf-8"), "SESSION_REF=glm-session\n"
+        )
+        self.assertNotIn("COST_USD", self.session.read_text(encoding="utf-8"))
+        self.assertIn(
+            '"session_id":"glm-session"', self.log.read_text(encoding="utf-8")
+        )
+
+    def test_resume_passes_the_session_ref(self):
+        proc = self.run_adapter("resume", "prior-session")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        args = self.capture.read_text(encoding="utf-8").splitlines()[0].split("\t")[1:]
+        self.assertEqual(args[-2:], ["--resume", "prior-session"])
+
+    def test_attach_uses_provider_environment_for_interactive_resume(self):
+        self.session.write_text("SESSION_REF=prior-session\n", encoding="utf-8")
+        proc = self.run_adapter("attach", "--session-file", str(self.session))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        lines = self.capture.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(lines[0].split("\t")[1:], ["--resume", "prior-session"])
+        capture = self.capture_lines()
+        self.assertEqual(capture["BASE"], "https://api.z.ai/api/anthropic")
+        self.assertEqual(capture["AUTH_MATCH"], "yes")
+        self.assertEqual(capture["FOREMAN_KEY_PRESENT"], "no")
+
+    def test_missing_key_and_subscription_billing_fail_closed_without_secret_echo(self):
+        missing = self.env()
+        missing.pop("FOREMAN_GLM_API_KEY")
+        proc = self.run_adapter("run", env=missing)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("FOREMAN_GLM_API_KEY", proc.stderr)
+
+        proc = self.run_adapter("run", env=self.env(FOREMAN_BILLING="subscription"))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("requires billing=api", proc.stderr)
+        self.assertNotIn("test-glm-key", proc.stderr)
+
+    def test_provider_failure_preserves_log_and_exit_status(self):
+        proc = self.run_adapter(
+            "run",
+            env=self.env(FAKE_CLAUDE_EXIT="7", FAKE_CLAUDE_ERROR="overloaded"),
+        )
+        self.assertEqual(proc.returncode, 7)
+        self.assertIn(
+            "provider error: overloaded", self.log.read_text(encoding="utf-8")
+        )
+
+    def test_client_timeout_stays_above_foreman_deadline(self):
+        # The Anthropic client's per-request timeout must exceed foreman's
+        # whole-unit budget so the supervisor (backend.py) owns the deadline,
+        # never the client. Derived as (FOREMAN_TIMEOUT_MIN + 10 min) in ms.
+        self.run_adapter("run", env=self.env(FOREMAN_TIMEOUT_MIN="90"))
+        self.assertEqual(self.capture_lines()["TIMEOUT"], str((90 + 10) * 60 * 1000))
+        # Uncapped units (timeout_min = 0) fall back to a generous fixed value.
+        self.run_adapter("run", env=self.env(FOREMAN_TIMEOUT_MIN="0"))
+        self.assertEqual(self.capture_lines()["TIMEOUT"], "3000000")
+
+
 class BackendRunRecord(unittest.TestCase):
     def test_fresh_spawn_clears_stale_provider_session(self):
         with tempfile.TemporaryDirectory() as tmp:
