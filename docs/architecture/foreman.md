@@ -307,12 +307,14 @@ in the bot devcontainer environment. There is no password-manager fallback in
 the adapter: a missing key fails before Claude Code starts. The wrapper removes
 its provisioning variable, raw Kimi/Moonshot/DeepSeek/Anthropic credentials, and
 the Claude OAuth token from the child environment, then configures Kimi's
-official Anthropic-compatible endpoint.
+official Anthropic-compatible endpoint (`https://api.moonshot.ai/anthropic` — the
+`/v1` base is Moonshot's OpenAI-compatible surface, not the Anthropic one Claude
+Code speaks).
 
-The adapter fixes the model family to Kimi: `kimi-k3` (the 1M-context flagship)
-handles primary/Opus/Sonnet work, while `kimi-k2.7-code-highspeed` handles Haiku
-and subagents. This follows Kimi's
-[official Claude Code integration](https://platform.kimi.ai/docs/guide/agent-support);
+The adapter fixes the model family to Kimi: `kimi-k3[1m]` (the 1M-context
+flagship) handles primary/Opus/Sonnet work, while `kimi-k2.7-code-highspeed`
+handles Haiku and subagents. This follows Kimi's
+[official Claude Code integration](https://platform.kimi.ai/docs/guide/claude-code-kimi);
 advisory labels cannot change the family. The validated harness baseline is the
 bot image's Claude Code `2.1.167` pin and Kimi's Anthropic API/model IDs as
 documented on 2026-08-08. Pin `backend_version = "2.1.167"` until a newer CLI has

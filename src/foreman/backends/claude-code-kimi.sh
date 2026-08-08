@@ -28,13 +28,13 @@ foreman_claude_prepare() {
     # child environment. Only the provider-compatible token survives.
     unset FOREMAN_KIMI_API_KEY FOREMAN_DEEPSEEK_API_KEY FOREMAN_ANTHROPIC_API_KEY
     unset MOONSHOT_API_KEY KIMI_API_KEY DEEPSEEK_API_KEY ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN
-    export ANTHROPIC_BASE_URL="https://api.moonshot.ai/v1"
+    export ANTHROPIC_BASE_URL="https://api.moonshot.ai/anthropic"
     export ANTHROPIC_AUTH_TOKEN="$api_key"
-    export ANTHROPIC_MODEL="kimi-k3"
-    export ANTHROPIC_DEFAULT_OPUS_MODEL="kimi-k3"
-    export ANTHROPIC_DEFAULT_SONNET_MODEL="kimi-k3"
+    export ANTHROPIC_MODEL="kimi-k3[1m]"
+    export ANTHROPIC_DEFAULT_OPUS_MODEL="kimi-k3[1m]"
+    export ANTHROPIC_DEFAULT_SONNET_MODEL="kimi-k3[1m]"
     export ANTHROPIC_DEFAULT_HAIKU_MODEL="kimi-k2.7-code-highspeed"
-    export ANTHROPIC_DEFAULT_FABLE_MODEL="kimi-k3"
+    export ANTHROPIC_DEFAULT_FABLE_MODEL="kimi-k3[1m]"
     export CLAUDE_CODE_SUBAGENT_MODEL="kimi-k2.7-code-highspeed"
     export CLAUDE_CODE_EFFORT_LEVEL="max"
     export ENABLE_CLAUDEAI_MCP_SERVERS="false"
