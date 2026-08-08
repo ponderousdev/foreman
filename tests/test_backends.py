@@ -789,6 +789,15 @@ class CodexCliAdapter(unittest.TestCase):
         self.assertFalse(any(a.startswith("sandbox_") for a in args))
         self.assertEqual(self.capture_lines()["OPENAI_MATCH"], "yes")
 
+    def test_attach_without_ref_starts_a_fresh_session(self):
+        # No ref (unit died before emitting one) → a fresh interactive session,
+        # never bare `codex resume` (which opens the global session picker).
+        proc = self.run_adapter("attach")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        args = self.capture_args()
+        self.assertNotIn("resume", args)
+        self.assertIn("forced_login_method=api", args)
+
     def test_attach_rejects_option_shaped_ref_from_session_file(self):
         self.session.write_text("SESSION_REF=--last\n", encoding="utf-8")
         proc = self.run_adapter("attach", "--session-file", str(self.session))

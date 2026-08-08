@@ -199,7 +199,10 @@ main() {
         if [ -n "$resume_ref" ]; then
             exec codex "${AUTH_CONFIG[@]}" resume "$resume_ref"
         fi
-        exec codex "${AUTH_CONFIG[@]}" resume
+        # No ref (e.g. the unit died before emitting one): start a FRESH
+        # interactive session. Bare `codex resume` would open the global session
+        # picker and could select an unrelated unit's conversation.
+        exec codex "${AUTH_CONFIG[@]}"
     fi
 
     : "${FOREMAN_PROMPT_FILE:?}" "${FOREMAN_RESULT_FILE:?}" \

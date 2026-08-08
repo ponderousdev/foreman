@@ -393,13 +393,15 @@ raw `OPENAI_API_KEY` is never forwarded to the unit environment — only the
 dedicated `FOREMAN_OPENAI_API_KEY` provisioning variable is, and the adapter
 consumes it.
 
-**Model selection is runner configuration.** The bot pins the model by exporting
-`FOREMAN_CODEX_MODEL` in its devcontainer environment (a non-secret static line
-in `devcontainer.env`); the adapter passes it as `-c model=…`. The verified
-default is **`gpt-5.6-sol`** — set `FOREMAN_CODEX_MODEL=gpt-5.6-sol`. When the
-variable is unset the adapter arms no model and Codex falls back to its own
-`config.toml` (`model = …`) or built-in default. Advisory `suggest:*` labels have
-no path to the model — the adapter reads no labels.
+**Model selection is runner configuration.** The bot pins the model with the
+non-secret `FOREMAN_CODEX_MODEL` in its devcontainer environment; the adapter
+passes it as `-c model=…`. It is a managed init variable (`init-env.sh`), so a
+host-provided value is seeded into the env-file on Coder/Codespaces rather than
+dropped. The verified default is **`gpt-5.6-sol`** — set
+`FOREMAN_CODEX_MODEL=gpt-5.6-sol`. When the variable is unset the adapter arms no
+model and Codex falls back to its own `config.toml` (`model = …`) or built-in
+default. Advisory `suggest:*` labels have no path to the model — the adapter
+reads no labels.
 
 **Sandbox.** `codex exec resume` accepts neither `--sandbox` nor `--add-dir`, so
 the adapter drives the policy through `-c` overrides shared by run and resume.
