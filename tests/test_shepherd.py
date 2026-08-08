@@ -18,6 +18,7 @@ from foreman.shepherd import (
     _demote_promoted_if_invalid,
     _promote_ready_head,
     _recover_interrupted_promotion,
+    _return_to_draft,
     automation_ready_now,
     classify_checks,
     open_foreman_prs,
@@ -489,6 +490,62 @@ class DraftLifecycle(unittest.TestCase):
 
         self.assertFalse(ready)
         self.assertEqual(drafted, [9])
+        self.assertEqual(writes, [(9, None, [READY_FOR_REVIEW_LABEL])])
+
+    def test_labeled_head_change_after_guard_is_returned_to_draft(self):
+        gh, _runner = make_github()
+        initial = dict(
+            self._status(draft=False, labels=[READY_FOR_REVIEW_LABEL]),
+            body="<!-- foreman:ready-head:head -->",
+        )
+        statuses = iter(
+            [
+                initial,
+                dict(
+                    self._status(
+                        head="new", draft=False, labels=[READY_FOR_REVIEW_LABEL]
+                    ),
+                    body="<!-- foreman:ready-head:head -->",
+                ),
+            ]
+        )
+        gh.pr_status = lambda number: next(statuses)  # type: ignore[method-assign]
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
+        gh.record_ready_head_own_pr = lambda *args, **kwargs: True  # type: ignore[method-assign]
+        gh.promote_own_pr = lambda *args, **kwargs: (True, False)  # type: ignore[method-assign]
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
+        writes = []
+        gh.label_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, add=None, remove=None: writes.append(
+                (number, add, remove)
+            )
+        )
+
+        ready, detail, _revealed = _promote_ready_head(gh, initial)
+
+        self.assertFalse(ready)
+        self.assertIn("returned PR to draft", detail)
+        self.assertEqual(drafted, [9])
+        self.assertEqual(writes, [(9, None, [READY_FOR_REVIEW_LABEL])])
+
+    def test_label_cleanup_is_attempted_when_redraft_fails(self):
+        gh, _runner = make_github()
+        status = self._status(draft=False, labels=[READY_FOR_REVIEW_LABEL])
+        gh.draft_own_pr = lambda number: (_ for _ in ()).throw(  # type: ignore[method-assign]
+            ForemanError("draft unavailable")
+        )
+        writes = []
+
+        def fail_label_cleanup(number, *, add=None, remove=None):
+            writes.append((number, add, remove))
+            raise ForemanError("label cleanup unavailable")
+
+        gh.label_own_pr = fail_label_cleanup  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(ForemanError, "draft unavailable"):
+            _return_to_draft(gh, status)
+
         self.assertEqual(writes, [(9, None, [READY_FOR_REVIEW_LABEL])])
 
     def test_green_push_invalidates_persisted_ready_head_for_one_tick(self):

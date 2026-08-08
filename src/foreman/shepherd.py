@@ -150,8 +150,18 @@ def ready_for_review_now(gh: GitHub, status: dict) -> bool:
 
 def _return_to_draft(gh: GitHub, status: dict) -> None:
     """Fail closed after readiness invalidation; legacy labels stay read-only."""
-    gh.draft_own_pr(status["number"])
     labels = {label["name"] for label in status.get("labels") or []}
+    try:
+        gh.draft_own_pr(status["number"])
+    except Exception as draft_error:
+        if READY_FOR_REVIEW_LABEL in labels:
+            try:
+                gh.label_own_pr(status["number"], remove=[READY_FOR_REVIEW_LABEL])
+            except Exception as label_error:
+                draft_error.add_note(
+                    f"readiness label cleanup also failed: {label_error}"
+                )
+        raise
     if READY_FOR_REVIEW_LABEL in labels:
         gh.label_own_pr(status["number"], remove=[READY_FOR_REVIEW_LABEL])
 
@@ -261,6 +271,7 @@ def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str, dict | Non
         raise
     if not guarded:
         return False, "head changed during readiness guard", None
+    must_return_to_draft = promoted or had_ready_label
 
     # GitHub has no expected-head compare-and-swap on the ready mutation.
     # Re-read immediately and undo a promotion if the remaining race window
@@ -269,11 +280,11 @@ def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str, dict | Non
         after = gh.pr_status(status["number"])
         after_head = after.get("headRefOid") or ""
     except Exception:
-        if promoted:
-            gh.draft_own_pr(status["number"])
+        if must_return_to_draft:
+            _return_to_draft(gh, status)
         raise
     if after.get("isDraft") or after_head != fresh_head:
-        if promoted:
+        if must_return_to_draft:
             _return_to_draft(gh, after)
             detail = "readiness changed during promotion — returned PR to draft"
         else:
@@ -284,11 +295,11 @@ def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str, dict | Non
             after, lambda: gh.review_threads(status["number"])
         )
     except Exception:
-        if promoted:
-            gh.draft_own_pr(status["number"])
+        if must_return_to_draft:
+            _return_to_draft(gh, after)
         raise
     if not still_ready:
-        if promoted:
+        if must_return_to_draft:
             _return_to_draft(gh, after)
             detail = "readiness changed during promotion — returned PR to draft"
         else:
@@ -299,13 +310,13 @@ def _promote_ready_head(gh: GitHub, status: dict) -> tuple[bool, str, dict | Non
         if not gh.record_ready_head_own_pr(
             status["number"], expected_head_oid=after_head
         ):
-            if promoted:
-                gh.draft_own_pr(status["number"])
+            if must_return_to_draft:
+                _return_to_draft(gh, after)
             return False, "head changed before readiness writes", None
         gh.label_own_pr(status["number"], add=[READY_FOR_REVIEW_LABEL])
     except Exception:
-        if promoted:
-            gh.draft_own_pr(status["number"])
+        if must_return_to_draft:
+            _return_to_draft(gh, after)
         raise
     try:
         final = gh.pr_status(status["number"])
