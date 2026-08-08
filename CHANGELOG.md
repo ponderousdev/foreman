@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are intentional: release-please maintains a rolling release PR from
 conventional commits, and merging it cuts the tag, GitHub release, and this
 changelog (`task release:*` remains as a manual override).
+## [2.2.0](https://github.com/ponderousdev/foreman/compare/v2.1.1...v2.2.0) (2026-08-08)
+
+
+### Features
+
+* **dispatch:** responsive dispatch — ack, liveness, phase updates ([#124](https://github.com/ponderousdev/foreman/issues/124)) ([ae7e59a](https://github.com/ponderousdev/foreman/commit/ae7e59a5d0c2c0f5c06e28f562f989ccaf830f9f))
+* **github:** make Foreman PRs draft-first ([#143](https://github.com/ponderousdev/foreman/issues/143)) ([e543450](https://github.com/ponderousdev/foreman/commit/e5434505bb3679b55a00a82cee1c0078f41c3b43))
+* **github:** namespace Foreman PR labels ([#141](https://github.com/ponderousdev/foreman/issues/141)) ([43bc6d3](https://github.com/ponderousdev/foreman/commit/43bc6d3760ab77c8b25cbf7da2c671dc52e10525))
+* **report:** evolve unit status comment into snapshot + event log ([#82](https://github.com/ponderousdev/foreman/issues/82)) ([#120](https://github.com/ponderousdev/foreman/issues/120)) ([46fcbcf](https://github.com/ponderousdev/foreman/commit/46fcbcf26748be674ee8d9d84ace9e8335c9ac7e))
+* **shepherd:** add current-head reviewer gate ([#144](https://github.com/ponderousdev/foreman/issues/144)) ([dfed3c3](https://github.com/ponderousdev/foreman/commit/dfed3c3349591bda70c11146e36d034c6b457800))
+* **watch:** surface PR states in heartbeat (open/ready/escalated) ([#121](https://github.com/ponderousdev/foreman/issues/121)) ([51eef45](https://github.com/ponderousdev/foreman/commit/51eef45a595dd3a260f2b33bbc5fd67af9f01a56)), closes [#98](https://github.com/ponderousdev/foreman/issues/98)
+
+
+### Bug Fixes
+
+* **shepherd:** unify readiness gate ([#142](https://github.com/ponderousdev/foreman/issues/142)) ([2b76dc0](https://github.com/ponderousdev/foreman/commit/2b76dc0896781960e23edd1cfd340d90b5fa6cee))
+
 ## [2.1.1](https://github.com/ponderousdev/foreman/compare/v2.1.0...v2.1.1) (2026-08-04)
 
 
