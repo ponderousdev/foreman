@@ -158,7 +158,8 @@ class DeepSeekAdapter(unittest.TestCase):
         self.assertEqual(args[-2:], ["--resume", "prior-session"])
 
     def test_attach_uses_provider_environment_for_interactive_resume(self):
-        proc = self.run_adapter("attach", "prior-session")
+        self.session.write_text("SESSION_REF=prior-session\n", encoding="utf-8")
+        proc = self.run_adapter("attach", "--session-file", str(self.session))
         self.assertEqual(proc.returncode, 0, proc.stderr)
         lines = self.capture.read_text(encoding="utf-8").splitlines()
         self.assertEqual(lines[0].split("\t")[1:], ["--resume", "prior-session"])

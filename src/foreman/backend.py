@@ -2,7 +2,8 @@
 vendor surface. Foreman shells out; no vendor SDKs in core.
 
 Adapter contract:
-  argv:  <adapter> run | resume <session-ref> | attach [session-ref] | capabilities
+  argv:  <adapter> run | resume <session-ref> |
+         attach [session-ref | --session-file <path>] | capabilities
   cwd:   the unit's worktree
   env:   FOREMAN_PROMPT_FILE, FOREMAN_RESULT_FILE, FOREMAN_SESSION_FILE,
          FOREMAN_LOG_FILE, FOREMAN_TIMEOUT_MIN, FOREMAN_PERMISSION_MODE,

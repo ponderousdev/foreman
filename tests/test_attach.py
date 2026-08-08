@@ -58,7 +58,8 @@ class LocalAttach(unittest.TestCase):
         )
         rc, out = self._run()
         self.assertEqual(rc, 0)
-        self.assertIn("claude-code-deepseek.sh attach sess-123", out)
+        self.assertIn("claude-code-deepseek.sh attach --session-file", out)
+        self.assertNotIn("sess-123", out)
         self.assertIn("FOREMAN_BILLING=api", out)
         self.assertIn(str(wt), out)
 

@@ -28,7 +28,29 @@ foreman_claude_main() {
         }
         ;;
     attach)
-        resume_ref="${2:-}"
+        if [ "${2:-}" = "--session-file" ]; then
+            local attach_session_file="${3:-}"
+            [ -n "$attach_session_file" ] || {
+                _foreman_claude_fail "attach --session-file requires a path"
+                return 1
+            }
+            [ -r "$attach_session_file" ] || {
+                _foreman_claude_fail "attach session file is not readable"
+                return 1
+            }
+            local attach_line
+            while IFS= read -r attach_line; do
+                case "$attach_line" in
+                SESSION_REF=*) resume_ref="${attach_line#SESSION_REF=}" ;;
+                esac
+            done <"$attach_session_file"
+            [ -n "$resume_ref" ] || {
+                _foreman_claude_fail "attach session file has no session ref"
+                return 1
+            }
+        else
+            resume_ref="${2:-}"
+        fi
         ;;
     *)
         _foreman_claude_fail "unknown command: $cmd"

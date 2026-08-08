@@ -777,8 +777,8 @@ def cmd_attach(args: argparse.Namespace) -> int:
     if session_ref:
         print("  Resume the preserved Claude session in the worktree:")
         print(
-            f"    cd {shlex.quote(str(wt_path))} && {attach_cmd} "
-            f"{shlex.quote(session_ref)}"
+            f"    cd {shlex.quote(str(wt_path))} && {attach_cmd} --session-file "
+            f"{shlex.quote(str(session_file))}"
         )
     else:
         print(
