@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import signal
+import sys
 import tempfile
 import time
 import unittest
@@ -120,6 +121,11 @@ class TimeoutAndKill(SpecCase):
         status = lr.wait(impostor, timeout_s=0)
         self.assertTrue(status.abnormal)
 
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "PID-recycling liveness reads Linux /proc/<pid>/stat by design — the "
+        "local runner ships on the Linux bot devcontainer (#154)",
+    )
     def test_liveness_distinguishes_recycled_pids(self):
         lr = runner()
         real = _proc_starttime(os.getpid())
@@ -185,7 +191,11 @@ class ExecAndLogs(SpecCase):
         lr.wait(handle, timeout_s=10)
         result = lr.exec(handle, ["pwd"])
         self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stdout.strip(), str(self.root / "wt"))
+        # Realpath-normalize both sides: pwd prints the physical path, and on
+        # macOS the tmpdir is a /var → /private/var symlink (#154).
+        self.assertEqual(
+            Path(result.stdout.strip()).resolve(), (self.root / "wt").resolve()
+        )
 
     def test_logs_yield_adapter_stdout(self):
         lr = runner()
