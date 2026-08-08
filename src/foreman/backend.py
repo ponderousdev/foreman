@@ -20,11 +20,12 @@ enforced HERE (portable), not in the adapters.
 The agent environment is an allowlist (#13): PATH/HOME/USER/LANG/TERM,
 CLAUDE_CODE_OAUTH_TOKEN, the READ-ONLY GitHub token (from
 FOREMAN_AGENT_GH_TOKEN, handed to the agent as GH_TOKEN), and explicit
-FOREMAN_* variables. Never the write token, never ANTHROPIC_API_KEY or
-ANTHROPIC_AUTH_TOKEN (resolving #13's open question: a strict allowlist
-already excludes them — this is where that is made true). Under local this
-is defense in depth, not containment (D1/D3): the write token remains
-reachable on the shared box, and no test may claim otherwise.
+FOREMAN_* variables. Never the write token, never raw provider variables such
+as ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or DEEPSEEK_API_KEY. Adapters
+translate their dedicated FOREMAN_* provisioning variable and strip unrelated
+provider credentials before launching the CLI. Under local this is defense in
+depth, not containment (D1/D3): the write token remains reachable on the shared
+box, and no test may claim otherwise.
 """
 
 from __future__ import annotations
@@ -57,12 +58,17 @@ AGENT_TOKEN_VAR = "FOREMAN_AGENT_GH_TOKEN"
 # secret is never exposed to the agent by default (#13, spec "explicit
 # FOREMAN_* variables"). Foreman's per-unit FOREMAN_* values (prompt/result/
 # session/log paths, timeout, billing, …) are layered on by run_backend and
-# are not host-inherited. FOREMAN_ANTHROPIC_API_KEY is included so `billing =
-# "api"` reaches the adapter; under subscription billing it is simply absent.
+# are not host-inherited. Dedicated provider credentials are explicit entries;
+# each adapter validates and consumes only its own. Under other backends or
+# subscription billing they are simply absent/unused.
 # FOREMAN_READONLY is included so vet's read-only mode actually reaches the
 # adapter (claude.sh branches on it) — the total-allowlist env otherwise
 # silently dropped it, and vet ran with normal write permissions.
-AGENT_FOREMAN_ENV = ("FOREMAN_ANTHROPIC_API_KEY", "FOREMAN_READONLY")
+AGENT_FOREMAN_ENV = (
+    "FOREMAN_ANTHROPIC_API_KEY",
+    "FOREMAN_DEEPSEEK_API_KEY",
+    "FOREMAN_READONLY",
+)
 # Reaping window after kill(): the group is already dead or dying; this only
 # bounds how long we wait for the recorded status to become readable.
 KILL_REAP_S = 30
@@ -97,10 +103,15 @@ def capabilities(adapter: Path) -> set[str]:
     return set(proc.stdout.split()) if proc.returncode == 0 else set()
 
 
-def backend_cli_version(cfg: Config) -> str:
+def _uses_claude_cli(backend_name: str) -> bool:
+    """Harness classification without provider-specific core branches."""
+    return backend_name == "claude" or backend_name.startswith("claude-code-")
+
+
+def backend_cli_version(cfg: Config, backend_name: str | None = None) -> str:
     """Best-effort agent-CLI version (recorded in run_started; asserted by
     assert_backend_version when pinned)."""
-    if cfg.backend != "claude":
+    if not _uses_claude_cli(backend_name or cfg.backend):
         return ""
     proc = run(["claude", "--version"], check=False)
     if proc.returncode != 0 or not proc.stdout:
@@ -110,7 +121,7 @@ def backend_cli_version(cfg: Config) -> str:
 
 def assert_backend_version(cfg: Config) -> None:
     """Pin check: headless behavior drifts between agent-CLI releases."""
-    if not cfg.backend_version or cfg.backend != "claude":
+    if not cfg.backend_version or not _uses_claude_cli(cfg.backend):
         return
     version = backend_cli_version(cfg)
     if not version.startswith(cfg.backend_version):
@@ -155,6 +166,7 @@ def _record_run_started(
     handle: runner_mod.Handle,
     spec: UnitSpec,
     *,
+    backend_name: str,
     resume_ref: str | None,
 ) -> None:
     """#22: run_started records runner, image digest, and CLI version."""
@@ -164,8 +176,8 @@ def _record_run_started(
         "runner": handle.runner,
         "image": spec.image or None,
         "image_digest": None,  # local boots no image; sprite records one (v2.1)
-        "backend": cfg.backend,
-        "backend_cli_version": backend_cli_version(cfg),
+        "backend": backend_name,
+        "backend_cli_version": backend_cli_version(cfg, backend_name),
         "resume_ref": resume_ref,
         "timeout_s": spec.timeout_s,
         "started_at": utc_now_iso(),
@@ -207,9 +219,6 @@ def run_backend(
             "FOREMAN_MAX_TURNS": str(cfg.max_turns),
         }
     )
-    if cfg.billing == "api" and not env.get("FOREMAN_ANTHROPIC_API_KEY"):
-        raise ForemanError("billing=api but FOREMAN_ANTHROPIC_API_KEY is not set")
-
     argv = [str(adapter), "resume", resume_ref] if resume_ref else [str(adapter), "run"]
     spec = UnitSpec(
         unit=unit_number,
@@ -230,7 +239,14 @@ def run_backend(
 
     handle = runner.spawn(spec)
     runner_mod.save_handle(cfg, root, handle)
-    _record_run_started(cfg, unit_run_dir, handle, spec, resume_ref=resume_ref)
+    _record_run_started(
+        cfg,
+        unit_run_dir,
+        handle,
+        spec,
+        backend_name=adapter.stem,
+        resume_ref=resume_ref,
+    )
 
     timed_out = False
     try:

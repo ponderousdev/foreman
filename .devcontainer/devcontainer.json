@@ -20,7 +20,7 @@
   // container has no Tailscale feature installed, and we don't want a tailnet
   // auth key sitting in its env-file. init-env.sh will strip any stale
   // TS_AUTHKEY entry on every rebuild.
-  "initializeCommand": "bash .devcontainer/scripts/init-env.sh .devcontainer/devcontainer.env GH_TOKEN FOREMAN_AGENT_GH_TOKEN CLAUDE_CODE_OAUTH_TOKEN AGENT_DECK_TELEGRAM_KEY",
+  "initializeCommand": "bash .devcontainer/scripts/init-env.sh .devcontainer/devcontainer.env GH_TOKEN FOREMAN_AGENT_GH_TOKEN CLAUDE_CODE_OAUTH_TOKEN FOREMAN_DEEPSEEK_API_KEY AGENT_DECK_TELEGRAM_KEY",
   "runArgs": [
     "--init",
     "--shm-size=2g",
