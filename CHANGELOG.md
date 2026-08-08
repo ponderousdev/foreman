@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are intentional: release-please maintains a rolling release PR from
 conventional commits, and merging it cuts the tag, GitHub release, and this
 changelog (`task release:*` remains as a manual override).
+## [2.4.0](https://github.com/ponderousdev/foreman/compare/v2.3.0...v2.4.0) (2026-08-08)
+
+
+### Features
+
+* **backend:** add Claude Code GLM adapter ([#153](https://github.com/ponderousdev/foreman/issues/153)) ([bf51564](https://github.com/ponderousdev/foreman/commit/bf5156434fefdfd6f171d432d25b46b11f8df99b))
+* **backend:** add Claude Code Kimi adapter ([#151](https://github.com/ponderousdev/foreman/issues/151)) ([df5d8b9](https://github.com/ponderousdev/foreman/commit/df5d8b912de34037676743f22210487692a97d9d))
+* **backend:** add Codex CLI adapter ([#155](https://github.com/ponderousdev/foreman/issues/155)) ([6ff8715](https://github.com/ponderousdev/foreman/commit/6ff8715237c0ed6fd8da9317fba97c9935570489))
+
 ## [2.3.0](https://github.com/ponderousdev/foreman/compare/v2.2.0...v2.3.0) (2026-08-08)
 
 
