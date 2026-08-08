@@ -3,10 +3,10 @@
 Write contract (docs/architecture/foreman.md): foreman MAY create/push its own
 branches, open draft PRs, promote its OWN drafts after the readiness gate,
 return its OWN PRs to draft when readiness is invalidated, edit its OWN PRs
-and their foreman-namespace labels, create/edit the single marker-identified
-status comment per unit, resolve review threads it dispositioned, post
-human-approved vet correction comments, and idempotently ensure its label
-definitions exist.
+and their foreman-namespace labels, post bounded exact-head reviewer requests
+on its own PRs, create/edit the single marker-identified status comment per
+unit, resolve review threads it dispositioned, post human-approved vet
+correction comments, and idempotently ensure its label definitions exist.
 
 Foreman MUST NEVER: merge anything, close/reopen issues, edit issue
 titles/bodies/milestones, edit or delete human or third-party comments,
@@ -15,8 +15,8 @@ settings. Those operations are deliberately absent from this module, and
 tests/test_write_contract.py greps this file to keep them absent.
 
 Reads use `gh` JSON output (gh >= 2.96 exposes blockedBy, issueType,
-subIssues, parent, closedByPullRequestsReferences); review threads are the
-one GraphQL-only read.
+subIssues, parent, closedByPullRequestsReferences); review threads and
+exact-head external-review evidence are GraphQL-only reads.
 """
 
 from __future__ import annotations
@@ -95,6 +95,37 @@ query($owner: String!, $name: String!, $number: Int!) {
             totalCount
             nodes { author { login } body url }
           }
+        }
+      }
+    }
+  }
+}
+"""
+
+REVIEWER_EVIDENCE_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      comments(first: 100) {
+        totalCount
+        nodes {
+          body
+          createdAt
+          author { login }
+          reactions(first: 100) {
+            totalCount
+            nodes { content createdAt user { login } }
+          }
+        }
+      }
+      reviews(first: 100) {
+        totalCount
+        nodes {
+          state
+          submittedAt
+          author { login }
+          commit { oid }
+          comments(first: 1) { totalCount }
         }
       }
     }
@@ -715,6 +746,66 @@ class GitHub:
             )
         return nodes
 
+    def reviewer_evidence(self, number: int) -> dict:
+        """Complete bounded evidence for the configured external reviewer."""
+        out = self.gh.json(
+            [
+                "api",
+                "graphql",
+                "-f",
+                f"query={REVIEWER_EVIDENCE_QUERY}",
+                "-F",
+                f"owner={self.owner()}",
+                "-F",
+                f"name={self.repo()['name']}",
+                "-F",
+                f"number={number}",
+            ]
+        )
+        try:
+            pr = out["data"]["repository"]["pullRequest"]
+            comments = pr["comments"]
+            reviews = pr["reviews"]
+            comment_nodes = comments["nodes"]
+            review_nodes = reviews["nodes"]
+            comment_total = comments["totalCount"]
+            review_total = reviews["totalCount"]
+        except (KeyError, TypeError, AttributeError) as exc:
+            raise ForemanError(
+                f"reviewer evidence: unreadable GraphQL response for PR "
+                f"#{number} — failing closed"
+            ) from exc
+        if (
+            not isinstance(comment_nodes, list)
+            or not isinstance(review_nodes, list)
+            or not isinstance(comment_total, int)
+            or not isinstance(review_total, int)
+            or comment_total > len(comment_nodes)
+            or review_total > len(review_nodes)
+        ):
+            raise ForemanError(
+                f"reviewer evidence: partial GraphQL response for PR #{number} "
+                "— failing closed"
+            )
+        for comment in comment_nodes:
+            reactions = (comment or {}).get("reactions") or {}
+            nodes = reactions.get("nodes")
+            total = reactions.get("totalCount")
+            if (
+                not isinstance(nodes, list)
+                or not isinstance(total, int)
+                or total > len(nodes)
+            ):
+                raise ForemanError(
+                    f"reviewer evidence: partial reaction response for PR "
+                    f"#{number} — failing closed"
+                )
+        return {
+            "viewer": self.viewer(),
+            "comments": comment_nodes,
+            "reviews": review_nodes,
+        }
+
     def branch_exists_remote(self, branch: str) -> bool:
         return self.gh.ok(["api", f"repos/{self.repo_slug()}/branches/{branch}"])
 
@@ -876,6 +967,19 @@ class GitHub:
         self.gh.call(
             ["pr", "comment", str(number), "--body-file", "-"], input_text=body
         )
+
+    def request_reviewer_own_pr(
+        self, number: int, *, expected_head_oid: str, body: str
+    ) -> bool:
+        """Post one reviewer request only while the exact qualified head remains."""
+        self._assert_writable("request external review on own PR")
+        pr = self._own_pr_guard(number, "request external review")
+        if not expected_head_oid or pr.get("headRefOid") != expected_head_oid:
+            return False
+        self.gh.call(
+            ["pr", "comment", str(number), "--body-file", "-"], input_text=body
+        )
+        return True
 
     def upsert_status_comment(
         self,

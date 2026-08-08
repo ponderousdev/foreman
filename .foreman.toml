@@ -1,7 +1,7 @@
 # Foreman configuration for foreman's own repo (dogfood).
 #
 # Plan-affecting keys here (runner, trusted_actors, required_capabilities,
-# [verify]) are read from the DEFAULT BRANCH of Foreman's own clone, never
+# [reviewer], [verify]) are read from the DEFAULT BRANCH of Foreman's own clone, never
 # from a dispatched branch — an agent must not edit its own trust or gate.
 
 # v2.0 ships only the local runner. sprite (v2.1) is what makes untrusted

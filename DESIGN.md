@@ -57,7 +57,7 @@ disagree.
   capability ([ADR 0003](docs/decisions/0003-foreman-v2-runner-seam.md) D4/D13),
   not merely documented.
 - **Plan-affecting config is read from the default branch.** `runner`,
-  `trusted_actors`, `required_capabilities`, and `[verify]` come from
+  `trusted_actors`, `required_capabilities`, `[reviewer]`, and `[verify]` come from
   Foreman's own clone — an agent must never edit its own trust or its own gate.
 - **Foreman runs only in the bot devcontainer** (D2). No bare-host path exists
   and none may be added.

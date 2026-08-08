@@ -24,6 +24,10 @@ class ConfigLoading(unittest.TestCase):
         self.assertEqual(cfg.verify, {"default": ["task", "verify"]})
         self.assertEqual(cfg.required_capabilities, [])
         self.assertEqual(cfg.trusted_actors, [])
+        self.assertEqual(cfg.reviewer_login, "")
+        self.assertEqual(cfg.reviewer_request, "")
+        self.assertEqual(cfg.reviewer_timeout_min, 10)
+        self.assertEqual(cfg.reviewer_max_attempts, 2)
         self.assertEqual(cfg.runner, "local")
         self.assertTrue(cfg.require_approval)
         self.assertEqual(cfg.billing, "subscription")
@@ -73,6 +77,46 @@ class ConfigLoading(unittest.TestCase):
         self.assertEqual(cfg.trusted_actors, ["evan", "coderabbitai[bot]"])
         self.assertEqual(cfg.dispatch_budget_usd, 5.0)
         self.assertEqual(cfg.shepherd_timeout_min, 10)
+
+    def test_reviewer_table(self):
+        cfg = self.load_toml(
+            "[reviewer]\n"
+            'login = "review-bot[bot]"\n'
+            'request = "@review-bot review"\n'
+            "timeout_min = 15\n"
+            "max_attempts = 3\n"
+        )
+        self.assertEqual(cfg.reviewer_login, "review-bot[bot]")
+        self.assertEqual(cfg.reviewer_request, "@review-bot review")
+        self.assertEqual(cfg.reviewer_timeout_min, 15)
+        self.assertEqual(cfg.reviewer_max_attempts, 3)
+
+    def test_reviewer_login_requires_request(self):
+        with self.assertRaisesRegex(ForemanError, "request is required"):
+            self.load_toml('[reviewer]\nlogin = "review-bot[bot]"\n')
+
+    def test_reviewer_request_requires_login(self):
+        with self.assertRaisesRegex(ForemanError, "login is required"):
+            self.load_toml('[reviewer]\nrequest = "@review-bot review"\n')
+
+    def test_reviewer_fields_have_strict_types_and_cannot_forge_markers(self):
+        for text in (
+            "[reviewer]\nlogin = 0\n",
+            "[reviewer]\nrequest = 0\n",
+            '[reviewer]\nlogin = " review-bot[bot]"\nrequest = "@review-bot review"\n',
+            "[reviewer]\n"
+            'login = "review-bot[bot]"\n'
+            'request = "<!-- foreman:review-request head=x attempt=9 -->"\n',
+        ):
+            with self.subTest(text=text):
+                with self.assertRaises(ForemanError):
+                    self.load_toml(text)
+
+    def test_reviewer_bounds_must_be_positive_integers(self):
+        for key, value in (("timeout_min", "0"), ("max_attempts", "false")):
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(ForemanError, key):
+                    self.load_toml(f"[reviewer]\n{key} = {value}\n")
 
     def test_legacy_verify_command_maps_to_the_gate_baseline(self):
         cfg = self.load_toml('verify_command = ["task", "ci"]\n')

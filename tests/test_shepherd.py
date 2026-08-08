@@ -325,6 +325,49 @@ class DraftLifecycle(unittest.TestCase):
         self.assertEqual(promotions, [(9, "head")])
         self.assertEqual(writes, [(9, [READY_FOR_REVIEW_LABEL], None)])
 
+    def test_configured_reviewer_blocks_both_shepherd_and_status_then_requests(self):
+        gate_cfg = Config(
+            remote="origin",
+            reviewer_login="review-bot[bot]",
+            reviewer_request="@review-bot review",
+        )
+        gh, _runner = make_github(gate_cfg)
+        status = self._status()
+        gh.pr_status = lambda number: status  # type: ignore[method-assign]
+        gh.review_threads = lambda number: []  # type: ignore[assignment]
+        gh.reviewer_evidence = lambda number: {  # type: ignore[method-assign]
+            "viewer": "bot",
+            "comments": [],
+            "reviews": [],
+        }
+        requests = []
+        gh.request_reviewer_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, expected_head_oid, body: (
+                requests.append((number, expected_head_oid, body)) or True
+            )
+        )
+        gh.promote_own_pr = lambda *args, **kwargs: self.fail("promoted")  # type: ignore[method-assign]
+
+        work = shepherd_pr(
+            gh,
+            gate_cfg,
+            Path("."),
+            None,  # type: ignore[arg-type]
+            {"number": 9, "_unit": 1},
+            [],
+        )
+        displayed = dict(
+            self._status(draft=False, labels=[READY_FOR_REVIEW_LABEL]),
+            body="<!-- foreman:ready-head:head -->",
+        )
+
+        self.assertEqual(work.state, "settling")
+        self.assertIn("attempt 1", work.detail)
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0][:2], (9, "head"))
+        self.assertIn("@review-bot review", requests[0][2])
+        self.assertFalse(ready_for_review_now(gh, displayed))
+
     def test_failed_checks_leave_draft_unpromoted(self):
         gh, _runner = make_github()
         gh.pr_status = lambda number: self._status(checks="FAILURE")  # type: ignore[method-assign]
