@@ -21,6 +21,7 @@ from pathlib import Path
 from foreman import backend as backend_mod
 from foreman import dispatch as dispatch_mod
 from foreman import inputs as inputs_mod
+from foreman import progress as progress_mod
 from foreman import report, spec, worktree
 from foreman import runner as runner_mod
 from foreman import shepherd as shepherd_mod
@@ -927,6 +928,12 @@ def cmd_vet(args: argparse.Namespace) -> int:
     prompt_file = run_dir / "prompt.md"
     write_text(prompt_file, prompt)
     adapter = backend_mod.adapter_path(cfg.backend)
+    # Liveness narration (#125): vet runs one silent agent through the same
+    # seam as dispatch, so it narrates the same way — acknowledgment, then a
+    # heartbeat while the run is in flight. Display-only; labeled "vet"
+    # because unit 0 is a reservation, not a dispatch unit.
+    progress = progress_mod.DispatchReporter(workers=1).unit(0, label="vet")
+    progress.phase(f"analyzing {prompt_target} — log={run_dir / 'agent.log'}")
     os.environ["FOREMAN_READONLY"] = "1"
     try:
         result = backend_mod.run_backend(
@@ -939,9 +946,16 @@ def cmd_vet(args: argparse.Namespace) -> int:
             unit_run_dir=run_dir,
             prompt_file=prompt_file,
             timeout_min=cfg.shepherd_timeout_min,
+            reporter=progress,
         )
     finally:
         os.environ.pop("FOREMAN_READONLY", None)
+    if result.ok:
+        progress.terminal("analysis complete")
+    elif result.timed_out:
+        progress.terminal("timed out", f"killed after {cfg.shepherd_timeout_min}m")
+    else:
+        progress.terminal("analysis failed", "see agent log")
     findings_src = run_dir / "adapter-stdout.log"
     findings = findings_src.read_text(encoding="utf-8") if findings_src.exists() else ""
     findings_file = run_dir / "findings.md"

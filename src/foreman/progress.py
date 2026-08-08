@@ -130,8 +130,8 @@ class DispatchReporter:
             except (OSError, ValueError):
                 pass
 
-    def unit(self, number: int) -> UnitProgress:
-        return UnitProgress(self, number)
+    def unit(self, number: int, label: str | None = None) -> UnitProgress:
+        return UnitProgress(self, number, label=label)
 
 
 class UnitProgress:
@@ -139,9 +139,14 @@ class UnitProgress:
     heartbeats are an in-place spinner on an interactive single-unit dispatch
     and throttled plain lines otherwise."""
 
-    def __init__(self, reporter: DispatchReporter, number: int):
+    def __init__(
+        self, reporter: DispatchReporter, number: int, label: str | None = None
+    ):
         self._reporter = reporter
-        self._number = number
+        # Display prefix only. Dispatch narrates as ``#N``; vet and shepherd
+        # (#125) pass a label (``vet``, ``#N PR #M``) because their runs are
+        # not dispatch units and ``#0`` would read as one.
+        self._prefix = label if label is not None else f"#{number}"
         self.now = reporter.now
         self._frames = itertools.cycle(_SPINNER_FRAMES)
         self._spinner_open = False  # a \r line is pending its closing newline
@@ -151,7 +156,7 @@ class UnitProgress:
         # Close any pending spinner line first so a plain line never glues onto
         # a carriage-returned one.
         self.settle()
-        self._reporter._emit(f"foreman: #{self._number}: {text}\n")
+        self._reporter._emit(f"foreman: {self._prefix}: {text}\n")
 
     def start(self, branch: str, log_path: object) -> None:
         """Immediate per-unit acknowledgment (AC1): branch + live log path."""
@@ -164,7 +169,7 @@ class UnitProgress:
         if self._reporter.spinner_ok:
             frame = next(self._frames)
             self._reporter._emit(
-                f"\rforeman: #{self._number}: {frame} "
+                f"\rforeman: {self._prefix}: {frame} "
                 f"{liveness_text(elapsed_s, timeout_s)}"
             )
             self._spinner_open = True

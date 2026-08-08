@@ -25,6 +25,7 @@ from pathlib import Path
 
 from foreman import backend as backend_mod
 from foreman import gate, gitops, report, reviewer, spec, verify, worktree
+from foreman import progress as progress_mod
 from foreman import signatures as signatures_mod
 from foreman import trust as trust_mod
 from foreman.config import Config
@@ -402,6 +403,16 @@ def _ensure_worktree(
     return path
 
 
+# Narration labels (#125): one human phrase per shepherd prompt, emitted as
+# the start-of-run acknowledgment so the otherwise-silent agent run says what
+# it is doing. Display-only.
+_AGENT_PHASE = {
+    "shepherd-ci-fix": "repairing red CI",
+    "shepherd-rebase": "resolving rebase conflicts",
+    "shepherd-adjudicate": "adjudicating review threads",
+}
+
+
 def _resume_agent(
     gh: GitHub,
     cfg: Config,
@@ -438,7 +449,18 @@ def _resume_agent(
         )
         prompt = state_path.read_text(encoding="utf-8") + "\n\n---\n\n" + prompt
         write_text(prompt_file, prompt)
-    return backend_mod.run_backend(
+    # Liveness narration (#125): every shepherd agent invocation funnels
+    # through here, so this one reporter gives all three phases (CI fix,
+    # rebase, adjudication) acknowledgment + heartbeat + terminal. Shepherd
+    # works PRs strictly sequentially, so a standalone workers=1 reporter is
+    # safe (spinner-eligible on a TTY), mirroring dispatch's standalone path.
+    progress = progress_mod.DispatchReporter(workers=1).unit(
+        work.unit_number, label=f"#{work.unit_number} PR #{work.number}"
+    )
+    progress.phase(
+        f"{_AGENT_PHASE.get(prompt_name, prompt_name)} — log={run_dir / 'agent.log'}"
+    )
+    result = backend_mod.run_backend(
         cfg,
         root,
         selection.runner,
@@ -449,7 +471,22 @@ def _resume_agent(
         prompt_file=prompt_file,
         timeout_min=cfg.shepherd_timeout_min,
         resume_ref=resume_ref,
+        reporter=progress,
     )
+    # Terminal for the agent run itself — what the process verifiably did,
+    # never the shepherd outcome (pushed/escalated), which the caller decides
+    # after its own checks and reports in the summary.
+    if result.ok:
+        progress.terminal("agent finished")
+    elif result.timed_out:
+        progress.terminal(
+            "agent timed out", f"killed after {cfg.shepherd_timeout_min}m"
+        )
+    elif result.abnormal:
+        progress.terminal("agent died", "no recorded exit status")
+    else:
+        progress.terminal("agent failed", f"exit={result.returncode}")
+    return result
 
 
 def _origin_refusal(
