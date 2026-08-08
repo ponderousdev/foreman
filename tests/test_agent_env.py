@@ -54,6 +54,7 @@ class AgentEnvAllowlist(unittest.TestCase):
                 "DEEPSEEK_API_KEY": "deepseek-key",
                 "MOONSHOT_API_KEY": "moonshot-key",
                 "ZAI_API_KEY": "zai-key",
+                "OPENAI_API_KEY": "openai-key",
                 "SOME_RANDOM_SECRET": "nope",
                 # An operator-only FOREMAN_* control must NOT leak by prefix —
                 # the allowlist is explicit, not a sweep.
@@ -72,6 +73,7 @@ class AgentEnvAllowlist(unittest.TestCase):
         self.assertNotIn("DEEPSEEK_API_KEY", env)
         self.assertNotIn("MOONSHOT_API_KEY", env)
         self.assertNotIn("ZAI_API_KEY", env)
+        self.assertNotIn("OPENAI_API_KEY", env)
         self.assertNotIn("SOME_RANDOM_SECRET", env)
         # No blanket FOREMAN_* forwarding: operator-only vars stay out.
         self.assertNotIn("FOREMAN_SANDBOXED", env)
@@ -135,6 +137,47 @@ class AgentEnvAllowlist(unittest.TestCase):
         env = backend_mod.agent_env(Config(backend="claude-code-glm"))
         self.assertEqual(env["FOREMAN_GLM_API_KEY"], "glm-unit-key")
         self.assertNotIn("ZAI_API_KEY", env)
+
+    def test_no_openai_key_flows_codex_is_subscription_only(self):
+        # codex-cli runs subscription-only; no OpenAI key is provisioned or
+        # forwarded, and a raw OPENAI_API_KEY never reaches the agent env.
+        os.environ.update(
+            {
+                "PATH": "/usr/bin",
+                "FOREMAN_AGENT_GH_TOKEN": "read-token",
+                "FOREMAN_OPENAI_API_KEY": "unused-key",
+                "OPENAI_API_KEY": "raw-key-must-not-flow",
+            }
+        )
+        env = backend_mod.agent_env(Config(backend="codex-cli"))
+        self.assertNotIn("FOREMAN_OPENAI_API_KEY", env)
+        self.assertNotIn("OPENAI_API_KEY", env)
+
+    def test_codex_home_forwards_when_set(self):
+        # A relocated Codex home (login + config.toml) must reach the adapter,
+        # else codex-cli falls back to $HOME/.codex and loses the login/config.
+        os.environ.update(
+            {
+                "PATH": "/usr/bin",
+                "FOREMAN_AGENT_GH_TOKEN": "read-token",
+                "CODEX_HOME": "/opt/codex-home",
+            }
+        )
+        env = backend_mod.agent_env(Config(backend="codex-cli"))
+        self.assertEqual(env["CODEX_HOME"], "/opt/codex-home")
+
+    def test_codex_model_flows_as_runner_config_var(self):
+        # The codex-cli model knob is non-secret runner configuration; it must
+        # reach the adapter but only via its explicit FOREMAN_* name.
+        os.environ.update(
+            {
+                "PATH": "/usr/bin",
+                "FOREMAN_AGENT_GH_TOKEN": "read-token",
+                "FOREMAN_CODEX_MODEL": "gpt-5-codex",
+            }
+        )
+        env = backend_mod.agent_env(Config(backend="codex-cli"))
+        self.assertEqual(env["FOREMAN_CODEX_MODEL"], "gpt-5-codex")
 
 
 if __name__ == "__main__":

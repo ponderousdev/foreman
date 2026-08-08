@@ -421,7 +421,7 @@ def _resume_agent(
     backend_mod.assert_backend_version(cfg, backend_name)
     adapter = backend_mod.adapter_path(backend_name)
     caps = backend_mod.capabilities(adapter)
-    session_file = run_dir / "session"
+    session_file = backend_mod.session_ledger(run_dir)
     resume_ref = None
     if "resume" in caps and session_file.exists():
         for line in session_file.read_text(encoding="utf-8").splitlines():

@@ -71,7 +71,7 @@ class LocalAttach(unittest.TestCase):
         wt = self._worktree()
         run_dir = self.root / self.cfg.runtime_dir / "units" / "5"
         run_dir.mkdir(parents=True)
-        session_file = run_dir / "session"
+        session_file = cli.backend_mod.session_ledger(run_dir)
         session_file.write_text("SESSION_REF=sess-123\n", "utf-8")
         (run_dir / "run_started.json").write_text(
             json.dumps({"backend": "claude-code-deepseek"}), encoding="utf-8"

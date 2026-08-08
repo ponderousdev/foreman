@@ -28,7 +28,10 @@ shift || true
 # ANTHROPIC_API_KEY is in the managed list so the eviction loop strips it from
 # the env-file if it ever lands there — it must never be allowed into the
 # container since it silently overrides CLAUDE_CODE_OAUTH_TOKEN.
-ALL_MANAGED_VARS=(TS_AUTHKEY GH_TOKEN FOREMAN_AGENT_GH_TOKEN CLAUDE_CODE_OAUTH_TOKEN FOREMAN_DEEPSEEK_API_KEY FOREMAN_KIMI_API_KEY FOREMAN_GLM_API_KEY AGENT_DECK_TELEGRAM_KEY ANTHROPIC_API_KEY)
+# FOREMAN_CODEX_MODEL is non-secret runner config (the codex-cli model pin); it
+# is managed so a host-provided value flows into the env-file on Coder/Codespaces
+# rather than being silently dropped.
+ALL_MANAGED_VARS=(TS_AUTHKEY GH_TOKEN FOREMAN_AGENT_GH_TOKEN CLAUDE_CODE_OAUTH_TOKEN FOREMAN_DEEPSEEK_API_KEY FOREMAN_KIMI_API_KEY FOREMAN_GLM_API_KEY FOREMAN_CODEX_MODEL AGENT_DECK_TELEGRAM_KEY ANTHROPIC_API_KEY)
 
 # Vars this profile is allowed to populate. Caller passes the allow-list
 # as additional args after the env-file path. With no extra args we

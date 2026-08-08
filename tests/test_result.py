@@ -92,9 +92,10 @@ class SessionCost(unittest.TestCase):
         from foreman.runner import ExitStatus
 
         with tempfile.TemporaryDirectory() as tmp:
-            run_dir = Path(tmp)
+            run_dir = Path(tmp) / "unit"
+            run_dir.mkdir()
             content = "SESSION_REF=abc\nCOST_USD=5.00\n"
-            (run_dir / "session").write_text(content, encoding="utf-8")
+            backend_mod.session_ledger(run_dir).write_text(content, encoding="utf-8")
             stale = backend_mod.result_from_wait(
                 run_dir,
                 ExitStatus(code=124),

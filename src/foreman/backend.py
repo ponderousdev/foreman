@@ -50,7 +50,10 @@ BACKENDS_DIR = Path(__file__).resolve().parent / "backends"
 RESULT_STATUSES = ("completed", "blocked")
 
 # Environment names copied verbatim from Foreman's environment when present.
-AGENT_ENV_BASE = ("PATH", "HOME", "USER", "LANG", "TERM")
+# CODEX_HOME is a non-secret path: when an operator relocates Codex's home
+# (login + config.toml), the codex-cli adapter must see it or it silently falls
+# back to $HOME/.codex and loses the subscription login and configuration.
+AGENT_ENV_BASE = ("PATH", "HOME", "USER", "LANG", "TERM", "CODEX_HOME")
 # The read-only token Foreman's operator provisions for agents; handed to
 # the unit as GH_TOKEN. Required before any dispatch (#13).
 AGENT_TOKEN_VAR = "FOREMAN_AGENT_GH_TOKEN"
@@ -70,6 +73,10 @@ AGENT_FOREMAN_ENV = (
     "FOREMAN_DEEPSEEK_API_KEY",
     "FOREMAN_KIMI_API_KEY",
     "FOREMAN_GLM_API_KEY",
+    # Non-secret runner configuration: pins the codex-cli model when set. Kept
+    # on the explicit allowlist so it reaches the adapter without a prefix sweep.
+    # (codex-cli runs subscription-only, so there is no OpenAI API key to carry.)
+    "FOREMAN_CODEX_MODEL",
     "FOREMAN_READONLY",
 )
 # Reaping window after kill(): the group is already dead or dying; this only
@@ -143,6 +150,32 @@ def unit_dir(cfg: Config, root: Path, number: int) -> Path:
     path = root / cfg.runtime_dir / "units" / str(number)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def session_ledger(unit_run_dir: Path) -> Path:
+    """The adapter-owned session ledger (SESSION_REF/COST_USD), kept as a SIBLING
+    of the run directory rather than inside it.
+
+    Dispatch grants the agent write access to the run directory (that is where
+    the result contract lives), so a ledger inside it would be agent-writable —
+    and adapters with a real filesystem sandbox (codex-cli) resume by the ref
+    recorded here. A buggy or adversarial unit could then forge a `SESSION_REF`
+    for another unit's session. Placing the ledger beside the run dir keeps it
+    outside every writable root the adapter grants while staying derivable from
+    the run dir alone, so writers (backend) and readers (cli/shepherd) agree.
+
+    A unit dispatched before this change kept its ledger at the legacy in-run-dir
+    path; migrate it (atomic rename) on first access so an in-flight resume,
+    attach, or cost read after upgrade still finds the recorded ref. Falls back
+    to the legacy path if the migration cannot be performed."""
+    ledger = unit_run_dir.parent / f"{unit_run_dir.name}.session"
+    legacy = unit_run_dir / "session"
+    if not ledger.exists() and legacy.exists():
+        try:
+            legacy.replace(ledger)
+        except OSError:
+            return legacy
+    return ledger
 
 
 def _backend_selection_path(cfg: Config, root: Path, unit: int) -> Path:
@@ -271,7 +304,7 @@ def run_backend(
     gate_cmds: list[list[str]] | None = None,
     reporter: progress_mod.UnitProgress | None = None,
 ) -> BackendResult:
-    session_file = unit_run_dir / "session"
+    session_file = session_ledger(unit_run_dir)
     log_file = unit_run_dir / "agent.log"
     result_file = unit_run_dir / "result.json"
     if result_file.exists():
@@ -386,7 +419,7 @@ def result_from_wait(
     result = BackendResult(
         returncode=status.code, timed_out=timed_out, abnormal=status.abnormal
     )
-    _read_session_file(unit_run_dir / "session", result, cost_offset=session_offset)
+    _read_session_file(session_ledger(unit_run_dir), result, cost_offset=session_offset)
     log_tail = (
         tail(unit_run_dir / "agent.log", 80)
         + "\n"
@@ -596,8 +629,8 @@ def write_resume_state(unit_run_dir: Path, worktree: Path, note: str) -> Path:
         ["git", "-C", str(worktree), "log", "--oneline", "-5"], check=False
     ).stdout
     session = (
-        (unit_run_dir / "session").read_text(encoding="utf-8")
-        if (unit_run_dir / "session").exists()
+        session_ledger(unit_run_dir).read_text(encoding="utf-8")
+        if session_ledger(unit_run_dir).exists()
         else ""
     )
     body = (

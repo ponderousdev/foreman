@@ -47,7 +47,7 @@ class ResumeAdapterSelection(unittest.TestCase):
                 json.dumps({"backend": "claude-code-deepseek"}), encoding="utf-8"
             )
             backend_mod._record_backend_selection(cfg, root, 5, "claude-code-deepseek")
-            (run_dir / "session").write_text(
+            backend_mod.session_ledger(run_dir).write_text(
                 "SESSION_REF=deepseek-session\n", encoding="utf-8"
             )
             wt = root / "worktree"

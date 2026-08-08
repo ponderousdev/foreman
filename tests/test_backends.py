@@ -576,6 +576,286 @@ class GLMAdapter(unittest.TestCase):
         self.assertEqual(self.capture_lines()["TIMEOUT"], "3000000")
 
 
+class CodexCliAdapter(unittest.TestCase):
+    """OpenAI Codex CLI adapter. Codex is a different harness from Claude Code
+    (`codex exec`, `thread.started` events, `-c` config overrides), so this
+    standalone adapter is exercised against a fake `codex` on PATH."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        # A real repo so the adapter's `git rev-parse --git-common-dir` resolves
+        # (the worktree Git-metadata writable root); adapter cwd is self.root.
+        subprocess.run(
+            ["git", "init", "-q", str(self.root)], check=True, capture_output=True
+        )
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.capture = self.root / "codex.capture"
+        self.prompt = self.root / "prompt.md"
+        self.prompt.write_text("work\n", encoding="utf-8")
+        self.result = self.root / "result.json"
+        self.session = self.root / "session"
+        self.log = self.root / "agent.log"
+        # Codex thread ids are UUIDs; the adapter only persists a UUID SESSION_REF.
+        self.sid = "019fe240-8ec9-7283-8060-acf56ec96411"
+        self.adapter = backend_mod.adapter_path("codex-cli")
+        fake = self.bin / "codex"
+        fake.write_text(
+            textwrap.dedent(
+                """\
+                #!/usr/bin/env bash
+                set -euo pipefail
+                {
+                    printf 'ARGS'
+                    for arg in "$@"; do printf '\\t%s' "$arg"; done
+                    printf '\\n'
+                    [ "${OPENAI_API_KEY:-}" = 'test-openai-key' ] && echo 'OPENAI_MATCH=yes' || echo 'OPENAI_MATCH=no'
+                    [ "${OPENAI_API_KEY+x}" = x ] && echo 'OPENAI_PRESENT=yes' || echo 'OPENAI_PRESENT=no'
+                    [ "${FOREMAN_OPENAI_API_KEY+x}" = x ] && echo 'FOREMAN_KEY_PRESENT=yes' || echo 'FOREMAN_KEY_PRESENT=no'
+                    [ "${ANTHROPIC_API_KEY+x}" = x ] && echo 'ANTHROPIC_KEY_PRESENT=yes' || echo 'ANTHROPIC_KEY_PRESENT=no'
+                    [ "${CLAUDE_CODE_OAUTH_TOKEN+x}" = x ] && echo 'OAUTH_PRESENT=yes' || echo 'OAUTH_PRESENT=no'
+                    [ "${DEEPSEEK_API_KEY+x}" = x ] && echo 'DEEPSEEK_PRESENT=yes' || echo 'DEEPSEEK_PRESENT=no'
+                } >"$FAKE_CODEX_CAPTURE"
+                printf '{"type":"thread.started","thread_id":"%s"}\\n' "${FAKE_CODEX_THREAD_ID:-019fe240-8ec9-7283-8060-acf56ec96411}"
+                printf '{"type":"turn.completed","usage":{"output_tokens":5}}\\n'
+                if [ -n "${FAKE_CODEX_ERROR:-}" ]; then
+                    printf 'codex error: %s\\n' "$FAKE_CODEX_ERROR"
+                fi
+                exit "${FAKE_CODEX_EXIT:-0}"
+                """
+            ),
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+
+    def env(self, **changes: str) -> dict[str, str]:
+        env = {
+            "PATH": f"{self.bin}:{os.environ['PATH']}",
+            "FOREMAN_PROMPT_FILE": str(self.prompt),
+            "FOREMAN_RESULT_FILE": str(self.result),
+            "FOREMAN_SESSION_FILE": str(self.session),
+            "FOREMAN_LOG_FILE": str(self.log),
+            # Subscription is the only supported billing (ChatGPT login).
+            "FOREMAN_BILLING": "subscription",
+            # A stray provider key must be stripped, never reach Codex/its shell.
+            "FOREMAN_OPENAI_API_KEY": "stray-openai-key",
+            "OPENAI_API_KEY": "stray-raw-openai-key",
+            # Competing provider credentials that must never reach Codex.
+            "FOREMAN_ANTHROPIC_API_KEY": "competing-anthropic-key",
+            "ANTHROPIC_API_KEY": "raw-anthropic-key",
+            "CLAUDE_CODE_OAUTH_TOKEN": "competing-oauth-token",
+            "DEEPSEEK_API_KEY": "raw-deepseek-key",
+            "FAKE_CODEX_CAPTURE": str(self.capture),
+        }
+        env.update(changes)
+        return env
+
+    def run_adapter(
+        self, *args: str, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(self.adapter), *args],
+            cwd=self.root,
+            env=env or self.env(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def capture_args(self) -> list[str]:
+        return self.capture.read_text(encoding="utf-8").splitlines()[0].split("\t")[1:]
+
+    def capture_lines(self) -> dict[str, str]:
+        lines = self.capture.read_text(encoding="utf-8").splitlines()
+        return dict(line.split("=", 1) for line in lines[1:])
+
+    def writable_roots_arg(self) -> str:
+        for a in self.capture_args():
+            if a.startswith("sandbox_workspace_write.writable_roots="):
+                return a
+        return ""
+
+    def test_capabilities_are_exact_and_do_not_require_credentials(self):
+        proc = self.run_adapter("capabilities", env={"PATH": os.environ["PATH"]})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip().split(), ["resume", "attach"])
+
+    def test_run_uses_chatgpt_login_and_strips_all_provider_keys(self):
+        proc = self.run_adapter("run")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        capture = self.capture_lines()
+        # Subscription uses the ChatGPT login; NO OpenAI key (stray or
+        # provisioning) survives into Codex or, through it, the model's shell.
+        self.assertEqual(capture["OPENAI_PRESENT"], "no")
+        self.assertEqual(capture["FOREMAN_KEY_PRESENT"], "no")
+        # No competing vendor credential survives into Codex's child process.
+        self.assertEqual(capture["ANTHROPIC_KEY_PRESENT"], "no")
+        self.assertEqual(capture["OAUTH_PRESENT"], "no")
+        self.assertEqual(capture["DEEPSEEK_PRESENT"], "no")
+        args = self.capture_args()
+        self.assertIn("forced_login_method=chatgpt", args)
+        self.assertIn("sandbox_mode=workspace-write", args)
+        # Network is enabled so the agent can use gh / fetch deps / reach test
+        # services — the runner, not Codex's sandbox, is the isolation boundary.
+        self.assertIn("sandbox_workspace_write.network_access=true", args)
+        # Writable roots grant the out-of-worktree result dir AND the worktree's
+        # real Git metadata dir (so `git commit` works under workspace-write).
+        roots = self.writable_roots_arg()
+        self.assertIn(f'"{self.root}"', roots)
+        self.assertIn("/.git", roots)
+        # Headless run streams JSONL and reads the prompt from stdin via `-`.
+        self.assertEqual(args[-4:], ["exec", "--json", "--skip-git-repo-check", "-"])
+        self.assertEqual(
+            self.session.read_text(encoding="utf-8"), f"SESSION_REF={self.sid}\n"
+        )
+        self.assertNotIn("COST_USD", self.session.read_text(encoding="utf-8"))
+        self.assertIn(f'"thread_id":"{self.sid}"', self.log.read_text(encoding="utf-8"))
+
+    def test_api_billing_fails_closed_to_protect_the_provider_key(self):
+        # api billing is unsupported: an exported OPENAI_API_KEY would reach the
+        # model's shell commands (verified on codex 0.147.0) with network on.
+        proc = self.run_adapter("run", env=self.env(FOREMAN_BILLING="api"))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("does not support billing=api", proc.stderr)
+        # Fail closed WITHOUT echoing any secret material, before launching codex.
+        self.assertNotIn("stray-openai-key", proc.stderr)
+        self.assertFalse(self.capture.exists(), "codex must not launch under api")
+
+    def test_model_is_runner_configuration_not_a_label(self):
+        # Set → an explicit runner-config model flows to Codex as `-c model=`.
+        self.run_adapter("run", env=self.env(FOREMAN_CODEX_MODEL="gpt-5-codex"))
+        self.assertIn("model=gpt-5-codex", self.capture_args())
+        # Unset → the adapter arms no model itself (Codex config decides); there
+        # is no code path that reads an advisory suggest:* label.
+        self.run_adapter("run")
+        self.assertFalse(
+            any(a.startswith("model=") for a in self.capture_args()),
+            "adapter must not arm a model without explicit runner configuration",
+        )
+
+    def test_resume_passes_the_session_ref(self):
+        proc = self.run_adapter("resume", self.sid)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        args = self.capture_args()
+        self.assertEqual(
+            args[-6:],
+            ["exec", "resume", "--json", "--skip-git-repo-check", self.sid, "-"],
+        )
+        # The prompt still rides stdin via the trailing `-`.
+        self.assertEqual(args[-1], "-")
+        self.assertIn(f"SESSION_REF={self.sid}", self.session.read_text("utf-8"))
+
+    def test_resume_requires_a_session_ref(self):
+        proc = self.run_adapter("resume")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("resume requires a session ref", proc.stderr)
+
+    def test_resume_rejects_option_shaped_session_ref(self):
+        # A corrupted agent-writable ledger must not smuggle `--last` (or any
+        # non-UUID) into Codex's positional parser and hijack another thread.
+        for bad in ("--last", "../etc", "codex-session"):
+            proc = self.run_adapter("resume", bad)
+            self.assertNotEqual(proc.returncode, 0, f"{bad!r} should be rejected")
+            self.assertIn("not a valid session id", proc.stderr)
+            self.assertFalse(self.capture.exists(), "codex must not launch")
+
+    def test_run_ignores_non_uuid_thread_id_from_stream(self):
+        # Only a UUID thread id becomes a resumable SESSION_REF.
+        proc = self.run_adapter("run", env=self.env(FAKE_CODEX_THREAD_ID="--last"))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(
+            self.session.exists() and self.session.read_text("utf-8").strip(),
+            "a non-UUID thread id must never be persisted as a session ref",
+        )
+
+    def test_attach_uses_provider_environment_without_sandbox_roots(self):
+        self.session.write_text(f"SESSION_REF={self.sid}\n", encoding="utf-8")
+        proc = self.run_adapter("attach", "--session-file", str(self.session))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        args = self.capture_args()
+        self.assertEqual(args[-2:], ["resume", self.sid])
+        self.assertIn("forced_login_method=chatgpt", args)
+        # Interactive attach takes no headless sandbox overrides — so it never
+        # broadens the sandbox with a writable root for an unused result path.
+        self.assertFalse(any(a.startswith("sandbox_") for a in args))
+        self.assertEqual(self.capture_lines()["OPENAI_PRESENT"], "no")
+
+    def test_attach_without_ref_starts_a_fresh_session(self):
+        # No ref (unit died before emitting one) → a fresh interactive session,
+        # never bare `codex resume` (which opens the global session picker).
+        proc = self.run_adapter("attach")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        args = self.capture_args()
+        self.assertNotIn("resume", args)
+        self.assertIn("forced_login_method=chatgpt", args)
+
+    def test_attach_rejects_option_shaped_ref_from_session_file(self):
+        self.session.write_text("SESSION_REF=--last\n", encoding="utf-8")
+        proc = self.run_adapter("attach", "--session-file", str(self.session))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("not a valid session id", proc.stderr)
+
+    def test_nonzero_max_turns_fails_closed(self):
+        # Codex exec has no turn cap; refuse rather than silently ignore a bound.
+        proc = self.run_adapter("run", env=self.env(FOREMAN_MAX_TURNS="5"))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("max_turns", proc.stderr)
+        self.assertFalse(self.capture.exists(), "codex must not launch")
+        # max_turns=0 (uncapped, the default) runs normally.
+        ok = self.run_adapter("run", env=self.env(FOREMAN_MAX_TURNS="0"))
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+
+    def test_writable_roots_are_toml_escaped(self):
+        # A result dir whose path contains a double quote must not break the
+        # writable_roots TOML array.
+        weird = self.root / 'a"b'
+        weird.mkdir()
+        env = self.env(FOREMAN_RESULT_FILE=str(weird / "result.json"))
+        proc = self.run_adapter("run", env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(r"a\"b", self.writable_roots_arg())
+
+    def test_readonly_vet_uses_read_only_sandbox_and_no_json(self):
+        proc = self.run_adapter("run", env=self.env(FOREMAN_READONLY="1"))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        args = self.capture_args()
+        self.assertIn("sandbox_mode=read-only", args)
+        # Vet grants no writable root, enables no network, and streams no JSONL.
+        self.assertFalse(any(a.startswith("sandbox_workspace_write") for a in args))
+        self.assertNotIn("--json", args)
+        self.assertEqual(args[-2:], ["--skip-git-repo-check", "-"])
+
+    def test_provider_failure_preserves_log_and_exit_status(self):
+        proc = self.run_adapter(
+            "run",
+            env=self.env(FAKE_CODEX_EXIT="7", FAKE_CODEX_ERROR="overloaded"),
+        )
+        self.assertEqual(proc.returncode, 7)
+        self.assertIn("codex error: overloaded", self.log.read_text(encoding="utf-8"))
+
+    def test_unknown_command_fails_closed(self):
+        proc = self.run_adapter("frobnicate")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("unknown command", proc.stderr)
+
+
+class SessionLedgerIsolation(unittest.TestCase):
+    def test_ledger_is_outside_the_agent_writable_run_dir(self):
+        # Dispatch grants the agent write access to the run dir (the result
+        # contract lives there); the adapter-owned ledger must sit outside it so
+        # a unit cannot forge another unit's SESSION_REF.
+        run_dir = Path("/x/.foreman/units/9")
+        ledger = backend_mod.session_ledger(run_dir)
+        self.assertEqual(ledger, Path("/x/.foreman/units/9.session"))
+        self.assertNotEqual(ledger.parent, run_dir)
+        self.assertFalse(
+            str(ledger).startswith(str(run_dir) + "/"),
+            "ledger must not live inside the agent-writable run dir",
+        )
+
+
 class BackendRunRecord(unittest.TestCase):
     def test_fresh_spawn_clears_stale_provider_session(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -586,7 +866,8 @@ class BackendRunRecord(unittest.TestCase):
             worktree.mkdir()
             prompt = run_dir / "prompt.md"
             prompt.write_text("work\n", encoding="utf-8")
-            session = run_dir / "session"
+            # The ledger is a SIBLING of the run dir (outside agent-writable roots).
+            session = backend_mod.session_ledger(run_dir)
             session.write_text("SESSION_REF=old-provider-session\n", encoding="utf-8")
 
             def new_session(spec: UnitSpec) -> int:

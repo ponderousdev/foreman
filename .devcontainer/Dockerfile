@@ -27,7 +27,7 @@ ARG AOE_VERSION=1.10.1
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
 ARG CLAUDE_CODE_VERSION=2.1.167
 # renovate: datasource=npm depName=@openai/codex
-ARG CODEX_VERSION=0.137.0
+ARG CODEX_VERSION=0.147.0
 # renovate: datasource=npm depName=@google/gemini-cli
 ARG GEMINI_CLI_VERSION=0.45.2
 # renovate: datasource=github-releases depName=asheshgoplani/agent-deck extractVersion=^v?(?<version>.+)$
