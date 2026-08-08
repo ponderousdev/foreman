@@ -9,7 +9,7 @@ build-backend = "hatchling.build"
 [project]
 name = "foreman"
 # Version is managed by release-please (release-type: python); do not hand-edit.
-version = "2.3.0"
+version = "2.4.0"
 description = "Deterministic supervisor for dispatching agent work across local, Docker, and Sprite runners"
 readme = "README.md"
 license = "Apache-2.0"
