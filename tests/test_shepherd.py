@@ -580,6 +580,57 @@ class DraftLifecycle(unittest.TestCase):
         self.assertTrue(_recover_interrupted_promotion(gh, status))
         self.assertEqual(drafted, [9])
 
+    def test_interrupted_promotion_thread_read_failure_returns_to_draft(self):
+        gh, _runner = make_github()
+        status = dict(
+            self._status(draft=False),
+            body="<!-- foreman:ready-head:head -->",
+        )
+        gh.review_threads = lambda number: (_ for _ in ()).throw(  # type: ignore[assignment]
+            ForemanError("threads unavailable")
+        )
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(ForemanError, "threads unavailable"):
+            _recover_interrupted_promotion(gh, status)
+
+        self.assertEqual(drafted, [9])
+
+    def test_initial_status_failure_demotes_from_pr_list_snapshot(self):
+        gh, _runner = make_github()
+        gh.pr_status = lambda number: (_ for _ in ()).throw(  # type: ignore[method-assign]
+            ForemanError("checks unavailable")
+        )
+        drafted = []
+        gh.draft_own_pr = lambda number: drafted.append(number)  # type: ignore[method-assign]
+        writes = []
+        gh.label_own_pr = (  # type: ignore[method-assign]
+            lambda number, *, add=None, remove=None: writes.append(
+                (number, add, remove)
+            )
+        )
+        pr = {
+            "number": 9,
+            "_unit": 1,
+            "isDraft": False,
+            "body": "<!-- foreman:ready-head:head -->",
+            "labels": [{"name": READY_FOR_REVIEW_LABEL}],
+        }
+
+        with self.assertRaisesRegex(ForemanError, "checks unavailable"):
+            shepherd_pr(
+                gh,
+                Config(remote="origin"),
+                Path("."),
+                None,  # type: ignore[arg-type]
+                pr,
+                [],
+            )
+
+        self.assertEqual(drafted, [9])
+        self.assertEqual(writes, [(9, None, [READY_FOR_REVIEW_LABEL])])
+
     def test_conflicting_draft_routes_directly_to_merge_repair(self):
         gh, _runner = make_github()
         status = self._status()

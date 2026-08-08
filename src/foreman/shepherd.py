@@ -194,10 +194,14 @@ def _recover_interrupted_promotion(gh: GitHub, status: dict) -> bool:
     if READY_FOR_REVIEW_LABEL in labels or status.get("isDraft") or not recorded_head:
         return False
     head = status.get("headRefOid") or ""
-    if recorded_head == head and automation_ready_now(
-        status, lambda: gh.review_threads(status["number"])
-    ):
-        return False
+    try:
+        if recorded_head == head and automation_ready_now(
+            status, lambda: gh.review_threads(status["number"])
+        ):
+            return False
+    except Exception:
+        gh.draft_own_pr(status["number"])
+        raise
     gh.draft_own_pr(status["number"])
     return True
 
@@ -556,7 +560,17 @@ def shepherd_pr(
     *,
     sink: dict[int, PrWork] | None = None,
 ) -> PrWork:
-    status = gh.pr_status(pr["number"])
+    try:
+        status = gh.pr_status(pr["number"])
+    except Exception:
+        # The list snapshot cannot attest checks, but it can prove that this
+        # PR crossed (or interrupted) Foreman's promotion boundary. Use that
+        # weaker read to fail closed when the enriched status read is unavailable.
+        labels = {label["name"] for label in pr.get("labels") or []}
+        interrupted = not pr.get("isDraft") and bool(_ready_head(pr.get("body") or ""))
+        if READY_FOR_REVIEW_LABEL in labels or interrupted:
+            _return_to_draft(gh, pr)
+        raise
     work = PrWork(
         number=pr["number"],
         unit_number=pr["_unit"],
