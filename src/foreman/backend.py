@@ -73,9 +73,9 @@ AGENT_FOREMAN_ENV = (
     "FOREMAN_DEEPSEEK_API_KEY",
     "FOREMAN_KIMI_API_KEY",
     "FOREMAN_GLM_API_KEY",
-    "FOREMAN_OPENAI_API_KEY",
     # Non-secret runner configuration: pins the codex-cli model when set. Kept
     # on the explicit allowlist so it reaches the adapter without a prefix sweep.
+    # (codex-cli runs subscription-only, so there is no OpenAI API key to carry.)
     "FOREMAN_CODEX_MODEL",
     "FOREMAN_READONLY",
 )

@@ -138,17 +138,19 @@ class AgentEnvAllowlist(unittest.TestCase):
         self.assertEqual(env["FOREMAN_GLM_API_KEY"], "glm-unit-key")
         self.assertNotIn("ZAI_API_KEY", env)
 
-    def test_openai_key_flows_only_as_foreman_var(self):
+    def test_no_openai_key_flows_codex_is_subscription_only(self):
+        # codex-cli runs subscription-only; no OpenAI key is provisioned or
+        # forwarded, and a raw OPENAI_API_KEY never reaches the agent env.
         os.environ.update(
             {
                 "PATH": "/usr/bin",
                 "FOREMAN_AGENT_GH_TOKEN": "read-token",
-                "FOREMAN_OPENAI_API_KEY": "openai-unit-key",
+                "FOREMAN_OPENAI_API_KEY": "unused-key",
                 "OPENAI_API_KEY": "raw-key-must-not-flow",
             }
         )
-        env = backend_mod.agent_env(Config(backend="codex-cli", billing="api"))
-        self.assertEqual(env["FOREMAN_OPENAI_API_KEY"], "openai-unit-key")
+        env = backend_mod.agent_env(Config(backend="codex-cli"))
+        self.assertNotIn("FOREMAN_OPENAI_API_KEY", env)
         self.assertNotIn("OPENAI_API_KEY", env)
 
     def test_codex_home_forwards_when_set(self):

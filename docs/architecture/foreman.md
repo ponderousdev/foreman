@@ -382,14 +382,13 @@ uses the ChatGPT login persisted under `$CODEX_HOME` (`codex login`, stored in
 strips every competing vendor credential (Anthropic/Claude OAuth, DeepSeek,
 Kimi/Moonshot, GLM/Z.ai) **and any OpenAI key** from Codex's child process.
 
-`billing = "api"` **fails closed** and is deliberately unsupported for now: on
-codex 0.147.0 an exported `OPENAI_API_KEY` is passed into the environment of the
+`billing = "api"` **fails closed** and is deliberately unsupported: on codex
+0.147.0 an exported `OPENAI_API_KEY` is passed into the environment of the
 model's own shell commands (verified), and this adapter enables network access,
-so an agent-generated command could exfiltrate the provider key. Restoring API
-billing requires a verified *non-inherited* credential path (e.g.
-`codex login --with-api-key` into an isolated `$CODEX_HOME`) so the key never
-reaches model-run shells. The `FOREMAN_OPENAI_API_KEY` wiring remains in place,
-provisioned but unused, ready for that follow-up.
+so an agent-generated command could exfiltrate the provider key. No OpenAI key is
+provisioned for the bot. Adding API billing later would require a verified
+*non-inherited* credential path (e.g. `codex login --with-api-key` into an
+isolated `$CODEX_HOME`) so the key never reaches model-run shells.
 
 **Model selection is runner configuration.** The bot pins the model with the
 non-secret `FOREMAN_CODEX_MODEL` in its devcontainer environment; the adapter
