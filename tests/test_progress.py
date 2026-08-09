@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import unittest
+from unittest import mock
 
 from foreman.progress import (
     HEARTBEAT_S,
@@ -116,7 +117,7 @@ class ReporterLiveness(unittest.TestCase):
         )
         self.assertNotIn("\r", buf.getvalue())
 
-    @unittest.mock.patch.dict("os.environ", {"TERM": "xterm-256color"})
+    @mock.patch.dict("os.environ", {"TERM": "xterm-256color"})
     def test_tty_single_unit_uses_in_place_spinner(self):
         # AC3 TTY: an interactive single-unit dispatch updates one line in place.
         buf = io.StringIO()
