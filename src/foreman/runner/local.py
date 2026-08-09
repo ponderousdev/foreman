@@ -253,6 +253,15 @@ class LocalRunner:
             returncode=proc.returncode, stdout=proc.stdout, stderr=proc.stderr
         )
 
+    def reference(self, handle: Handle) -> str:
+        """`pid=N` for the spawned process group (#126). Display-only and
+        must never break a dispatch: a handle with no usable pid degrades to
+        `pid=?` instead of raising like the operational paths do."""
+        try:
+            return f"pid={self._pid(handle)}"
+        except ForemanError:
+            return "pid=?"
+
     def preserve(self, handle: Handle) -> None:
         """Local preservation is doing nothing destructive: the worktree and
         Claude session survive. A marker records the decision for triage."""

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
@@ -12,6 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from foreman import backend as backend_mod
+from foreman import progress as progress_mod
 from foreman.config import Config
 from foreman.runner import Handle, UnitSpec
 from foreman.util import ForemanError
@@ -897,6 +899,38 @@ class BackendRunRecord(unittest.TestCase):
                 session.read_text(encoding="utf-8"),
                 "SESSION_REF=new-provider-session\n",
             )
+
+    def test_narrates_runner_reference_post_spawn(self):
+        # #126: the "agent running" line is emitted by run_backend AFTER the
+        # spawn, carrying the runner-provided reference, so an operator can
+        # ps/kill the live unit from the narration alone.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = root / ".foreman" / "units" / "9"
+            run_dir.mkdir(parents=True)
+            worktree = root / "worktree"
+            worktree.mkdir()
+            prompt = run_dir / "prompt.md"
+            prompt.write_text("work\n", encoding="utf-8")
+            buf = io.StringIO()
+            reporter = progress_mod.DispatchReporter(stream=buf, isatty=False).unit(9)
+            with (
+                mock.patch.object(backend_mod, "agent_env", return_value={}),
+                mock.patch.object(backend_mod, "backend_cli_version", return_value=""),
+            ):
+                backend_mod.run_backend(
+                    Config(),
+                    root,
+                    MockRunner(),
+                    backend_mod.adapter_path("claude"),
+                    unit_number=9,
+                    cwd=worktree,
+                    unit_run_dir=run_dir,
+                    prompt_file=prompt,
+                    timeout_min=1,
+                    reporter=reporter,
+                )
+            self.assertIn("foreman: #9: agent running (mock-unit=9)\n", buf.getvalue())
 
     def test_records_selected_adapter_instead_of_repository_default(self):
         with tempfile.TemporaryDirectory() as tmp:

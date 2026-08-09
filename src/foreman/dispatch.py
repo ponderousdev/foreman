@@ -384,7 +384,8 @@ def _dispatch_locked(
 
     adapter = backend_mod.adapter_path(backend_name)
     timeout_min = _timeout_min(cfg, unit)
-    progress.phase("agent running")
+    # run_backend narrates "agent running (<reference>)" itself, post-spawn —
+    # the runner-provided reference (#126) does not exist before the handle.
     result = backend_mod.run_backend(
         cfg,
         root,
@@ -461,8 +462,8 @@ def _reattach_unit(
         # Foreman crashes cannot extend a unit's run indefinitely (#22).
         remaining_s = backend_mod.remaining_timeout_s(run_dir, timeout_min * 60)
         progress.phase(
-            f"reattached to live unit; {remaining_s // 60}m "
-            "left on the original deadline"
+            f"reattached to live unit ({runner.reference(handle)}); "
+            f"{remaining_s // 60}m left on the original deadline"
         )
         try:
             if remaining_s <= 0:
