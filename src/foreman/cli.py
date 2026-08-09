@@ -1055,7 +1055,7 @@ def _assert_bot_devcontainer() -> None:
 
 def print_foreman_logo() -> None:
     term = os.environ.get("TERM", "")
-    encoding = getattr(sys.stdout, "encoding", "").lower()
+    encoding = str(getattr(sys.stdout, "encoding", "") or "utf-8").lower()
     if term == "dumb" or encoding not in ("utf-8", "utf8"):
         print(f"\nForeman v{__version__}\n")
         return

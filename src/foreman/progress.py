@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import colorsys
 import math
+import os
 import sys
 import threading
 import time
@@ -131,10 +132,16 @@ class DispatchReporter:
         self._stream = stream
         self.now = now
         self._lock = threading.Lock()
+
+        actual_stream = stream if stream is not None else sys.stdout
+        term = os.environ.get("TERM", "")
+        encoding = str(getattr(actual_stream, "encoding", "") or "utf-8").lower()
+        can_spin = term != "dumb" and encoding in ("utf-8", "utf8")
+
         # A single worker owning a real TTY is the only case a carriage-return
         # spinner is safe: with >1 worker the units' \r frames would interleave,
         # so they fall back to plain per-#N: lines (spec #83).
-        self.spinner_ok = workers == 1 and self._resolve_isatty(isatty)
+        self.spinner_ok = workers == 1 and self._resolve_isatty(isatty) and can_spin
 
     def _resolve_isatty(self, isatty: bool | None) -> bool:
         if isatty is not None:
