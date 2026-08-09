@@ -173,6 +173,14 @@ class Runner(Protocol):
 
     def exec(self, handle: Handle, cmd: list[str]) -> ExecResult: ...
 
+    def reference(self, handle: Handle) -> str:
+        """Short human-readable reference to the live process behind `handle`
+        (local: ``pid=N``; sprite/docker: session/container id), so an operator
+        can `ps`/kill/attach to a running unit (#126). Display-only: callers
+        render it in narration and never parse it — `handle.payload` stays
+        runner-opaque. Must not raise on a broken handle; degrade instead."""
+        ...
+
     def preserve(self, handle: Handle) -> None: ...
 
     def cleanup(self, handle: Handle) -> None: ...

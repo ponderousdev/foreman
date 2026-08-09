@@ -71,6 +71,9 @@ class MockRunner:
         self.execs.append((handle.unit, list(cmd)))
         return ExecResult(returncode=0, stdout="", stderr="")
 
+    def reference(self, handle: Handle) -> str:
+        return f"mock-unit={handle.unit}"
+
     def preserve(self, handle: Handle) -> None:
         self.preserved.append(handle.unit)
 

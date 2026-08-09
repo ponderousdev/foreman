@@ -184,6 +184,19 @@ class Capabilities(SpecCase):
             self.assertNotIn("untrusted-input", caps)
 
 
+class Reference(SpecCase):
+    def test_reference_names_the_spawned_pid(self):
+        # #126: display-only live-process reference for the narration line.
+        lr = runner()
+        handle = lr.spawn(self.spec("true"))
+        self.assertEqual(lr.reference(handle), f"pid={handle.payload['pid']}")
+        lr.wait(handle, timeout_s=10)
+
+    def test_reference_degrades_instead_of_raising_on_a_broken_handle(self):
+        broken = Handle(runner="local", unit=7, run_dir=".", payload={})
+        self.assertEqual(runner().reference(broken), "pid=?")
+
+
 class ExecAndLogs(SpecCase):
     def test_exec_runs_in_the_workdir(self):
         lr = runner()

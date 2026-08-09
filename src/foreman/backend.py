@@ -360,6 +360,10 @@ def run_backend(
     timed_out = False
     try:
         if reporter is not None:
+            # Post-spawn on purpose (#126): the runner-provided reference
+            # (local: pid) exists only once the handle does, and it lets an
+            # operator ps/kill the running unit from the narration alone.
+            reporter.phase(f"agent running ({runner.reference(handle)})")
             # Slice the otherwise-silent wait so a liveness indicator fires
             # while the agent runs (#83). The kill-on-timeout path below is
             # unchanged: wait_with_heartbeat raises WaitTimeout at the same
