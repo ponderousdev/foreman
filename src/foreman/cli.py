@@ -11,6 +11,7 @@ the `preflight` name without two meanings ever coexisting.
 from __future__ import annotations
 
 import argparse
+import colorsys
 import json
 import os
 import subprocess
@@ -18,11 +19,11 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from foreman import __version__, report, spec, worktree
 from foreman import backend as backend_mod
 from foreman import dispatch as dispatch_mod
 from foreman import inputs as inputs_mod
 from foreman import progress as progress_mod
-from foreman import report, spec, worktree
 from foreman import runner as runner_mod
 from foreman import shepherd as shepherd_mod
 from foreman import watch as watch_mod
@@ -1052,10 +1053,46 @@ def _assert_bot_devcontainer() -> None:
         )
 
 
+def print_foreman_logo() -> None:
+    term = os.environ.get("TERM", "")
+    encoding = str(getattr(sys.stdout, "encoding", "") or "utf-8").lower()
+    if term == "dumb" or encoding not in ("utf-8", "utf8"):
+        print(f"\nForeman v{__version__}\n")
+        return
+
+    logo = r"""
+███████╗ ██████╗ ██████╗ ███████╗███╗   ███╗ █████╗ ███╗   ██╗
+██╔════╝██╔═══██╗██╔══██╗██╔════╝████╗ ████║██╔══██╗████╗  ██║
+█████╗  ██║   ██║██████╔╝█████╗  ██╔████╔██║███████║██╔██╗ ██║
+██╔══╝  ██║   ██║██╔══██╗██╔══╝  ██║╚██╔╝██║██╔══██║██║╚██╗██║
+██║     ╚██████╔╝██║  ██║███████╗██║ ╚═╝ ██║██║  ██║██║ ╚████║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝
+"""
+    lines = logo.strip("\n").split("\n")
+    if not lines:
+        return
+    max_len = max(len(line) for line in lines)
+    print("\n")
+    for line in lines:
+        colored_line = ""
+        for i, char in enumerate(line):
+            hue = (i / max_len) % 1.0
+            r, g, b = [int(x * 255) for x in colorsys.hls_to_rgb(hue, 0.65, 0.95)]
+            colored_line += f"\033[38;2;{r};{g};{b}m{char}"
+        print(colored_line + "\033[0m")
+
+    print(f"                                                    v{__version__}\n")
+
+
 def main(argv: list[str] | None = None) -> int:
     if sys.version_info < (3, 11):
         print("foreman: Python >= 3.11 required (tomllib)", file=sys.stderr)
         return 2
+
+    # Render logo if interactive
+    if sys.stdout.isatty():
+        print_foreman_logo()
+
     args = _parser().parse_args(argv)
     try:
         _assert_bot_devcontainer()
