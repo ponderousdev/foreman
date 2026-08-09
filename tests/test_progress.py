@@ -124,10 +124,19 @@ class ReporterLiveness(unittest.TestCase):
         unit = reporter.unit(5)
         unit.heartbeat(1, 5400)
         unit.heartbeat(2, 5400)
+
+        # Wait for the background thread to emit at least one frame
+        import time
+
+        for _ in range(50):
+            if "\r" in buf.getvalue():
+                break
+            time.sleep(0.02)
+
         out = buf.getvalue()
         self.assertIn("\r", out)
         self.assertEqual(out.count("\n"), 0)  # no newline spam until settle()
-        self.assertEqual(out.count("\r"), 2)  # one in-place update per beat
+        self.assertGreaterEqual(out.count("\r"), 1)  # at least one in-place update
         unit.settle()
         self.assertTrue(buf.getvalue().endswith("\n"))
 

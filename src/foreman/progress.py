@@ -18,7 +18,8 @@ unit narrates under its own ``#N:`` prefix instead.
 
 from __future__ import annotations
 
-import itertools
+import colorsys
+import math
 import sys
 import threading
 import time
@@ -32,7 +33,33 @@ from foreman.runner import ExitStatus, WaitTimeout
 # testable. Frequent enough to tell working from wedged, sparse enough that a
 # multi-hour watch run stays grep-friendly.
 HEARTBEAT_S = 30.0
-_SPINNER_FRAMES = "|/-\\"
+
+
+def _generate_braille_frames() -> list[str]:
+    left_cols = [0x00, 0x40, 0x44, 0x46, 0x47]
+    right_cols = [0x00, 0x80, 0xA0, 0xB0, 0xB8]
+    heights = [round(2 + 2 * math.sin(2 * math.pi * i / 16)) for i in range(16)]
+    frames = []
+    for t in range(16):
+        c0 = heights[(t + 0) % 16]
+        c1 = heights[(t + 1) % 16]
+        c2 = heights[(t + 2) % 16]
+        c3 = heights[(t + 3) % 16]
+        char1 = chr(0x2800 + left_cols[c0] + right_cols[c1])
+        char2 = chr(0x2800 + left_cols[c2] + right_cols[c3])
+        frames.append(char1 + char2)
+    return frames
+
+
+_SPINNER_FRAMES = _generate_braille_frames()
+
+
+def get_rainbow_color(t: float, speed: float = 0.1, offset: float = 0.0) -> str:
+    hue = (t * speed + offset) % 1.0
+    pulse = math.sin(t * 1.5 + offset * 5)
+    lightness = 0.75 + 0.1 * pulse
+    r, g, b = [int(x * 255) for x in colorsys.hls_to_rgb(hue, lightness, 0.95)]
+    return f"38;2;{r};{g};{b}"
 
 
 def _fmt_duration(seconds: float) -> str:
@@ -148,9 +175,14 @@ class UnitProgress:
         # not dispatch units and ``#0`` would read as one.
         self._prefix = label if label is not None else f"#{number}"
         self.now = reporter.now
-        self._frames = itertools.cycle(_SPINNER_FRAMES)
+        self._frames = _SPINNER_FRAMES
         self._spinner_open = False  # a \r line is pending its closing newline
         self._last_beat: float | None = None  # elapsed of the last plain beat
+
+        self._spinner_thread: threading.Thread | None = None
+        self._spinner_stop = threading.Event()
+        self._start_time: float | None = None
+        self._timeout_s: float | None = None
 
     def _line(self, text: str) -> None:
         # Close any pending spinner line first so a plain line never glues onto
@@ -165,15 +197,42 @@ class UnitProgress:
     def phase(self, text: str) -> None:
         self._line(text)
 
-    def heartbeat(self, elapsed_s: float, timeout_s: float) -> None:
-        if self._reporter.spinner_ok:
-            frame = next(self._frames)
+    def _run_spinner(self) -> None:
+        delay = 0.08
+        while not self._spinner_stop.wait(1 / 60):
+            t = time.time()
+            frame_idx = int(t / delay) % len(self._frames)
+            frame = self._frames[frame_idx]
+            color = get_rainbow_color(t, speed=0.35)
+            colored_frame = f"\033[{color}m{frame}\033[0m"
+
+            elapsed = 0.0
+            if self._start_time is not None:
+                elapsed = self.now() - self._start_time
+
+            timeout_s = self._timeout_s or 0.0
+
             self._reporter._emit(
-                f"\rforeman: {self._prefix}: {frame} "
-                f"{liveness_text(elapsed_s, timeout_s)}"
+                f"\r\033[Kforeman: {self._prefix}: {colored_frame} "
+                f"{liveness_text(elapsed, timeout_s)}"
             )
             self._spinner_open = True
+
+    def heartbeat(self, elapsed_s: float, timeout_s: float) -> None:
+        if self._start_time is None:
+            # Reconstruct absolute start time from the first heartbeat's elapsed delta
+            self._start_time = self.now() - elapsed_s
+        self._timeout_s = timeout_s
+
+        if self._reporter.spinner_ok:
+            if self._spinner_thread is None:
+                self._spinner_stop.clear()
+                self._spinner_thread = threading.Thread(
+                    target=self._run_spinner, daemon=True
+                )
+                self._spinner_thread.start()
             return
+
         if self._last_beat is not None and elapsed_s - self._last_beat < HEARTBEAT_S:
             return
         self._last_beat = elapsed_s
@@ -182,6 +241,11 @@ class UnitProgress:
     def settle(self) -> None:
         """Newline-close an open spinner line. Idempotent — safe to call after
         the wait, again at the top of _conclude, and on the reattach path."""
+        if self._spinner_thread is not None:
+            self._spinner_stop.set()
+            self._spinner_thread.join()
+            self._spinner_thread = None
+
         if self._spinner_open:
             self._reporter._emit("\n")
             self._spinner_open = False
