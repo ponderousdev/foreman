@@ -12,6 +12,7 @@ import unittest
 from foreman import github as github_mod
 from foreman.config import Config
 from foreman.github import (
+    CLAIM_MARKER,
     DISPATCHED_LABEL,
     FOREMAN_LABELS,
     READY_FOR_REVIEW_LABEL,
@@ -52,6 +53,18 @@ def _mutations(gh):
         (
             "upsert_status_comment",
             lambda: gh.upsert_status_comment(1, STATUS_MARKER + "\nb"),
+        ),
+        (
+            "add_issue_claim_label",
+            lambda: gh.add_issue_claim_label(1, "claim:claude"),
+        ),
+        (
+            "remove_issue_claim_label",
+            lambda: gh.remove_issue_claim_label(1, "claim:claude"),
+        ),
+        (
+            "upsert_claim_comment",
+            lambda: gh.upsert_claim_comment(1, CLAIM_MARKER + " -->\nb"),
         ),
         (
             "post_vet_correction",
@@ -396,7 +409,6 @@ class ForbiddenOperationsAbsent(unittest.TestCase):
             r"issue\W+reopen",
             r"issue\W+edit",
             r"issue\W+delete",
-            r"\"DELETE\"",
             r"mergePullRequest",
             r"enablePullRequestAutoMerge",
         ]
@@ -404,6 +416,24 @@ class ForbiddenOperationsAbsent(unittest.TestCase):
             self.assertIsNone(
                 re.search(pattern, source, re.I),
                 f"forbidden operation pattern {pattern!r} found in github.py",
+            )
+
+    def test_delete_is_confined_to_claim_label_removal(self):
+        # #169 introduced the one DELETE foreman issues. It must remain
+        # confined to removing a `claim:*` label association — never a comment
+        # or an issue. Every DELETE in the module must target a labels
+        # endpoint.
+        source = inspect.getsource(github_mod)
+        deletes = list(re.finditer(r'"DELETE"', source))
+        self.assertEqual(
+            len(deletes), 1, "exactly one DELETE verb is permitted (claim label)"
+        )
+        for match in deletes:
+            window = source[match.start() : match.start() + 300]
+            self.assertIn(
+                "/labels/",
+                window,
+                "DELETE must target a labels endpoint (claim label removal only)",
             )
 
     def test_no_merge_method_exists(self):
