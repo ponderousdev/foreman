@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are intentional: release-please maintains a rolling release PR from
 conventional commits, and merging it cuts the tag, GitHub release, and this
 changelog (`task release:*` remains as a manual override).
+## [2.6.0](https://github.com/ponderousdev/foreman/compare/v2.5.0...v2.6.0) (2026-08-21)
+
+
+### Features
+
+* **backend:** surface a live runner reference in the agent-running narration ([#167](https://github.com/ponderousdev/foreman/issues/167)) ([f5d3c88](https://github.com/ponderousdev/foreman/commit/f5d3c88fa79d67c42e257524d66acc7e30fe2949)), closes [#126](https://github.com/ponderousdev/foreman/issues/126)
+* **cli:** add title logo and 60fps braille spinner ([#168](https://github.com/ponderousdev/foreman/issues/168)) ([944654b](https://github.com/ponderousdev/foreman/commit/944654b9bef404443b7c119313a0c67cdfc5a238))
+
+
+### Bug Fixes
+
+* **test:** make test_local_runner pass on macOS (realpath + /proc gating) ([#165](https://github.com/ponderousdev/foreman/issues/165)) ([f018f69](https://github.com/ponderousdev/foreman/commit/f018f69568438cac99275f99b363fab8c2d8e4da)), closes [#154](https://github.com/ponderousdev/foreman/issues/154)
+
 ## [2.5.0](https://github.com/ponderousdev/foreman/compare/v2.4.0...v2.5.0) (2026-08-08)
 
 
