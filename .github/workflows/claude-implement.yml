@@ -153,7 +153,7 @@ jobs:
               updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$v}}){projectV2Item{id}}
             }' -F p="$PROJECT_ID" -F i="$ITEM_ID" -F f="$FIELD_ID" -F v="$OPTION_ID"
           echo "Set issue #$ISSUE_NUMBER to In Progress"
-      - uses: anthropics/claude-code-action@d5726de019ec4498aa667642bc3a80fca83aa102 # v1.0.148
+      - uses: anthropics/claude-code-action@3f854a8fb5146b39d5cbf8b57f70d80810e1366f # v1.0.198
         # GH_TOKEN lets Claude's own `gh` calls (e.g. `gh pr create`)
         # authenticate as the CI app bot with the narrow token, matching the git
         # identity above.
