@@ -474,10 +474,33 @@ billing = "subscription"   # api billing fails closed (see above)
   edit its own PRs and their foreman-namespace labels, upsert one
   marker-identified status comment per unit (snapshot + append-only event log
   — one write primitive, still one comment), resolve threads it dispositioned,
-  post human-approved vet corrections, and ensure its label definitions. It
+  post human-approved vet corrections, ensure its label definitions, and write
+  the consumer claim contract at dispatch (#169 — see below). It
   must never merge, close or reopen issues, edit issue bodies/titles, touch
   human comments, or write fields/types/dependency edges — those operations do
   not exist in the module, and the test suite greps to keep them absent.
+- **Consumer claim contract (#169)**: at dispatch, foreman-core (never the
+  adapter — read-only token) writes a claim marker on the unit issue *where the
+  consumer vocabulary exists*, so a consumer's fail-closed `claim:*` gate sees
+  the in-flight unit and refuses a colliding mention-triggered agent on the
+  same issue. Two facts must both hold or foreman skips cleanly (logged,
+  non-fatal — it never mints a vocabulary the repo has not opted into): the
+  consumer's root `agent-registry.json` maps foreman's backend to a claim
+  *family*, and the repo already defines the resulting `claim:<family>` label.
+  When they do, foreman adds that existing label and upserts its own
+  marker-identified claim-record comment (a documented JSON payload the
+  consumer's `claim-release.yml` / `release-claim.sh` parses). This is the sole
+  issue-side mutation and the one place foreman issues a `DELETE` — confined to
+  removing a `claim:*` label association, never a comment or an issue. Release
+  is the exact inverse, keyed off the family read back out of the record, and
+  fires at terminal failure (`failed`/`stale`/`refused`) and on a
+  setup-failure after the write; `pr-open` holds the claim (the PR carries the
+  work until a human merges), and the consumer's event-driven reconciliation
+  releases anything a crash strands — which is what makes engaging #82's
+  Option-3 decision safe rather than a relitigation of it (see
+  [ADR 0004](../decisions/0004-consumer-claim-contract.md)). It does **not**
+  replace #82's event-record status comment; it adds the state marker beside
+  it.
 - **Prompt-injection surface**: only trusted-actor comments (author in
   `trusted_actors`, or foreman's own) enter prompts, and untrusted authorship
   anywhere in the surface classifies the unit `untrusted-input` (D13);

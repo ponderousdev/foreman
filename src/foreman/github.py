@@ -6,13 +6,20 @@ return its OWN PRs to draft when readiness is invalidated, edit its OWN PRs
 and their foreman-namespace labels, post bounded exact-head reviewer requests
 on its own PRs, create/edit the single marker-identified status comment per
 unit, resolve review threads it dispositioned, post human-approved vet
-correction comments, and idempotently ensure its label definitions exist.
+correction comments, idempotently ensure its label definitions exist, and —
+the one issue-side mutation (#169) — write the consumer claim contract at
+dispatch: add/remove an EXISTING `claim:*` label the consumer already defined
+(never mint one) and upsert its own marker-identified claim-record comment, so
+a consumer's fail-closed claim gate sees the in-flight unit and its
+event-driven reconciliation can release a stranded claim.
 
 Foreman MUST NEVER: merge anything, close/reopen issues, edit issue
 titles/bodies/milestones, edit or delete human or third-party comments,
-write custom-field values / issue types / dependency edges, or touch repo
-settings. Those operations are deliberately absent from this module, and
-tests/test_write_contract.py greps this file to keep them absent.
+delete an issue, write custom-field values / issue types / dependency edges,
+or touch repo settings. Those operations are deliberately absent from this
+module, and tests/test_write_contract.py greps this file to keep them absent —
+the sole `DELETE` verb permitted is removal of a `claim:*` label association
+(reversible, namespace-guarded), never a comment or an issue.
 
 Reads use `gh` JSON output (gh >= 2.96 exposes blockedBy, issueType,
 subIssues, parent, closedByPullRequestsReferences); review threads and
@@ -31,6 +38,15 @@ from foreman.util import ForemanError, run
 Runner = Callable[[list[str], str | None], tuple[int, str, str]]
 
 STATUS_MARKER = "<!-- foreman:unit-status -->"
+# The consumer claim contract (#169) rides its OWN marked comment, kept
+# distinct from the status comment so the two never race for the one status
+# body. The marker prefix identifies foreman's own claim record for upsert
+# and release; claim.py owns the full marker + payload shape.
+CLAIM_MARKER = "<!-- foreman:claim"
+# The only issue-label namespace foreman may touch. The label must ALREADY
+# exist in the repo (the caller checks `repo_labels()` first) — foreman
+# adds/removes an existing consumer `claim:*` label, it never mints one.
+CLAIM_LABEL_PREFIX = "claim:"
 # upsert_status_comment sentinel: "caller doesn't know" is distinct from
 # "caller proved absent" — only the former may trigger a second lookup.
 _UNKNOWN_COMMENT = object()
@@ -270,6 +286,24 @@ class GitHub:
         for comment in self.issue_comments(issue_number):
             author = (comment.get("user") or {}).get("login", "")
             if STATUS_MARKER in (comment.get("body") or "") and author == me:
+                return comment
+        return None
+
+    def repo_labels(self) -> list[str]:
+        """Every label DEFINED in the repo (names only) — the read behind the
+        never-mint rule (#169): foreman writes a `claim:*` label only when the
+        consumer has already defined it."""
+        rows = self.gh.json(["label", "list", "--limit", "500", "--json", "name"]) or []
+        return [row["name"] for row in rows if row.get("name")]
+
+    def find_claim_comment(self, issue_number: int) -> dict | None:
+        """The one claim-record comment foreman itself authored AND marked, if
+        any — a READ. Same forge-resistance as the status comment: a marker in
+        anyone else's comment is quoted or forged, never foreman's record."""
+        me = self.viewer()
+        for comment in self.issue_comments(issue_number):
+            author = (comment.get("user") or {}).get("login", "")
+            if CLAIM_MARKER in (comment.get("body") or "") and author == me:
                 return comment
         return None
 
@@ -1000,6 +1034,98 @@ class GitHub:
         # Only ever edit a comment foreman itself authored AND marked.
         if comment_id is _UNKNOWN_COMMENT:
             comment = self.find_status_comment(issue_number)
+        elif comment_id is None:
+            comment = None
+        else:
+            comment = {"id": comment_id}
+        if comment is not None:
+            self.gh.call(
+                [
+                    "api",
+                    "--method",
+                    "PATCH",
+                    f"repos/{self.repo_slug()}/issues/comments/{comment['id']}",
+                    "-F",
+                    "body=@-",
+                ],
+                input_text=body,
+            )
+            return
+        self.gh.call(
+            [
+                "api",
+                "--method",
+                "POST",
+                f"repos/{self.repo_slug()}/issues/{issue_number}/comments",
+                "-F",
+                "body=@-",
+            ],
+            input_text=body,
+        )
+
+    # ── consumer claim contract (#169) ───────────────────────────────
+    #
+    # The single issue-side mutation surface. Both writes are namespace- and
+    # marker-guarded and target ONLY the consumer `claim:*` vocabulary; the
+    # never-mint rule lives one layer up (claim.py checks `repo_labels()`).
+
+    def _assert_claim_label(self, label: str, action: str) -> None:
+        if not label.startswith(CLAIM_LABEL_PREFIX):
+            raise ForemanError(
+                f"write contract: '{action}' label '{label}' is outside the "
+                f"'{CLAIM_LABEL_PREFIX}' namespace"
+            )
+
+    def add_issue_claim_label(self, number: int, label: str) -> None:
+        """Add an existing consumer `claim:*` label to a unit issue. Adding is
+        idempotent server-side, so a re-dispatch re-acquiring is a no-op."""
+        self._assert_writable("add claim label")
+        self._assert_claim_label(label, "add claim label")
+        self.gh.call(
+            [
+                "api",
+                "--method",
+                "POST",
+                f"repos/{self.repo_slug()}/issues/{number}/labels",
+                "-f",
+                f"labels[]={label}",
+            ]
+        )
+
+    def remove_issue_claim_label(self, number: int, label: str) -> None:
+        """Remove a consumer `claim:*` label at a terminal state. The only
+        DELETE foreman issues, and it is confined to a label association — a
+        reversible, namespace-guarded write, never a comment or issue. A label
+        already gone (consumer reconciliation won the race) is not an error."""
+        self._assert_writable("remove claim label")
+        self._assert_claim_label(label, "remove claim label")
+        self.gh.call(
+            [
+                "api",
+                "--method",
+                "DELETE",
+                f"repos/{self.repo_slug()}/issues/{number}/labels/"
+                f"{quote(label, safe='')}",
+            ],
+            check=False,
+        )
+
+    def upsert_claim_comment(
+        self,
+        issue_number: int,
+        body: str,
+        *,
+        comment_id: int | None | object = _UNKNOWN_COMMENT,
+    ) -> None:
+        """Create or edit-in-place foreman's single claim-record comment per
+        unit. Marker-required (a claim record with no marker could never be
+        found again to release), and — like the status comment — only ever
+        edits a comment foreman itself authored AND marked."""
+        self._assert_writable("upsert claim comment")
+        if CLAIM_MARKER not in body:
+            raise ForemanError("claim comment body must carry the foreman claim marker")
+        if comment_id is _UNKNOWN_COMMENT:
+            comment = self.find_claim_comment(issue_number)
         elif comment_id is None:
             comment = None
         else:

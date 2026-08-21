@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from foreman import backend as backend_mod
+from foreman import claim as claim_mod
 from foreman import gate, report, spec, verify, worktree
 from foreman import handoff as handoff_mod
 from foreman import pr as pr_mod
@@ -34,6 +35,14 @@ from foreman.runner import Selection, WaitTimeout
 from foreman.util import ForemanError, info, warn, write_text
 
 RETRIGGER_SUBJECT = "chore: retrigger ci (foreman)"
+
+# #169: terminal outcomes that release the claim foreman wrote at dispatch —
+# the unit is done under foreman with no PR carrying it forward, so a
+# re-dispatch (which re-acquires idempotently) or a concurrent consumer agent
+# should no longer be gated. `pr-open` HOLDS the claim (the PR carries the work
+# until a human merges; the consumer's event-driven release reconciles on
+# merge/close); `blocked`/`waiting` are live/resumable and keep it too.
+_CLAIM_RELEASE_STATES = ("failed", "stale", "refused")
 
 
 def _gate_handoffs(
@@ -253,11 +262,18 @@ def dispatch_unit(
         # issue — a setup failure after it must not strand that as the last
         # word. Record the failure, then let run_dispatch see the raise.
         _post_status(gh, unit, Outcome(unit, "failed", detail=str(exc)))
+        # #169: a setup failure after the claim write must not strand it — the
+        # consumer would reconcile eventually, but foreman releases what it can.
+        claim_mod.release(gh, unit, log=warn)
         raise
     finally:
         lock.release()
     outcome.duration_s = time.monotonic() - started
     _post_status(gh, unit, outcome)
+    if outcome.status in _CLAIM_RELEASE_STATES:
+        # #169: release exactly what dispatch wrote (a no-op when no claim
+        # exists). A later `foreman retry` re-acquires idempotently.
+        claim_mod.release(gh, unit, log=warn)
     if outcome.status == "pr-open":
         # The PR is already open — best-effort cleanup must never turn a
         # successful dispatch into a reported failure. Log and move on.
@@ -355,6 +371,15 @@ def _dispatch_locked(
         gh,
         report.UnitStatus(unit=unit, state="dispatched", branch=branch),
         event=f"initiated (attempt {attempt}, branch `{branch}`)",
+    )
+
+    # #169: write the consumer claim contract beside the event-record comment,
+    # where the consumer vocabulary exists — a state marker a consumer's
+    # fail-closed claim gate reads to refuse a colliding mention-triggered
+    # agent. Skips cleanly (logged) when the repo ships no claim vocabulary,
+    # and never fails a dispatch.
+    claim_mod.acquire(
+        gh, cfg, root, unit, backend_name=backend_name, branch=branch, log=info
     )
 
     advertised = selection.runner.capabilities()
