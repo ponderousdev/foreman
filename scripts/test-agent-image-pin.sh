@@ -74,8 +74,10 @@ assert_only_pin_line_changed() {
     diff -u "$work/a" "$work/b" >/dev/null || fail "$1: lines other than the pin changed"
 }
 
+# GNU first: on GNU stat `-f` means "filesystem status" and succeeds with the
+# wrong output, whereas BSD stat rejects `-c` outright.
 mode_of() {
-    stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"
+    stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
 }
 
 # accept REF LABEL -> the ref is valid and round-trips through the file.
