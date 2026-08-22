@@ -65,6 +65,8 @@ tasks:
       - task: validate
       - task: test:tasks
       - task: test:release-title
+      - task: test:image:pin
+      - task: test:image:digest
       - task: test:hooks
       - task: test
 
@@ -248,6 +250,16 @@ tasks:
     cmds:
       - ./scripts/test-release-title.sh
 
+  test:image:pin:
+    desc: Unit-test the .foreman.toml image-pin helper (agent-image-pin.sh)
+    cmds:
+      - ./scripts/test-agent-image-pin.sh
+
+  test:image:digest:
+    desc: Unit-test the digest resolver against a recorded docker shim
+    cmds:
+      - ./scripts/test-agent-image-digest.sh
+
   test:devcontainer:root:
     desc: Smoke test the primary (AI bot) devcontainer via the devcontainers CLI
     cmds:
@@ -267,6 +279,25 @@ tasks:
     desc: Round-trip the Taskfile targets the Claude hooks delegate to
     cmds:
       - ./scripts/test-hooks.sh
+
+  # ── Image ──────────────────────────────────────────────────────
+  # The agent image is published only by devcontainer-build.yml's `publish`
+  # job. GHCR tags are mutable, so `.foreman.toml` pins the digest; bumping it
+  # is a deliberate, human-opened PR (image:digest -> image:pin:set).
+  image:digest:
+    desc: Resolve IMAGE:TAG to an immutable digest pin (asserts linux/amd64)
+    cmds:
+      - ./scripts/agent-image-digest.sh {{.IMAGE}} {{.TAG}}
+
+  image:pin:current:
+    desc: Print the agent image digest pin recorded in .foreman.toml
+    cmds:
+      - ./scripts/agent-image-pin.sh current
+
+  image:pin:set:
+    desc: Set the agent image pin in .foreman.toml (REF=<image>[:tag]@sha256:...)
+    cmds:
+      - ./scripts/agent-image-pin.sh set {{.REF}}
 
   # ── Security ───────────────────────────────────────────────────
   security:

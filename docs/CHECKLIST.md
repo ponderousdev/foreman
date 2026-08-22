@@ -98,7 +98,9 @@ config, toolchain, devcontainer, and dev environment — against the items below
       workflows, and project-automation; blast-radius + rotation in
       docs/architecture/security.md.
 - [ ] GHCR: ensure the org/user allows publishing packages; the first
-      devcontainer prebuild populates `ghcr.io/ponderousdev/foreman-devcontainer` on merge to main
+      devcontainer prebuild populates `ghcr.io/ponderousdev/foreman-devcontainer` on merge to main,
+      tagged `latest` + `sha-<commit>`. The run's step summary prints the digest
+      to pin into `.foreman.toml`'s `image` key (docs/guides/devcontainers.md)
 - [ ] Org issue types: run `task setup:github-issue-types` (needs `gh` with the
       `admin:org` scope) to ensure the org's issue types are Bug/Feature/Task/Research
       (adds any missing; keeps GitHub's defaults) — idempotent and non-destructive.

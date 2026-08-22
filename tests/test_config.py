@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -29,6 +31,7 @@ class ConfigLoading(unittest.TestCase):
         self.assertEqual(cfg.reviewer_timeout_min, 10)
         self.assertEqual(cfg.reviewer_max_attempts, 2)
         self.assertEqual(cfg.runner, "local")
+        self.assertEqual(cfg.image, "")
         self.assertTrue(cfg.require_approval)
         self.assertEqual(cfg.billing, "subscription")
         self.assertEqual(cfg.max_parallel, 3)
@@ -56,6 +59,13 @@ class ConfigLoading(unittest.TestCase):
             ],
         )
         self.assertEqual(cfg.runner, "local")
+        # Shape, not identity: bumping the pin (`task image:pin:set`) must
+        # never require editing a test.
+        self.assertTrue(
+            cfg.image.startswith("ghcr.io/ponderousdev/foreman-devcontainer"),
+            f"unexpected dogfood image pin: {cfg.image}",
+        )
+        self.assertIsNotNone(config_mod.IMAGE_PIN_RE.fullmatch(cfg.image))
         self.assertTrue(cfg.require_approval)
         self.assertEqual(cfg.max_parallel, 3)
 
@@ -148,6 +158,94 @@ class ConfigLoading(unittest.TestCase):
     def test_unknown_runner_fails(self):
         with self.assertRaises(ForemanError):
             self.load_toml('runner = "qemu"\n')
+
+    def test_image_pin_accepts_digest_refs(self):
+        digest = "a" * 64
+        for ref in (
+            f"ghcr.io/ponderousdev/foreman-devcontainer@sha256:{digest}",
+            f"ghcr.io/ponderousdev/foreman-devcontainer:sha-{'b' * 40}@sha256:{digest}",
+            f"localhost:5000/x:tag@sha256:{digest}",
+            f"ghcr.io/org/my--image@sha256:{digest}",
+            f"ghcr.io/org/a__b@sha256:{digest}",
+        ):
+            with self.subTest(ref=ref):
+                cfg = self.load_toml(f'image = "{ref}"\n')
+                self.assertEqual(cfg.image, ref)
+
+    def test_image_without_a_valid_digest_fails(self):
+        # Pin grammar is digest-required; the tag alone is mutable.
+        for ref in (
+            "ghcr.io/ponderousdev/foreman-devcontainer:latest",
+            f"ghcr.io/o/r@sha256:{'a' * 63}",
+            f"ghcr.io/o/r@sha256:{'A' * 64}",
+            f"ghcr.io/o/r@sha512:{'a' * 64}",
+            f"ghcr.io-/ns/img@sha256:{'a' * 64}",
+            f"ghcr..io/ns/img@sha256:{'a' * 64}",
+        ):
+            with self.subTest(ref=ref):
+                with self.assertRaises(ForemanError) as ctx:
+                    self.load_toml(f'image = "{ref}"\n')
+                self.assertIn("pin by digest", str(ctx.exception))
+
+    def test_image_must_be_a_string(self):
+        with self.assertRaisesRegex(ForemanError, "image must be a string"):
+            self.load_toml("image = 123\n")
+
+    def test_image_digest_extracts_the_token(self):
+        digest = "a" * 64
+        self.assertEqual(
+            config_mod.image_digest(f"ghcr.io/o/r:tag@sha256:{digest}"),
+            f"sha256:{digest}",
+        )
+        self.assertEqual(config_mod.image_digest("ghcr.io/o/r:latest"), "")
+        self.assertEqual(config_mod.image_digest(""), "")
+
+    def test_shell_pin_regex_agrees_with_python(self):
+        # scripts/agent-image-pin.sh carries a POSIX ERE twin of IMAGE_PIN_RE
+        # so `task image:pin:set` rejects exactly what config.py would reject.
+        # Two hand-maintained grammars WILL drift; this pins them together.
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "scripts" / "agent-image-pin.sh").read_text(encoding="utf-8")
+        match = re.search(r"^pin_re='(?P<re>.*)'$", script, re.M)
+        self.assertIsNotNone(match, "could not find pin_re= in agent-image-pin.sh")
+        shell_re = match.group("re")
+
+        good, bad = "a" * 64, "a" * 63
+        vectors = (
+            f"ghcr.io/ponderousdev/foreman-devcontainer@sha256:{good}",
+            f"ghcr.io/ponderousdev/foreman-devcontainer:sha-{'b' * 40}@sha256:{good}",
+            f"localhost:5000/x:tag@sha256:{good}",
+            f"ghcr.io/org/my--image@sha256:{good}",
+            f"ghcr.io/org/a__b@sha256:{good}",
+            f"ghcr.io/org/a.b/c_d@sha256:{good}",
+            f"img@sha256:{good}",
+            "ghcr.io/ponderousdev/foreman-devcontainer:latest",
+            f"ghcr.io/o/r@sha256:{bad}",
+            f"ghcr.io/o/r@sha256:{'A' * 64}",
+            f"ghcr.io/o/r@sha512:{good}",
+            f"ghcr.io-/ns/img@sha256:{good}",
+            f"ghcr..io/ns/img@sha256:{good}",
+            f"ghcr.io/O/img@sha256:{good}",
+            f"ghcr.io/o/r@sha256:{good} trailing",
+            f" ghcr.io/o/r@sha256:{good}",
+        )
+        for ref in vectors:
+            with self.subTest(ref=ref):
+                python_ok = config_mod.IMAGE_PIN_RE.fullmatch(ref) is not None
+                shell_ok = (
+                    subprocess.run(
+                        ["grep", "-Eq", shell_re],
+                        input=ref + "\n",
+                        text=True,
+                        check=False,
+                    ).returncode
+                    == 0
+                )
+                self.assertEqual(
+                    python_ok,
+                    shell_ok,
+                    f"python={python_ok} shell={shell_ok} disagree on {ref!r}",
+                )
 
     def test_env_override_wins(self):
         os.environ["FOREMAN_BACKEND"] = "mock"

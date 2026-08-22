@@ -88,8 +88,10 @@ jobs:
           # Dedicated registry cache ref with mode=max: inline cache
           # (BUILDKIT_INLINE_CACHE) does not survive the devcontainer CLI's
           # multi-stage load-then-push flow, so cacheFrom on the image itself
-          # never produced cache hits. The action auto-adds the image name as
-          # a fallback cacheFrom, so only the -cache ref is listed here.
+          # never produced cache hits. This job builds a single tag, so the
+          # action still auto-adds the image name as a fallback cacheFrom and
+          # only the -cache ref is listed here; `publish` pushes two tags,
+          # which disables that fallback, so it lists the image explicitly.
           # Cache is only written by `publish`, never from PR builds.
           cacheFrom: type=registry,ref=${{ matrix.image_name }}-cache
           configFile: ${{ matrix.config_file }}
@@ -154,13 +156,31 @@ jobs:
           TS_AUTHKEY: ""
         with:
           # See the `build` job's copy of this step for the cache rationale.
+          # Supplying more than one imageTag disables the action's automatic
+          # fallback cacheFrom on the image name, so `:latest` is listed here
+          # explicitly alongside the dedicated -cache ref.
           # workflow_dispatch builds without publishing (push/cacheTo gated to
           # the push event), preserving the pre-split behavior.
-          cacheFrom: type=registry,ref=${{ matrix.image_name }}-cache
+          cacheFrom: |
+            type=registry,ref=${{ matrix.image_name }}-cache
+            ${{ matrix.image_name }}:latest
           cacheTo: ${{ github.event_name == 'push' && format('type=registry,ref={0}-cache,mode=max', matrix.image_name) || '' }}
           configFile: ${{ matrix.config_file }}
           imageName: ${{ matrix.image_name }}
+          # `latest` is the rolling human/cache tag; `sha-<commit>` is the
+          # provenance tag a digest pin is resolved from. Both tags are
+          # MUTABLE by registry semantics — the digest is the identity.
+          imageTag: latest,sha-${{ github.sha }}
           push: ${{ github.event_name == 'push' && 'always' || 'never' }}
+      - name: Resolve published digest
+        # devcontainers/ci exposes no digest output, so re-read the manifest
+        # from the registry (the login above still applies): prints the
+        # immutable `IMAGE:TAG@sha256:...` pin into the step summary, which is
+        # the sanctioned source for `task image:pin:set`, and fails the job if
+        # what was pushed is not exactly linux/amd64 — the assertion that
+        # stands in for the unsafe `platform:` input.
+        if: github.event_name == 'push'
+        run: bash scripts/agent-image-digest.sh "${{ matrix.image_name }}" "sha-${{ github.sha }}"
       - name: Clean up buildx cache and dangling images
         if: always()
         continue-on-error: true
