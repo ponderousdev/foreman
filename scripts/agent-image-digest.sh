@@ -20,6 +20,10 @@ usage() {
 # branch on the media type: .Manifest.Manifests is not a usable predicate on a
 # single (non-index) manifest, and the single-manifest field is .Image.OS.
 # Attestation manifests in an OCI index carry os "unknown" and are skipped.
+# Field names verified against buildx 0.33 (`imagetools inspect --format`)
+# for all three shapes: docker v2s2 manifest, OCI manifest, OCI index. The
+# unit test replays recorded output and does NOT evaluate this template —
+# re-verify against the live registry when buildx moves.
 inspect_platforms() {
     _tmpl='{{if or (eq .Manifest.MediaType "application/vnd.oci.image.index.v1+json") (eq .Manifest.MediaType "application/vnd.docker.distribution.manifest.list.v2+json")}}{{range .Manifest.Manifests}}{{if ne .Platform.OS "unknown"}}{{.Platform.OS}}/{{.Platform.Architecture}}{{println}}{{end}}{{end}}{{else}}{{.Image.OS}}/{{.Image.Architecture}}{{println}}{{end}}'
     docker buildx imagetools inspect "$1" --format "$_tmpl"

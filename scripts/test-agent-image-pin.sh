@@ -196,6 +196,23 @@ cp "$f" "$before"
 [ "$(run set "$IMG@sha256:$D_NEW")" = 0 ] || fail "second set should pass"
 cmp -s "$before" "$f" || fail "an idempotent set must not rewrite the file"
 
+echo "==> an image line under a [table] header is refused by current and set"
+{
+    echo 'runner = "local"'
+    echo ''
+    echo '[verify]'
+    echo "image = \"$IMG@sha256:$D_OLD\""
+    echo 'default = ["task", "verify"]'
+} >"$f"
+cp "$f" "$before"
+expect_fail 1 "under a [table] header" current
+expect_fail 1 "under a [table] header" set "$IMG@sha256:$D_NEW"
+cmp -s "$before" "$f" || fail "a table-scoped image line must be left untouched"
+
+echo "==> current refuses a recorded pin that is not digest-pinned"
+fixture "$IMG:latest"
+expect_fail 1 "not digest-pinned" current
+
 echo "==> bad usage exits 2"
 fixture "$IMG@sha256:$D_OLD"
 expect_fail 2 "usage:"

@@ -32,7 +32,10 @@ resolves the manifest digest with `docker buildx imagetools inspect` and asserts
 the manifest is exactly `linux/amd64` — the `devcontainers/ci` action exposes no
 digest output (`runCmdOutput` is its only one), and its `platform:` input is
 deliberately **not** set because at the pinned SHA it switches the action onto a
-skopeo/OCI-tarball path. The step appends `IMAGE:sha-<sha>@sha256:<digest>` to its
+skopeo/OCI-tarball path. The assertion runs *after* `push: always`, so it
+**detects** a non-amd64 publish (the job goes red, `latest` has already moved)
+rather than preventing it; the remedy is to re-push from an amd64 runner. The
+digest pin in `.foreman.toml` is unaffected either way. The step appends `IMAGE:sha-<sha>@sha256:<digest>` to its
 own job's step summary. Each matrix leg is a **separate job** — `publish (ai)` and
 `publish (dev)` — with its own summary, so there is no combined page to read: open
 the `publish (ai)` job, whose image is `foreman-devcontainer`, the agent image

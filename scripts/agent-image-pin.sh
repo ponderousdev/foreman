@@ -7,7 +7,8 @@
 # workflow holds no contents:write): open the `publish (ai)` job's step summary
 # and copy the ref, or re-resolve it locally with `task image:digest`, then run
 # this. `set` reads the pin back after writing and fails unless it round-trips.
-# Set FOREMAN_TOML to point at another file (used by the tests).
+# Set FOREMAN_TOML to point at another file (used by the tests); a relative
+# path resolves against the repo root, not the caller's cwd.
 # Run via `task image:pin:current` / `task image:pin:set REF=…`.
 set -euo pipefail
 
@@ -47,6 +48,24 @@ require_single_pin_line() {
     fi
     [ "$_count" -ne 0 ] || die "no 'image = \"…\"' line in $file"
     [ "$_count" -eq 1 ] || die "multiple 'image = ' lines in $file ($_count)"
+    # TOML is not line-oriented: a key after the first `[table]` header belongs
+    # to that table. Refuse to treat such a line as the top-level pin.
+    _pin_line=$(grep -n '^image = "' "$file" | cut -d: -f1)
+    _table_line=$(grep -n '^[[:space:]]*\[' "$file" | head -n 1 | cut -d: -f1)
+    if [ -n "$_table_line" ] && [ "$_pin_line" -gt "$_table_line" ]; then
+        die "the 'image = ' line (line $_pin_line) sits under a [table] header (line $_table_line); the pin must be a top-level key"
+    fi
+}
+
+# `current` and `set` enforce the same grammar, so a scripted
+# `REF=$(task image:pin:current)` can never launder a non-digest value.
+valid_pin() {
+    # grep -E is line-oriented, so refuse embedded newlines before matching
+    # ($(printf '\n') alone would collapse to "", hence the sentinel char).
+    _nl=$(printf '\nx')
+    _nl=${_nl%x}
+    case "$1" in *"$_nl"*) return 1 ;; esac
+    printf '%s\n' "$1" | LC_ALL=C grep -Eq "$pin_re"
 }
 
 # The pin value: everything between the first pair of quotes, so a trailing
@@ -59,6 +78,7 @@ cmd_current() {
     require_single_pin_line
     _pin=$(read_pin)
     [ -n "$_pin" ] || die "could not parse the image pin line in $file"
+    valid_pin "$_pin" || die "recorded image pin is not digest-pinned: $_pin"
     echo "$_pin"
 }
 
@@ -69,7 +89,7 @@ cmd_set() {
     if [ "$(printf '%s' "$ref" | wc -l | tr -d ' ')" != "0" ]; then
         die "the image pin must not contain a newline"
     fi
-    if ! printf '%s\n' "$ref" | grep -Eq "$pin_re"; then
+    if ! valid_pin "$ref"; then
         echo "error: not a valid image pin: $ref" >&2
         echo "       expected <registry>/<repo>[:<tag>]@sha256:<64 lowercase hex>" >&2
         echo "       — pin by digest; a tag alone is mutable and is not accepted" >&2

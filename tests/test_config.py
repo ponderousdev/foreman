@@ -238,6 +238,9 @@ class ConfigLoading(unittest.TestCase):
                         input=ref + "\n",
                         text=True,
                         check=False,
+                        # The helper pins LC_ALL=C so its ERE bracket ranges
+                        # are ASCII like IMAGE_PIN_RE; mirror that here.
+                        env={**os.environ, "LC_ALL": "C"},
                     ).returncode
                     == 0
                 )

@@ -176,11 +176,15 @@ PATH="$work/bin:$PATH" FAKE_CALLS="$calls" FAKE_DIGEST="$FAKE_DIGEST" \
 
 echo "==> an empty GITHUB_STEP_SUMMARY means no summary write"
 FAKE_DIGEST="$D_GOOD"
-TEST_SUMMARY="" run "$IMG" "$TAG"
+# `VAR=x func` persists past a function call in bash, so set/unset explicitly.
+TEST_SUMMARY=""
+run "$IMG" "$TAG"
 [ "$RC" = 0 ] || fail "should pass without GITHUB_STEP_SUMMARY"
 [ ! -e "$work/never-written" ] || fail "stray summary file"
-TEST_SUMMARY="$work/never-written" run "$IMG" "$TAG"
+TEST_SUMMARY="$work/never-written"
+run "$IMG" "$TAG"
 [ "$RC" = 0 ] && [ -s "$work/never-written" ] || fail "summary should be written when a path is given"
+unset TEST_SUMMARY
 
 echo "==> bad usage exits 2"
 run
