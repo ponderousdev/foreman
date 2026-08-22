@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are intentional: release-please maintains a rolling release PR from
 conventional commits, and merging it cuts the tag, GitHub release, and this
 changelog (`task release:*` remains as a manual override).
+## [2.7.0](https://github.com/ponderousdev/foreman/compare/v2.6.0...v2.7.0) (2026-08-22)
+
+
+### Features
+
+* **image:** version and digest-pin the agent image ([#39](https://github.com/ponderousdev/foreman/issues/39)) ([#172](https://github.com/ponderousdev/foreman/issues/172)) ([84ae47f](https://github.com/ponderousdev/foreman/commit/84ae47f357b9f5d41611c5bf8e91e30fe66efca4))
+
 ## [2.6.0](https://github.com/ponderousdev/foreman/compare/v2.5.0...v2.6.0) (2026-08-21)
 
 
