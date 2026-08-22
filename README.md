@@ -82,14 +82,15 @@ vendors Foreman source? See
 ### 1. Configure `.foreman.toml`
 
 At the repo root. Plan-affecting keys (`runner`, `trusted_actors`,
-`required_capabilities`, `[reviewer]`, `[verify]`) are read from the **default
-branch** — an agent can't edit its own trust or its own gate.
+`required_capabilities`, `image`, `[reviewer]`, `[verify]`) are read from the
+**default branch** — an agent can't edit its own trust or its own gate.
 
 ```toml
 runner = "local"                      # local (v2.0) | sprite (v2.1) | docker (v2.2)
 expected_login = "your-bot"           # identity asserted before any write
 trusted_actors = ["you", "your-bot"]  # who may arm, and whose content is trusted input
 required_capabilities = []            # hard requirements; checked at plan time
+# image = "ghcr.io/you/agent-image@sha256:…"  # digest-pinned agent image (sprite); see docs/architecture/foreman.md
 
 # Optional exact-head external-review gate. Omit for unchanged default behavior.
 [reviewer]

@@ -3,16 +3,17 @@
 Config is intent, not state: nothing here is written back by foreman.
 Python 3.11+ (tomllib).
 
-Plan-affecting configuration — runner, trusted_actors, required_capabilities,
-[reviewer], [verify] — is read from Foreman's OWN clone (the repo root it was invoked
-in, on the default branch), never from a dispatched branch: an agent must
-not be able to edit its own trust or its own gate (#14). Worktree copies of
-this file are never loaded.
+Plan-affecting configuration — runner, image, trusted_actors,
+required_capabilities, [reviewer], [verify] — is read from Foreman's OWN
+clone (the repo root it was invoked in, on the default branch), never from a
+dispatched branch: an agent must not be able to edit its own trust or its own
+gate (#14). Worktree copies of this file are never loaded.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -28,12 +29,29 @@ CONFIG_FILE = ".foreman.toml"
 # names are already valid config so plan-time refusals can name them.
 KNOWN_RUNNERS = ("local", "sprite", "docker")
 
+# Agent image pin: <registry>/<repo>[:<tag>]@sha256:<64 hex>. Registry-agnostic
+# (Foreman ships to consumer repos), registry port allowed, digest REQUIRED,
+# tag optional. Used with .fullmatch(); the shell twin lives in
+# scripts/agent-image-pin.sh.
+_HOST = r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*(?::[0-9]{1,5})?"
+# Docker's path-component grammar: a separator run is a single `.`/`_`,
+# a doubled `__`, or one-or-more `-` (so `my--image` and `a__b` are legal).
+_SEG = r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*"
+_TAG = r"[A-Za-z0-9_][A-Za-z0-9._-]{0,127}"
+IMAGE_PIN_RE = re.compile(
+    rf"(?:{_HOST}/)?{_SEG}(?:/{_SEG})*(?::{_TAG})?@sha256:[0-9a-f]{{64}}"
+)
+
 
 @dataclass
 class Config:
     backend: str = "claude"
     backend_version: str = ""  # expected CLI version prefix; "" = don't assert
     runner: str = "local"  # where units execute: local | sprite (v2.1) | docker (v2.2)
+    # Digest-pinned agent image, "" = unset. Consumed by the sprite runner
+    # (#30); LocalRunner ignores it (it boots no image). Plan-affecting: read
+    # from the default branch of Foreman's own clone, never a dispatched one.
+    image: str = ""
     require_approval: bool = True  # strict arming: only foreman-approved units dispatch
     inputs: str = "auto"  # auto | fields | labels
     # The composed verify gate (#29): baseline plus capability-keyed
@@ -131,6 +149,12 @@ _REMOVED_KEYS = {
 }
 
 
+def image_digest(ref: str) -> str:
+    """The `sha256:<hex>` token of a pinned ref; "" when the ref carries no digest."""
+    _, sep, digest = ref.partition("@sha256:")
+    return f"sha256:{digest}" if sep else ""
+
+
 def load(root: Path) -> Config:
     cfg = Config()
     path = root / CONFIG_FILE
@@ -210,6 +234,13 @@ def _validate(cfg: Config) -> None:
         raise ForemanError(
             f"config: runner must be one of {'|'.join(KNOWN_RUNNERS)}, "
             f"got '{cfg.runner}'"
+        )
+    if not isinstance(cfg.image, str):
+        raise ForemanError("config: image must be a string")
+    if cfg.image and not IMAGE_PIN_RE.fullmatch(cfg.image):
+        raise ForemanError(
+            "config: image must be <registry>/<repo>[:<tag>]@sha256:<64 hex> — "
+            f"pin by digest, got '{cfg.image}'"
         )
     if cfg.inputs not in ("auto", "fields", "labels"):
         raise ForemanError(

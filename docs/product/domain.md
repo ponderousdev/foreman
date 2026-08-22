@@ -97,8 +97,8 @@ These are what the specs and acceptance criteria enforce
   its issue is closed *and* a marker-carrying foreman PR merged into the default
   branch; an external dependency must be closed as *completed*.
 - **Plan-affecting config comes from the default branch.** `runner`,
-  `trusted_actors`, `required_capabilities`, `[reviewer]`, and `[verify]` are never read from
-  a dispatched branch.
+  `trusted_actors`, `required_capabilities`, `image`, `[reviewer]`, and `[verify]`
+  are never read from a dispatched branch.
 - **Version tags are immutable.** Distribution rides on `@vX.Y.Z`, so a moved
   tag is code execution in every consumer.
 - **Content is pinned at arming (TOCTOU).** A trusted post-arming edit refreshes

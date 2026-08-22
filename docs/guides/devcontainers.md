@@ -26,9 +26,32 @@ safe because it is container-scoped — it is never set on the host.
   (`.devcontainer/dev/`) for human use.
 - **CLI:** `devcontainer up --workspace-folder . --config .devcontainer/dev/devcontainer.json`
 
-Prebuilt images are pulled from GHCR as a build cache
-(`ghcr.io/ponderousdev/foreman-devcontainer` / `ghcr.io/ponderousdev/foreman-devcontainer-dev`), so a warm rebuild
-is fast. A cache miss is non-fatal — it just rebuilds from the `Dockerfile`.
+Prebuilt images are published to GHCR by `devcontainer-build.yml`
+(`ghcr.io/ponderousdev/foreman-devcontainer` / `ghcr.io/ponderousdev/foreman-devcontainer-dev`).
+Locally they are pulled as a build cache, so a warm rebuild is fast; a cache
+miss is non-fatal — it just rebuilds from the `Dockerfile`. The bot image is
+also the **agent image** Foreman pins by digest in `.foreman.toml`
+(`image = "…@sha256:…"`) and the sprite runner boots — see
+[../architecture/ci-cd.md](../architecture/ci-cd.md#agent-image-tags-and-digest).
+
+## Bumping the agent image pin
+
+`.foreman.toml`'s `image` key pins the bot image by digest. It is bumped by
+hand — deliberately, like a release — never by Renovate.
+
+1. Open the latest **Devcontainer Build** run on `main` and, within it, the
+   **`publish (ai)`** job — each matrix leg is its own job with its own step
+   summary, so `publish (dev)` (the human profile) is the wrong one.
+2. Its summary holds one bullet, `` - `<image>` → `<pin>` ``. Copy the ref
+   inside the **second** pair of backticks; it looks like
+   `ghcr.io/ponderousdev/foreman-devcontainer:sha-<commit>@sha256:<digest>`.
+3. Pass it as `task image:pin:set REF=<that ref>` — or re-resolve it yourself with
+   `task image:digest IMAGE=ghcr.io/ponderousdev/foreman-devcontainer TAG=sha-<commit>`
+   (needs a GHCR login; the package is private).
+4. `task test` validates the new pin (`test_dogfood_config_loads`).
+5. Open a normal PR.
+
+`task image:pin:current` prints the pin in effect.
 
 ## Secrets — 1Password Environments (the standard)
 
@@ -96,7 +119,8 @@ repo** (one template serves every repo). To stand this repo up in Coder:
      `AGENT_DECK_TELEGRAM_KEY` (+ `TS_AUTHKEY` if you want Tailscale). Coder
      passes these into the workspace's host environment, where `init-env.sh`
      picks them up.
-3. The build pulls `ghcr.io/ponderousdev/foreman-devcontainer` from GHCR as a cache. If that
+3. The build pulls `ghcr.io/ponderousdev/foreman-devcontainer` from GHCR as a
+   cache (the same image the agent-image pin names). If that
    package is private, give the Coder builder a read token (or make the package
    public); a cache miss only makes the first build slower.
 
@@ -149,4 +173,5 @@ Code), for the same never-ship reason:
 
 - [architecture/security.md](../architecture/security.md) — full secret strategy.
 - [troubleshooting.md](troubleshooting.md) — devcontainer issues.
-- `.github/workflows/devcontainer-build.yml` — the GHCR prebuild.
+- `.github/workflows/devcontainer-build.yml` — the GHCR prebuild and the source
+  of the digest pin line.

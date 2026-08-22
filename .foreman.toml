@@ -1,6 +1,6 @@
 # Foreman configuration for foreman's own repo (dogfood).
 #
-# Plan-affecting keys here (runner, trusted_actors, required_capabilities,
+# Plan-affecting keys here (runner, image, trusted_actors, required_capabilities,
 # [reviewer], [verify]) are read from the DEFAULT BRANCH of Foreman's own clone, never
 # from a dispatched branch — an agent must not edit its own trust or gate.
 
@@ -38,6 +38,13 @@ billing = "subscription"
 # to relax the agent permission mode; the committed default stays
 # conservative for any other host.
 sandboxed = false
+
+# Agent image pin: <registry>/<repo>[:tag]@sha256:<digest>. Consumed by the
+# sprite runner (#30); LocalRunner ignores it (it boots no image). GHCR tags
+# are mutable — the digest is the identity. Bump via
+# `task image:pin:set REF=...` with the ref from the Devcontainer Build
+# workflow's step summary.
+image = "ghcr.io/ponderousdev/foreman-devcontainer@sha256:3fb1e96b688e1a83e5c2834214f6e3c193c14e2537f39a3d9bf3b3a51f610281"
 
 # The composed verify gate (#29). Foreman's own `verify` is check + build +
 # test and needs no daemon; the docker-keyed addition (devcontainer smoke +

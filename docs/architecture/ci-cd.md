@@ -19,6 +19,37 @@ plus an aggregate **`verify`** job; branch protection requires `verify` +
 - `release.yml` — release-please maintains the rolling release PR.
 - `project-automation.yml` — syncs the org Project board status from PR/CI events.
 
+### Agent image tags and digest
+
+Every publish pushes two tags: `latest` and `sha-<commit>`. Not semver —
+release-please never rebuilds the image (the paths filter fires on
+`.devcontainer/**`, not on a release), so a version tag on the image would lie
+about which commit built it; image versions and repo versions are deliberately
+decoupled.
+
+GHCR **tags are mutable; the digest is the identity.** A post-push step therefore
+resolves the manifest digest with `docker buildx imagetools inspect` and asserts
+the manifest is exactly `linux/amd64` — the `devcontainers/ci` action exposes no
+digest output (`runCmdOutput` is its only one), and its `platform:` input is
+deliberately **not** set because at the pinned SHA it switches the action onto a
+skopeo/OCI-tarball path. The assertion runs *after* `push: always`, so it
+**detects** a non-amd64 publish (the job goes red, `latest` has already moved)
+rather than preventing it; the remedy is to re-push from an amd64 runner. The
+digest pin in `.foreman.toml` is unaffected either way. The step appends `IMAGE:sha-<sha>@sha256:<digest>` to its
+own job's step summary. Each matrix leg is a **separate job** — `publish (ai)` and
+`publish (dev)` — with its own summary, so there is no combined page to read: open
+the `publish (ai)` job, whose image is `foreman-devcontainer`, the agent image
+(D6). `publish (dev)` builds the human profile and is never a pin source.
+
+The published, pinnable artifact is **only ever** produced by this job. Local
+`devcontainer up` builds (`scripts/devcontainer-smoke.sh`, `task ci`) are dev
+tooling, never a pin source.
+
+Renovate does not manage this pin: the GHCR package is private, so Mend-hosted
+Renovate cannot read its tags. Bumping is manual and documented in
+[../guides/devcontainers.md](../guides/devcontainers.md). Pull auth for the
+private package from a Fly Machine is #30's concern, not this workflow's.
+
 ## Authentication
 
 CI workflows authenticate as the **`ponderousdev-ci` GitHub App** (short-lived

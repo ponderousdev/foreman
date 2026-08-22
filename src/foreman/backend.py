@@ -41,7 +41,7 @@ from pathlib import Path
 from foreman import progress as progress_mod
 from foreman import runner as runner_mod
 from foreman import signatures as signatures_mod
-from foreman.config import Config
+from foreman.config import Config, image_digest
 from foreman.runner import Runner, UnitSpec, WaitTimeout
 from foreman.util import ForemanError, run, tail, utc_now_iso, write_text
 
@@ -251,8 +251,10 @@ def _record_run_started(
         "schema": 1,
         "unit": spec.unit,
         "runner": handle.runner,
+        # Both fields record the pin the runner was HANDED, not an attestation
+        # that it booted: #30 adds the runner-attested digest.
         "image": spec.image or None,
-        "image_digest": None,  # local boots no image; sprite records one (v2.1)
+        "image_digest": image_digest(spec.image) or None,
         "backend": backend_name,
         "backend_cli_version": backend_cli_version(cfg, backend_name),
         "resume_ref": resume_ref,
@@ -336,6 +338,9 @@ def run_backend(
         env=env,
         cmd=tuple(argv),
         timeout_s=timeout_min * 60,
+        # The digest-pinned agent image (#39). Sprite boots it (#30); local
+        # ignores it and this rides along as the recorded requested pin.
+        image=cfg.image,
         # The composed gate rides the spec: that is the defined transport for
         # guest-executed gates (#29 → #30). Local ignores it — Foreman's own
         # process runs the gate in the worktree after the agent exits.

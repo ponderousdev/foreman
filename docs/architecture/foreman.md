@@ -541,6 +541,7 @@ branch_prefix = "foreman"
 expected_login = "your-bot"   # identity assertion; "" skips
 billing = "subscription"      # subscription | api
 sandboxed = false             # FOREMAN_SANDBOXED=1 env inside the bot container
+image = "ghcr.io/you/agent-image@sha256:…"  # optional; digest-pinned agent image (sprite)
 
 # Optional. Omit the table to preserve the default checks/threads/merge gate.
 # The account producing evidence may differ from the mention that requests it.
@@ -567,6 +568,17 @@ dispatch_min = 90
 shepherd_min = 30
 ```
 
+`image` pins the agent image by digest: `<registry>/<repo>[:<tag>]@sha256:<64 hex>`
+— the digest is **required**, the tag is optional and decorative, and the
+registry is arbitrary (Foreman ships to consumer repos, not just GHCR). The key
+is optional; under `local` it is read and recorded but otherwise ignored, and the
+**sprite** runner is what boots it (#30). Like every plan-affecting key it is read
+from the default branch, so a dispatched agent cannot repin its own image. Each
+run's `run_started.json` records `image` (the ref as configured) and
+`image_digest` (the `sha256:…` token parsed out of it) — that is the *requested*
+pin, not an attestation that the unit actually booted it; #30 adds the
+runner-attested digest.
+
 ## The Runner seam (v2)
 
 One `Runner` protocol; `local`/`sprite`/`docker` implement it; selection is
@@ -588,8 +600,8 @@ unit's requirements, so the unit is refused under `local` (naming `sprite`)
 and dispatchable under `sprite`. A repo is untrusted-input unless it is
 private *and* every account with access is a trusted actor (public ⇒ always
 untrusted; unenumerable ⇒ fail closed). Plan-affecting config — `runner`,
-`trusted_actors`, `required_capabilities`, `[reviewer]`, `[verify]` — is read from the
-default branch of Foreman's own clone, never a dispatched branch.
+`trusted_actors`, `required_capabilities`, `image`, `[reviewer]`, `[verify]` — is
+read from the default branch of Foreman's own clone, never a dispatched branch.
 
 **Crash safety.** A unit's handle (PID + process start-time) is serialized
 under `.foreman/runs/`; a restarted Foreman re-derives state from GitHub and

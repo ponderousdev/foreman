@@ -963,6 +963,44 @@ class BackendRunRecord(unittest.TestCase):
             self.assertEqual(record["backend_cli_version"], "2.1.167")
             version.assert_called_once_with(cfg, "claude-code-deepseek")
 
+    def test_records_the_requested_image_pin_and_its_digest(self):
+        # #39: run_started carries the pin the runner was handed (and the
+        # sha256 token parsed out of it); #30 adds the attested digest.
+        digest = "a" * 64
+        ref = f"ghcr.io/ponderousdev/foreman-devcontainer@sha256:{digest}"
+        for image, want_image, want_digest in (
+            (ref, ref, f"sha256:{digest}"),
+            ("", None, None),
+        ):
+            with self.subTest(image=image), tempfile.TemporaryDirectory() as tmp:
+                run_dir = Path(tmp)
+                spec = UnitSpec(
+                    unit=9,
+                    workdir=run_dir,
+                    run_dir=run_dir,
+                    env={},
+                    cmd=("adapter", "run"),
+                    timeout_s=60,
+                    image=image,
+                )
+                handle = Handle(runner="mock", unit=9, run_dir=str(run_dir), payload={})
+                with mock.patch.object(
+                    backend_mod, "backend_cli_version", return_value="2.1.167"
+                ):
+                    backend_mod._record_run_started(
+                        Config(image=image),
+                        run_dir,
+                        handle,
+                        spec,
+                        backend_name="claude",
+                        resume_ref=None,
+                    )
+                record = json.loads(
+                    (run_dir / "run_started.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(record["image"], want_image)
+                self.assertEqual(record["image_digest"], want_digest)
+
     def test_recorded_backend_reuses_selected_adapter(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

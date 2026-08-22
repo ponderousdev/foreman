@@ -151,9 +151,9 @@ Two rules keep the composition honest:
   and the adapter executes it there.
 
 Plan-affecting configuration — `runner`, `trusted_actors`,
-`required_capabilities`, `[verify]` — is read from the default branch of
-Foreman's own clone, never from the branch being dispatched: an agent must not
-be able to edit its own trust or its own gate.
+`required_capabilities`, `image`, `[reviewer]`, `[verify]` — is read from the
+default branch of Foreman's own clone, never from the branch being dispatched:
+an agent must not be able to edit its own trust or its own gate.
 
 **Where the gate executes is runner-conditional, and that is security-relevant.**
 Under local, Foreman's own process runs the branch's gate in the worktree — v1
@@ -659,7 +659,7 @@ immutable, the bot's `push` grant on foreman is branch/PR noise again.
       persisted into the image or a committed file, and asserted by preflight —
       with delivery scoping that accounts for Fly app secrets being app-scoped
       (per-unit isolation needs Machine-level delivery or per-unit apps; #30).
-- [ ] The devcontainer image is digest-pinned and versioned.
+- [x] The devcontainer image is digest-pinned and versioned.
 - [ ] The Fly API token lives in a dedicated agents-only Fly org with a spend
       limit, and is the narrowest shape that can manage agent Machines (an
       app-scoped deploy token if that suffices; org-wide only as fallback). It
