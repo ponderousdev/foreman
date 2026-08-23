@@ -13,7 +13,7 @@ plus an aggregate **`verify`** job; branch protection requires `verify` +
 
 ## Workflows
 
-- `build.yml` — on push/PR to `main`: lint, security, then the aggregate **`verify`** job. Security always runs gitleaks + dependency audit, and uses Semgrep CE as the free private-repo SAST fallback.
+- `build.yml` — on push/PR to `main`: lint, security, then the aggregate **`verify`** job. Security always runs gitleaks + dependency audit + Semgrep CE SAST.
 - `claude-plan` / `claude-implement` / `claude-review` — **mention-only**: an
   explicit `@claude` mention naming `plan`, `implement`, or `review` in a
   comment or review from a sender on the `claude_authorized_members` allowlist. There is no
@@ -28,10 +28,6 @@ plus an aggregate **`verify`** job; branch protection requires `verify` +
   and runner loss, a force-cancel, or the job cap firing can strand the label
   with no cleanup at all. A stranded `claim:claude` blocks further mentions on
   that target until someone removes it by hand.
-- `codeql.yml` — CodeQL SAST runs automatically and for free on public
-  repositories. Private/internal repositories require paid GitHub Code Security
-  plus `FULL_SECURITY_SCAN=true`; otherwise `build.yml` supplies Semgrep CE.
-  Confirm successful uploads in the Security tab.
 - `snyk-scheduled.yml` — optional weekly Snyk Code + Open
   Source second-opinion scans. It has schedule/manual triggers only, consumes no
   PR checks, and is not part of branch protection. See

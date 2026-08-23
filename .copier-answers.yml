@@ -5,8 +5,7 @@ bunch_add: false
 ci_runner: ubuntu-latest
 claude_authorized_members: evanharmon1
 code_owner: evanharmon1
-codeql_languages:
-  - python
+codeql_languages: []
 devcontainer: true
 devcontainer_coder_folder_uri: ''
 foreman_additional_trusted_actors: admiralfraggle
@@ -31,7 +30,7 @@ skill_categories:
 snyk_scan_schedule: weekly
 use_alternative_claude_providers: true
 use_antigravity_cli: true
-use_codeql: true
+use_codeql: false
 use_coderabbit: false
 use_codex_cloud_review: true
 use_codex_review: true

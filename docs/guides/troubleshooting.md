@@ -16,8 +16,8 @@ Common issues in Foreman and how to fix them.
 - **"unknown terminal type" / broken keys in `vim`, `less`, or `htop`** — you are running Ghostty (`TERM=xterm-ghostty`) somewhere that lacks that terminfo entry. The container itself has it; a remote host over SSH, or another container you `docker exec` into, does not — see [Terminal type](devcontainers.md#terminal-type-and-ghostty-terminfo).
 ## CI
 
-- **Required check missing on a PR** — ensure Build & Validate and CodeQL ran;
-  required checks are `verify`, `security`, `codeql-verify`.
+- **Required check missing on a PR** — ensure Build & Validate ran;
+  required checks are `verify`, `security`.
 
 ## Deeper devcontainer failures
 
