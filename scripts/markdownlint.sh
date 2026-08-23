@@ -36,10 +36,16 @@ default_globs=(
     '#.pytest_cache/**'
 )
 
+# renovate: datasource=npm depName=markdownlint-cli2
+MARKDOWNLINT_VERSION=0.23.2
+
+# Prefer a repo-local install; otherwise fetch a PINNED version. Resolving
+# `latest` here meant a new upstream rule could turn every repo red with no
+# commit — the opposite of what a lint gate is for.
 if [ -x node_modules/.bin/markdownlint-cli2 ]; then
     run=(node_modules/.bin/markdownlint-cli2)
 else
-    run=(npx --yes markdownlint-cli2)
+    run=(npx --yes "markdownlint-cli2@${MARKDOWNLINT_VERSION}")
 fi
 
 if [ "$#" -eq 0 ]; then

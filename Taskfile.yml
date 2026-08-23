@@ -46,11 +46,15 @@ tasks:
   ci:
     # Full local mirror of the CI pipeline — run before (or instead of) opening
     # a PR to catch everything CI would, on demand, without waiting on a PR run.
-    # Builds on `verify` and adds the devcontainer permission assertion plus the
-    # heavier security checks.
-    desc: Full CI mirror (verify → test:devcontainer:permissions → security)
+    # Builds on `verify` and adds every OTHER check the build workflow runs, so
+    # the two cannot drift apart.
+    # verify:skills is the NETWORK drift check (the CI job runs the same one).
+    # It is deliberately not in `verify`, which stays offline — the pre-push hook
+    # uses verify:skills:offline for that reason.
+    desc: Full CI mirror (verify → verify:skills → test:devcontainer:permissions → security)
     cmds:
       - task: verify
+      - task: verify:skills
       - task: test:devcontainer:permissions
       - task: security
 
@@ -58,16 +62,40 @@ tasks:
     # The definition-of-done gate — everything that must pass before a change
     # is done. Foreman v2 calls this the "check + build + test" tier; the desc
     # below lists this repo's exact steps. For the fast inner loop use `check`;
-    # heavier security checks and the devcontainer permission assertion stay in `ci`.
+    # heavier security checks, the devcontainer permission assertion stay in `ci`.
     desc: Definition-of-done gate (check → validate → guards → test)
     cmds:
       - task: check
+      - task: audit:agent-instructions
+      - task: test:agent-instructions-size
+      - task: test:agent-skill-links
       - task: validate
+      - task: test:agent-registry
+      - task: test:registry-drift
+      - task: test:registry-docs
+      - task: test:label-registry
       - task: test:tasks
+      - task: test:ci-results
+      - task: test:output
+      - task: test:status
+      - task: test:gh-scopes
+      - task: test:meta-install
+      - task: test:codex-review
+      - task: test:lint-hygiene
       - task: test:release-title
       - task: test:image:pin
       - task: test:image:digest
+      - task: test:setup-github
+      - task: test:setup-github-project
+      - task: test:setup-github-issue-fields
+      - task: test:sync-devkit-release
+      - task: test:worktree
+      - task: test:session-cleanup
       - task: test:hooks
+      - task: test:statusline
+      - task: test:link-claude-json
+      - task: test:image-staleness
+      - task: test:open-devcontainer
       - task: test
 
   # ── Quality Checks ────────────────────────────────────────────
@@ -88,6 +116,11 @@ tasks:
     desc: mypy over src/foreman (pins from uv.lock)
     cmds:
       - uv run --locked mypy
+
+  audit:agent-instructions:
+    desc: Warn when AGENTS.md exceeds Codex's default 32 KiB discovery budget
+    cmds:
+      - ./scripts/check-agent-instructions-size.sh AGENTS.md
 
   lint:
     desc: Run all linters in parallel
@@ -113,16 +146,8 @@ tasks:
 
   lint:shell:
     desc: shellcheck + shfmt
-    vars:
-      SHELL_FILES:
-        sh: git ls-files '*.sh' '*.bash' 2>/dev/null | tr '\n' ' '
     cmds:
-      - |
-        files="{{.CLI_ARGS}}"
-        [ -z "$files" ] && files="{{.SHELL_FILES}}"
-        [ -z "$files" ] && exit 0
-        shellcheck --severity=error $files
-        shfmt -d $files
+      - ./scripts/lint-shell.sh {{.CLI_ARGS}}
 
   lint:markdown:
     # Check-only (no --fix) so this is a read-only gate like lint:prettier /
@@ -179,6 +204,11 @@ tasks:
           exit 1
         fi
 
+  test:agent-skill-links:
+    desc: Unit-test migration-safe Claude-to-.agents skill compatibility links
+    cmds:
+      - ./scripts/test-agent-skill-links.sh
+
   # ── Skills sync ────────────────────────────────────────────────
   # Vendor shared agent skills from harmon-devkit, pinned in .skills-sync.yaml.
   # The verify:skills* drift checks skip cleanly until the first `task sync:skills`,
@@ -187,24 +217,35 @@ tasks:
     desc: Vendor the pinned skill categories from harmon-devkit into .claude/skills
     cmds:
       - ./scripts/sync-skills.sh sync
+      - ./scripts/link-agent-skills.sh sync
 
   verify:skills:
     desc: "Skill drift check (network): fail if vendored skills differ from the pinned ref"
     cmds:
+      - ./scripts/link-agent-skills.sh verify
       - ./scripts/sync-skills.sh verify
 
   verify:skills:offline:
     desc: "Fast offline check that the vendored ref matches the manifest (no network)"
     cmds:
+      - ./scripts/link-agent-skills.sh verify
       - ./scripts/sync-skills.sh verify-offline
+
+  # Entry point for .github/workflows/sync-harmon-devkit.yml: resolves the
+  # latest harmon-devkit release, bumps .skills-sync.yaml, vendors, verifies
+  # offline, and opens/updates ONE rolling bot/sync-harmon-devkit PR.
+  # Never merges anything. `{{.CLI_ARGS}}` passes an explicit tag for the
+  # manual recovery path (`task sync:devkit-release -- vX.Y.Z`).
+  sync:devkit-release:
+    desc: "Pin the latest harmon-devkit release, vendor it, verify, and open/update the sync PR"
+    cmds:
+      - ./scripts/sync-devkit-release.sh run {{.CLI_ARGS}}
 
   format:
     desc: Auto-format code
     cmds:
       - uv run --locked ruff format .
-      - |
-        files=$(git ls-files '*.sh' '*.bash')
-        [ -n "$files" ] && shfmt -w $files || true
+      - ./scripts/format-shell.sh
       # Best-effort markdown auto-fix (bin-vs-npx dispatch in the helper); must
       # NOT abort `format` on un-auto-fixable rule violations — `lint:markdown`
       # (check-only) is the gate.
@@ -240,10 +281,98 @@ tasks:
     cmds:
       - uv run --locked pytest {{.CLI_ARGS}}
 
+  test:agent-registry:
+    desc: Schema-check the machine-readable agent registry and its cross-record invariants
+    cmds:
+      - ./scripts/test-agent-registry.sh
+
+  test:worktree:
+    desc: Behavioral test for worktree:new / worktree:rm (create → verify hooks → remove, in a throwaway fixture repo)
+    cmds:
+      - ./scripts/test-worktree.sh
+
+  test:session-cleanup:
+    desc: Behavioral test for audit:session-artifacts / clean:branches / clean:worktree-records (evidence-gated deletion + negative controls, in a throwaway fixture repo)
+    cmds:
+      - ./scripts/test-session-cleanup.sh
+
+  test:agent-instructions-size:
+    desc: Unit-test the non-blocking AGENTS.md size advisory
+    cmds:
+      - ./scripts/test-agent-instructions-size.sh
+
+  test:registry-drift:
+    desc: Bind label provisioning, provider wrappers, and Foreman adapters to the agent registry (offline drift gate)
+    cmds:
+      - ./scripts/test-registry-drift.sh
+
+  test:registry-docs:
+    # The answers-file name is configurable (`copier copy --answers-file …`),
+    # and the check reads project_management out of it to know whether this
+    # repo renders the GitHub Projects document at all. The script is a
+    # verbatim twin of harmon-init's own, so the name is passed in rather than
+    # templated into it — as an ENV value, not a command argument: a filename
+    # containing an apostrophe would terminate a quoted shell argument early.
+    # `tojson` emits a JSON string, which is also a valid YAML double-quoted
+    # scalar, so quotes and backslashes in the name survive both layers. The
+    # `string` filter first because copier hands this over as a PurePosixPath,
+    # which `tojson` cannot serialize.
+    desc: Bind the published family/harness tables in docs/project-management.md to the agent registry
+    env:
+      COPIER_ANSWERS_FILE: ".copier-answers.yml"
+    cmds:
+      - ./scripts/test-registry-docs.sh
+
+  test:label-registry:
+    # COPIER_ANSWERS_FILE tells the verbatim-twin script which tracker this
+    # repo rendered — the linear project-management document shares the GitHub
+    # one's path and must not be held to the label-taxonomy markers. Same
+    # env-not-argument reasoning as test:registry-docs above.
+    desc: Bind label provisioning, the docs taxonomy table, and the status inventory to the label registry
+    env:
+      COPIER_ANSWERS_FILE: ".copier-answers.yml"
+    cmds:
+      - ./scripts/test-label-registry.sh
+
   test:tasks:
     desc: Guard the Taskfile itself (compiles; setup tasks are safe no-ops)
     cmds:
       - ./scripts/test-tasks.sh
+
+  test:ci-results:
+    desc: Unit-test the fail-closed CI aggregate result helper
+    cmds:
+      - ./scripts/test-ci-results.sh
+
+  test:output:
+    desc: Unit-test shared color/Unicode fallbacks and spinner cleanup
+    cmds:
+      - ./scripts/test-output.sh
+
+  test:status:
+    desc: Unit-test the status board-writes + local-credential checks (stubbed CLIs, no network)
+    cmds:
+      - ./scripts/test-status.sh
+
+  test:gh-scopes:
+    desc: Unit-test the gh scope refresh task's refusals and post-refresh verification (stubbed gh, no network)
+    cmds:
+      - ./scripts/test-setup-gh-scopes.sh
+
+  test:meta-install:
+    desc: Unit-test the .meta sidecar installer's ~-expansion and refusals
+    cmds:
+      - ./scripts/test-meta-install.sh
+
+  test:codex-review:
+    desc: Unit-test codex-review.sh target selection (offline, stubbed codex)
+    cmds:
+      - ./scripts/test-codex-review.sh
+
+  test:lint-hygiene:
+    desc: Behavioral fixtures for lint-hygiene's trigger-phrase adjacency scan
+    cmds:
+      - ./scripts/test-lint-hygiene.sh
 
   test:release-title:
     desc: Unit-test the release-content title guard (require-release-title.sh)
@@ -260,6 +389,26 @@ tasks:
     cmds:
       - ./scripts/test-agent-image-digest.sh
 
+  test:setup-github:
+    desc: Unit-test repository-setting outcomes and failure propagation (stubbed gh, no network)
+    cmds:
+      - ./scripts/test-setup-github.sh
+
+  test:setup-github-project:
+    desc: Unit-test the GitHub Project field reconciliation (stubbed gh, no network)
+    cmds:
+      - ./scripts/test-setup-github-project.sh
+
+  test:sync-devkit-release:
+    desc: "Unit-test the harmon-devkit release→sync-PR automation (offline, stubbed gh/task)"
+    cmds:
+      - ./scripts/test-sync-devkit-release.sh
+
+  test:setup-github-issue-fields:
+    desc: Unit-test the org issue-field option reconciliation (stubbed gh, no network)
+    cmds:
+      - ./scripts/test-setup-github-issue-fields.sh
+
   test:devcontainer:root:
     desc: Smoke test the primary (AI bot) devcontainer via the devcontainers CLI
     cmds:
@@ -274,6 +423,26 @@ tasks:
     desc: Unit-assert devcontainer permission invariants (no container needed)
     cmds:
       - ./scripts/devcontainer-assert.sh unit
+
+  test:statusline:
+    desc: Unit-test the devcontainer status line renderer (no container needed)
+    cmds:
+      - ./scripts/test-statusline.sh
+
+  test:link-claude-json:
+    desc: Unit-test the ~/.claude.json persistence helper (no container needed)
+    cmds:
+      - ./scripts/test-link-claude-json.sh
+
+  test:image-staleness:
+    desc: Unit-test the image-staleness warning (no container needed)
+    cmds:
+      - ./scripts/test-image-staleness.sh
+
+  test:open-devcontainer:
+    desc: Unit-test the client-side dev container launcher (no VS Code needed)
+    cmds:
+      - ./scripts/test-open-devcontainer.sh
 
   test:hooks:
     desc: Round-trip the Taskfile targets the Claude hooks delegate to
@@ -299,6 +468,48 @@ tasks:
     cmds:
       - ./scripts/agent-image-pin.sh set {{.REF}}
 
+  # ── Second-model review (Codex) ───────────────────────────────
+  # Optional second AI model (the OpenAI Codex CLI) reviewing the current
+  # change — local and advisory only, never part of verify/ci. Findings are
+  # hypotheses for the primary agent to adjudicate (AGENTS.md "Second-Model
+  # Review"). The codex:gate:* tasks toggle the Claude Code codex plugin's
+  # automatic stop-time review for this repo + machine. See
+  # docs/guides/codex-review.md for setup, mechanics, and the loop caps.
+  review:
+    desc: Second-model verification review of the current change (Codex)
+    cmds:
+      - task: review:codex
+
+  challenge:
+    desc: Second-model adversarial review of the current change (Codex)
+    cmds:
+      - task: challenge:codex
+
+  review:codex:
+    desc: "Codex verification review (usage: task review:codex -- [--base <ref>|--uncommitted] [focus text])"
+    cmds:
+      - ./scripts/codex-review.sh review {{.CLI_ARGS}}
+
+  challenge:codex:
+    desc: "Codex adversarial review (usage: task challenge:codex -- [--base <ref>|--uncommitted] [focus text])"
+    cmds:
+      - ./scripts/codex-review.sh challenge {{.CLI_ARGS}}
+
+  codex:gate:enable:
+    desc: Enable the automatic Claude → Codex stop-gate review (this repo, this machine)
+    cmds:
+      - ./scripts/codex-gate.sh enable
+
+  codex:gate:disable:
+    desc: Disable the automatic Claude → Codex stop-gate review
+    cmds:
+      - ./scripts/codex-gate.sh disable
+
+  codex:gate:status:
+    desc: Show whether the Claude → Codex stop-gate review is enabled
+    cmds:
+      - ./scripts/codex-gate.sh status
+
   # ── Security ───────────────────────────────────────────────────
   security:
     desc: Run all free local security checks (Semgrep CE + gitleaks + dependency audit)
@@ -310,16 +521,7 @@ tasks:
   security:secrets:
     desc: Scan for leaked secrets (gitleaks)
     cmds:
-      - |
-        if [ -z "$GITHUB_STEP_SUMMARY" ]; then
-          gitleaks detect --no-banner --redact --source .
-        else
-          rc=0
-          gitleaks detect --no-banner --redact --source . \
-            --report-format json --report-path /tmp/foreman-gitleaks.json || rc=$?
-          node scripts/summarize-gitleaks.mjs /tmp/foreman-gitleaks.json
-          exit $rc
-        fi
+      - ./scripts/gitleaks-scan.sh
 
   security:audit:
     desc: Dependency audit (pip-audit over the exported uv.lock)
@@ -393,7 +595,7 @@ tasks:
   # One-time, idempotent repo settings applied via gh (safe to re-run); run once
   # the repo exists on GitHub. The remaining setup steps need a browser or a real
   # credential and stay manual — see docs/CHECKLIST.md (branch ruleset import,
-  # Renovate/CodeRabbit app installs, Actions secrets, the CI GitHub App).
+  # Renovate/optional third-party app installs, Actions secrets, the CI GitHub App).
   setup:github:
     desc: >-
       Apply idempotent GitHub repo settings via gh (Dependabot alerts, private
@@ -401,17 +603,47 @@ tasks:
     vars:
       REPO: "ponderousdev/foreman"
     cmds:
-      - gh api "repos/{{.REPO}}/vulnerability-alerts" --method PUT
-      # Private vulnerability reporting is a public-repo-only feature; harmon-init
-      # creates repos --private, so guard on visibility to avoid a 404 that would
-      # abort the task. Applies cleanly if the repo is later made public.
-      - |
-        if [ "$(gh api "repos/{{.REPO}}" --jq '.private')" = "false" ]; then
-          gh api "repos/{{.REPO}}/private-vulnerability-reporting" --method PUT
-        else
-          echo "Skipping private vulnerability reporting ({{.REPO}} is private; public-repo-only feature)."
-        fi
-      - gh api "repos/{{.REPO}}/collaborators/evanharmon1-bot" --method PUT -f permission=push
+      - ./scripts/setup-github.sh --repo "{{.REPO}}" --bot-collaborator "evanharmon1-bot"
+  setup:github-project:
+    desc: >-
+      Idempotently create/sync the owner's GitHub Project V2 board + Status
+      pipeline + Size number field (on a personal account also the other
+      metadata fields). Requires the Projects scopes — `task setup:gh-scopes`.
+    cmds:
+      - ./scripts/setup-github-project.sh --owner "ponderousdev" --title "ponderousdev Project"
+
+  setup:gh-scopes:
+    desc: >-
+      OPERATOR / DEV PROFILE ONLY: refresh your interactive gh login so it
+      carries every scope this repo needs (refuses against a GH_TOKEN env
+      credential and without a TTY; verifies the grant landed). Bot containers
+      must reissue GH_TOKEN instead.
+    # Load-bearing, not cosmetic. This Taskfile sets `output: group` globally,
+    # which pipes every task's stdout — so the script's own `[ -t 1 ]` guard saw
+    # a pipe and refused with "no TTY" even in a real terminal, making the
+    # documented entry point impossible to use. `interactive: true` tells Task
+    # to skip output grouping and attach the task to the terminal, which is what
+    # both the guard and the browser device-code flow it protects require.
+    interactive: true
+    cmds:
+      - ./scripts/setup-gh-scopes.sh
+
+  setup:github-labels:
+    desc: Idempotently create/update this repo's starter labels incl. the foreman arming labels. Requires `gh` with repo write.
+    vars:
+      REPO: "ponderousdev/foreman"
+    cmds:
+      - ./scripts/setup-github-labels.sh --repo "{{.REPO}}" --foreman --release-please
+  setup:github-issue-fields:
+    desc: >-
+      Idempotently add the org's Product issue field (Priority/Effort are
+      GitHub built-ins, left at defaults; the numeric Size estimate is a
+      project field via setup:github-project; there is deliberately no Domain
+      or Layer field, #875 — see docs/project-management.md, "Label or
+      field?"). Creates the field if missing, never renaming or deleting.
+      Requires `gh` with the admin:org scope.
+    cmds:
+      - ./scripts/setup-github-issue-fields.sh --org "ponderousdev"
 
   setup:github-issue-types:
     desc: Idempotently ensure the org's issue types are Bug/Feature/Task/Research (adds any missing; keeps the defaults). Requires `gh` with the admin:org scope.
@@ -433,7 +665,7 @@ tasks:
     desc: Bump patch version and release
     vars:
       CURRENT_TAG:
-        sh: git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0"
+        sh: git describe --tags --abbrev=0 --exclude="*-probe*" 2>/dev/null || echo "v0.0.0"
       NEXT_TAG:
         sh: echo "{{.CURRENT_TAG}}" | awk -F. '{printf "%s.%s.%d", $1, $2, $3+1}'
     cmds:
@@ -446,7 +678,7 @@ tasks:
     desc: Bump minor version and release
     vars:
       CURRENT_TAG:
-        sh: git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0"
+        sh: git describe --tags --abbrev=0 --exclude="*-probe*" 2>/dev/null || echo "v0.0.0"
       NEXT_TAG:
         sh: echo "{{.CURRENT_TAG}}" | awk -F. '{printf "%s.%d.0", $1, $2+1}'
     cmds:
@@ -459,7 +691,7 @@ tasks:
     desc: Bump major version and release
     vars:
       CURRENT_TAG:
-        sh: git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0"
+        sh: git describe --tags --abbrev=0 --exclude="*-probe*" 2>/dev/null || echo "v0.0.0"
       NEXT_TAG:
         sh: echo "{{.CURRENT_TAG}}" | awk -F. '{printf "v%d.0.0", substr($1,2)+1}'
     cmds:
@@ -468,40 +700,112 @@ tasks:
       - git push origin {{.NEXT_TAG}}
       - gh release create {{.NEXT_TAG}} --generate-notes --title "{{.NEXT_TAG}}"
 
+  release:check-coverage:
+    desc: "Detect feat/fix commits a tag ships that its changelog section omits (swallowed entries from a release-please merge race)"
+    vars:
+      TAG: '{{default "" .CLI_ARGS}}'
+    env:
+      TAG: '{{.TAG}}'
+    cmds:
+      - ./scripts/check-changelog-coverage.sh "$TAG"
+
+  # ── Worktrees ──────────────────────────────────────────────────
+  # One blessed entrypoint for parallel/isolated work, so anything that calls it
+  # (a second agent session, a terminal multiplexer, a human) gets the same
+  # ready tree instead of rediscovering the setup and the breakers.
+  # See docs/conventions.md § Worktrees.
+  #
+  # Foreman is NOT routed through this task: it creates worktrees itself, inside
+  # the pinned upstream CLI, and nothing here redirects that. This entrypoint
+  # only makes sure the two agree on `.worktrees/` as the location.
+  worktree:new:
+    desc: "Create a ready linked worktree (usage: task worktree:new -- <name> [--branch b] [--base ref] [--no-install])"
+    cmds:
+      - ./scripts/worktree-new.sh {{.CLI_ARGS}}
+
+  worktree:rm:
+    desc: "Remove a linked worktree and prune its gitlink debris (usage: task worktree:rm -- <name> [--force])"
+    cmds:
+      - ./scripts/worktree-rm.sh {{.CLI_ARGS}}
+
   # ── Clean ──────────────────────────────────────────────────────
   clean:
     desc: Remove build artifacts and caches
     cmds:
       - rm -rf .task
 
+  # ── Session cleanup ────────────────────────────────────────────
+  # audit:* reports, clean:* acts — and deletion only ever runs on positive
+  # evidence (a PR merged into the default branch at exactly the local tip,
+  # or verified-fresh ancestry into the remote default), because squash-merge
+  # makes ancestry blind to delivered branches. Every deletion is a guarded
+  # compare-and-delete against the verified tip. Dry run by default; never a
+  # force flag; never touches a worktree or a remote branch.
+  audit:session-artifacts:
+    desc: "Report session leftovers (unpushed branches, gone upstreams vs merged PRs, other worktrees, review sidecars) — mutates nothing"
+    cmds:
+      - ./scripts/audit-session-artifacts.sh
+
+  clean:branches:
+    desc: "Delete local branches only on positive merge evidence (dry run; 'task clean:branches -- --delete' to act)"
+    cmds:
+      - ./scripts/clean-branches.sh {{.CLI_ARGS}}
+
+  clean:remote-refs:
+    desc: Prune remote-tracking refs whose remote branch is gone, on every remote (git fetch --all --prune)
+    cmds:
+      - git fetch --all --prune
+
+  clean:worktree-records:
+    desc: Prune stale worktree admin records only — pins a detached commit before its record goes (human settles the pin); never removes a worktree directory
+    cmds:
+      - ./scripts/clean-worktree-records.sh
+
   # ── Status ─────────────────────────────────────────────────────
   status:
     desc: Project status dashboard
+    interactive: true
     cmds:
       - ./scripts/status.sh
 
   status:git:
     desc: Git status section
+    interactive: true
     cmds:
       - ./scripts/status.sh git
 
   status:gh:
     desc: GitHub status section
+    interactive: true
     cmds:
       - ./scripts/status.sh gh
 
+  status:creds:
+    desc: Credential section (gh, Codex, Claude Code logins + gh token scopes — local probes plus one bounded scope check; STATUS_NO_NETWORK=1 skips it)
+    interactive: true
+    cmds:
+      - ./scripts/status.sh creds
+
   status:code:
     desc: Codebase stats section
+    interactive: true
     cmds:
       - ./scripts/status.sh code
 
   status:env:
     desc: Environment info section
+    interactive: true
     cmds:
       - ./scripts/status.sh env
 
+  status:image:
+    desc: Warn if the container's image-baked config has drifted from the checkout (silent when fresh)
+    cmds:
+      - bash .devcontainer/scripts/check-image-staleness.sh
+
   status:setup:
     desc: Setup completeness audit (GitHub, toolchain, devcontainer, dev env)
+    interactive: true
     cmds:
       - ./scripts/status.sh setup
 
@@ -514,8 +818,7 @@ tasks:
   util:bunch-install:
     desc: Move the Bunch file to iCloud and replace it with a symlink (macOS)
     cmds:
-      - mv '.meta/Code Project - Foreman.bunch' '/Users/evan/Library/Mobile Documents/com~apple~CloudDocs/Bunches/'
-      - ln -s '/Users/evan/Library/Mobile Documents/com~apple~CloudDocs/Bunches/Code Project - Foreman.bunch' .meta
+      - ./scripts/meta-install.sh bunch 'Foreman' '~/Library/Mobile Documents/com~apple~CloudDocs/Bunches'
 
   util:obsidian-add:
     desc: Scaffold the Obsidian project note in .meta (mirrors what the template generates)
@@ -525,5 +828,4 @@ tasks:
   util:obsidian-install:
     desc: Move the Obsidian note to the vault and replace it with a symlink (macOS)
     cmds:
-      - mv '.meta/Foreman.md' '/Users/evan/Local/Memex/Personal/Digital'
-      - ln -s '/Users/evan/Local/Memex/Personal/Digital/Foreman.md' .meta
+      - ./scripts/meta-install.sh obsidian 'Foreman' '~/Local/Memex/Professional'

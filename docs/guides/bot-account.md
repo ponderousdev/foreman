@@ -107,7 +107,7 @@ access tokens → **Fine-grained tokens** → Generate new token.
 | **Resource owner** | the owner of the repos — `ponderousdev` | Pick the *user* and org repos are unreachable, no matter the permissions. An org may require approval before the token works. |
 | **Repository access** | *Only select repositories* — exactly the repos the bot works on | This list **is** the blast radius. Never "All repositories". |
 | **Repository permissions** | the table in [branch-protection.md](../architecture/branch-protection.md#bot-account-pat-permissions), and nothing more | Notably **no Workflows** and **no Administration** — see [security.md](../architecture/security.md). |
-| **Organization permissions** | Projects: Read-only · Variables: Read-only | Board and CI context for agents. **These are org-scoped — the repo list above does not bound them.** Grant read; never write. |
+| **Organization permissions** | Projects: Read and write · Variables: Read-only | Board writes for claim lifecycle ([project-management.md](../project-management.md)) and CI context. **These are org-scoped — the repo list above does not bound them.** Granting write here reaches every board the org owns; accept that radius deliberately. If the target project is private and the bot is not an org member, also grant it project-level write access (Settings → Projects → Manage access). |
 | **Expiration** | set one; record the date | A token that never expires is a credential you will never rotate. |
 
 Copy the value once — GitHub will not show it again.
@@ -124,6 +124,10 @@ Into **1Password**, then to the container via the 1Password Environment that
 backs the devcontainer's `--env-file`, as `GH_TOKEN` — see
 [devcontainers.md](devcontainers.md). Never into git, never into
 `containerEnv`, never pasted into a shell that records history.
+
+Into the **bot** profile's env-file only. The human `dev/` profile carries no
+`GH_TOKEN` — it authenticates as the operator via `gh auth login`, and `gh`
+would prefer this PAT over that login unconditionally if both were present.
 
 ### 5. Verify end to end
 
@@ -171,9 +175,13 @@ else references the value, which is the point of keeping it in exactly one
 place.
 
 A leaked bot PAT is bounded but not harmless: it can push branches and open PRs
-on the selected repos. It **cannot** merge `main`, edit workflows, or change repo
+on the selected repos,
+and with Projects write it can mutate cards and fields on every org board.
+It **cannot** merge `main`, edit workflows, or change repo
 settings. Revoke, re-issue, and check the repos' branch and PR lists for anything
-you did not create.
+you did not create,
+and audit every reachable project board for unexpected card moves or field
+changes.
 
 ## What the bot cannot do — by construction
 

@@ -1,5 +1,12 @@
 # Brewfile for Foreman
 # Install with: task install  (brew bundle --file=Brewfile)
+#
+# Base-OS prerequisite, deliberately not a brew entry: `file(1)`, which
+# scripts/lint-hygiene.sh requires. macOS ships /usr/bin/file and every
+# mainstream Linux distro installs it in the base system, so a brew formula
+# would shadow the system binary to no benefit. CI provisions it explicitly via
+# scripts/ensure-file.sh; if it is somehow absent locally, lint-hygiene.sh says
+# so by name and exits rather than misreporting binaries as text.
 
 # Task runner + git hooks
 brew "go-task"
@@ -23,6 +30,10 @@ brew "gitleaks"
 brew "node"
 # Python tool runner (Semgrep CE use uv/uvx)
 brew "uv"
+# lint-hygiene.sh parses .foreman.toml with bare `python3` + tomllib (>= 3.11);
+# stock macOS ships 3.9 and uv provides no `python3` shim, so the interpreter
+# itself is still a dependency.
+brew "python"
 
 # Devcontainer
 brew "hadolint"
@@ -31,6 +42,9 @@ brew "hadolint"
 brew "yq"
 
 # Utilities
+# coreutils provides `timeout`, which stock macOS lacks — scripts/status.sh
+# bounds its network probes with it.
+brew "coreutils"
 brew "direnv"
 brew "jq"
 brew "fzf"
@@ -40,3 +54,9 @@ brew "bat"
 brew "tokei"
 brew "gum"          # status dashboard rendering (scripts/status.sh)
 brew "television"   # interactive task menu (`task` / task menu-tv → tv)
+
+# Second-model review (task challenge / task review drive the Codex CLI).
+# Cask = macOS only; on Linux/devcontainers install with
+# `npm install -g @openai/codex` (a bare cask line would abort `brew bundle`
+# on Linux before any of the remaining deps install).
+cask "codex" if OS.mac?

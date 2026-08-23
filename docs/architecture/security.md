@@ -12,10 +12,13 @@ current — it is the reference for "where do secrets live and who can do what".
 - **Secrets via 1Password.** Local env comes from **1Password Environments**
   (a virtual `.env` mounted over a UNIX pipe — never written to disk or git) or
   `op run`/`op inject`; CI reads from GitHub Actions secrets.
-  Devcontainer secrets are `GH_TOKEN` (foreman's write PAT),
-  `FOREMAN_AGENT_GH_TOKEN` (the read-only agent PAT, bot profile only),
-  `CLAUDE_CODE_OAUTH_TOKEN`, `AGENT_DECK_TELEGRAM_KEY` (+ `TS_AUTHKEY`,
-  dev profile only) — see
+  Devcontainer secrets are `CLAUDE_CODE_OAUTH_TOKEN` and
+  `AGENT_DECK_TELEGRAM_KEY` in both profiles, `GH_TOKEN` and
+  `FOREMAN_AGENT_GH_TOKEN` (the read-only agent PAT) in the bot profile only,
+  `TS_AUTHKEY` in the dev profile only, plus Foreman's own adapter keys
+  (`FOREMAN_DEEPSEEK_API_KEY`/`FOREMAN_KIMI_API_KEY`/`FOREMAN_GLM_API_KEY`) and
+  the alt-model provider keys (`KIMI_API_KEY`/`MOONSHOT_API_KEY`,
+  `DEEPSEEK_API_KEY`, `ZAI_API_KEY`, `QWEN_API_KEY`) when opted in — see
   [../guides/devcontainers.md](../guides/devcontainers.md).
   TODO: list the 1Password vault/items this project uses.
 - **Auditable changes.** `main` is protected; changes land via reviewed PRs
@@ -30,7 +33,7 @@ repositories and for profiles without a CodeQL workflow.
 
 | Axis | Catches | Default tool | Where it runs |
 |---|---|---|---|
-| **SAST** — flaws in *your own code* | injection, XSS, SSRF, path traversal, crypto/auth misuse | **Semgrep CE** | CI and `task security:sast`; this profile has no generated CodeQL workflow |
+| **SAST** — flaws in *your own code* | injection, XSS, SSRF, path traversal, crypto/auth misuse | **CodeQL** for public repos; **Semgrep CE** for free private repos | CodeQL runs automatically in public CI. Private CI uses Semgrep unless paid GitHub Code Security + `FULL_SECURITY_SCAN=true` opts into CodeQL |
 | **SCA** — CVEs in *dependencies* | vulnerable third-party packages | **Dependabot alerts** + **`task security:audit`** (`pip-audit`) | Dependabot continuous; audit in the CI `security` job + `task security` locally |
 | **Secrets** — committed credentials | keys, tokens, certs, `.env` | **gitleaks** (`task security:secrets`) | pre-push git hook + CI `security` job |
 | **IaC** — insecure infrastructure | open security groups, public buckets, … | **checkov** (`task lint:terraform:security`) | CI `lint` job + `task check` locally (Terraform repos) |
@@ -50,11 +53,11 @@ The repository-class policy is:
   (Semgrep CE) + `security:secrets` (gitleaks) + `security:audit` (the
   package-manager audit). It does **not** run Snyk.
 - **CI routes SAST by visibility** instead of running duplicate engines:
-  this profile has no CodeQL workflow, so Semgrep CE runs for both public and
-  private repositories.
+  public → CodeQL; free private → Semgrep CE; private with GitHub Code Security +
+  `FULL_SECURITY_SCAN=true` → CodeQL.
 - **`task setup:github`** turns on the GitHub-native layers: Dependabot alerts,
   and Private Vulnerability Reporting when the repository is public; the branch
-  ruleset makes `verify` + `security` required checks. See
+  ruleset makes `verify` + `security` + `codeql-verify` required checks. See
   [../CHECKLIST.md](../CHECKLIST.md).
 - Which tools apply depends on the stack: SAST/SCA need code + a manifest (web/app,
   or Python for iac); IaC scanning is Terraform-only.
@@ -64,12 +67,26 @@ not CodeQL-equivalent: its community analysis is principally intraprocedural
 and normally has shallower data-flow coverage than CodeQL or commercial engines.
 It is the private-repository floor, not a claim of full vulnerability coverage.
 
-### Semgrep is the SAST baseline
+### Enable CodeQL when the repository is eligible
 
-This profile does not generate `codeql.yml`, so the build workflow runs Semgrep
-CE for public and private repositories. If the repository later gains a
-CodeQL-supported application stack, add a CodeQL workflow for public coverage or
-for paid private GitHub Code Security coverage.
+The template includes `codeql.yml` when `use_codeql=true` and analyzes exactly
+the first-party languages recorded in `codeql_languages`. It runs
+automatically on every **public** repository: GitHub code scanning and standard
+GitHub-hosted Actions runners are free there. CodeQL is preferred over Semgrep CE
+for these stacks because its queries include deeper interprocedural and data-flow
+analysis and integrate directly with GitHub's Security tab.
+
+For **private/internal** repositories, CodeQL code scanning requires an
+organization on GitHub Team or Enterprise with
+[GitHub Code Security enabled](https://docs.github.com/en/code-security/reference/code-scanning/troubleshoot-analysis-errors/private-repository-enablement).
+That product is
+[billed by active committer](https://docs.github.com/en/billing/concepts/product-billing/github-advanced-security),
+and GitHub-hosted Actions usage can also consume the plan's minutes. Leave
+`FULL_SECURITY_SCAN` unset when that entitlement is unavailable; the build
+workflow runs Semgrep CE instead. When the paid entitlement is enabled, set
+`FULL_SECURITY_SCAN=true`, confirm a successful upload in the Security tab, and
+then count private CodeQL as coverage. The variable cannot disable public
+CodeQL.
 
 ### Dependency monitoring and update ownership
 
@@ -78,6 +95,54 @@ continuous GitHub advisory feed. Renovate owns routine dependency update PRs and
 alert-remediation PRs (`vulnerabilityAlerts.enabled=true`). Do not add a
 `dependabot.yml`: Dependabot update PRs would compete with Renovate. The
 package-manager audit remains in CI as an immediate provider-independent check.
+
+Detection runs on two feeds with **different reach**, and the difference decides
+what each is good for:
+
+- `vulnerabilityAlerts` reacts to GitHub's Dependabot alerts, which read the
+  dependency graph and therefore reach **transitive** packages — where nearly
+  every advisory that actually bites a lockfile lives — wherever GitHub's
+  dependency graph extracts transitive dependencies for that ecosystem, which
+  for a committed `pnpm-lock.yaml` / `uv.lock` it does. Ecosystems and manifests
+  outside that support resolve to direct dependencies only, so confirm the
+  graph before relying on the reach. It produces
+  nothing when Dependabot alerts are switched off for the repository, and being
+  switched off is invisible from the config, which still reads `enabled=true`.
+  Verify the feature itself, not the config: `gh api
+  repos/<owner>/<repo>/vulnerability-alerts` returns `204` when enabled and
+  `404` when not. Read that `404` carefully — the endpoint needs
+  Administration-read, which the machine-user PAT deliberately omits, so an
+  under-privileged token returns `404` as well. Check it with an admin-capable
+  credential, or read the state from Settings → Advanced Security instead.
+- `osvVulnerabilityAlerts=true` queries `osv.dev` independently of repository
+  visibility and of any GitHub Advanced Security setting, but Renovate
+  [surfaces OSV alerts for **direct dependencies only**](https://docs.renovatebot.com/configuration-options/#osvvulnerabilityalerts).
+  It is a second feed for first-party dependencies, **not** a fallback for
+  transitive ones.
+
+So a repository with Dependabot alerts disabled has no continuous transitive
+Renovate feed, whatever `renovate.json` says — nothing there will open a
+remediation PR for a transitive advisory. Enabling the Dependabot alert feed is
+what closes that gap; OSV narrows the direct-dependency window alongside it.
+
+Two other checks can also surface a transitive advisory, and neither replaces
+the feed. The package-manager audit in CI is PR-triggered, so it reports when
+somebody next opens a PR rather than when the advisory is published — which is
+exactly how a batch of unrelated advisories turns up inside somebody's docs
+change.
+A scheduled Snyk SCA scan (`snyk_scan_schedule` is `weekly`
+here, see below) runs on its own clock, but it needs `SNYK_TOKEN` configured to
+run at all.
+
+**Do not assume any of these three reach your whole dependency tree.** Each
+one's depth is a property of the specific ecosystem, manifest, and vendor plan
+in play, not of the setting being switched on — GitHub's graph extracts
+transitive dependencies for some ecosystems and not others, and Snyk gates some
+of its own package-manager support behind plan tier and preview flags (its `uv`
+support, for one, requires an Enterprise plan with the uv Preview feature
+enabled, so a Python project on the free posture gets far less than the setting
+implies). Establish the real depth for the stack you actually ship, per tool,
+and treat a green run as evidence only for what you confirmed it inspects.
 
 ### Snyk second opinion and scheduling
 
@@ -135,7 +200,53 @@ a library or docs repository usually should not.
   devcontainer with a scoped fine-grained PAT (Write, no admin) for its in-container
   git pushes. Cannot push to or merge `main`. (CI **workflows** authenticate
   separately as the `ponderousdev-ci` GitHub App — see below.)
-- **Operator** (you) — full access from the human `dev/` devcontainer or host.
+- **Operator** (you) — the human `dev/` devcontainer and the host, authenticated
+  by an ordinary `gh auth login` against your own account. The bot's PAT is
+  **absent** from that profile.
+
+Each profile authenticates as the identity it commits as, and neither carries the
+other's credential.
+
+### The operator's credential in the `dev/` profile
+
+The `dev/` profile commits as the operator, so it authenticates as the operator.
+It carries **no `GH_TOKEN`** — not as tidiness, but because there is no other way
+to get this right. `gh` prefers `GH_TOKEN` over any stored credential
+unconditionally and exposes no precedence knob, so a bot PAT sitting in a human
+container silently wins every `gh` call and, through the credential helper, every
+`git push`. Removing it *is* the mechanism. `init-env.sh` evicts a stale value
+from the dev env-file on every rebuild, and `scripts/devcontainer-assert.sh`
+asserts the absence in both the config and the running container.
+
+Removing `GH_TOKEN` is necessary but not sufficient, and the shortfall is the
+quiet kind. `gh` falls through to `GITHUB_TOKEN`, then the enterprise aliases,
+then the stored login — so dropping only the first hands the container to
+whichever alias happens to be present, still as the wrong identity and with
+nothing to show for it. The profile therefore blanks all three aliases in
+`containerEnv`, which outranks the env-file and which `gh` reads as unset.
+
+Three consequences worth stating plainly:
+
+- **The ceiling is your own access, not a curated repo list.** A fine-grained PAT
+  has exactly one resource owner, so a bot PAT capped the human container at that
+  token's selected repositories — every other org was unreachable no matter what
+  your account could see. An OAuth login has no such cap. That is the point, and
+  also the cost: this container now reaches everything you do.
+- **The credential is not persisted.** `~/.config/gh` is on no volume, so a
+  rebuild ends the session and you log in again. Deliberate: the container has no
+  keyring, so `gh` would store the token as plaintext `hosts.yml`, and persisting
+  it would leave a broad, long-lived credential at rest on a docker volume. The
+  trade is friction in exchange for nothing at rest. Steps:
+  [guides/devcontainers.md](../guides/devcontainers.md).
+- **Unattended agents belong in the bot profile.** A human-authed container gives
+  any agent running in it your full reach, and an agent can read its own
+  container's credentials. Attended work in `dev/`; headless runs in the bot
+  container, where the PAT's denials below still apply.
+  Note what this removes: foreman builds each agent's
+  environment as a strict allowlist that swaps `GH_TOKEN` for the read-only
+  agent token, but `HOME` is in that allow-list — so a gh-stored login makes
+  that least-privilege gate **vacuous** in `dev/`. The gate is real only in the
+  profile it was written for.
 
 ### The bot's fine-grained PAT
 
@@ -225,10 +336,13 @@ Write it down rather than re-derive it under pressure:
 - **The selected repos** — at the level each collaborator grant allows, capped by
   the permission table. It can push branches, open PRs, and comment. It **cannot**
   merge `main` (ruleset + CODEOWNERS), edit workflows, or change settings.
-- **Plus every project and variable in the org** — organization permissions are
-  org-scoped; the selected-repo list does not bound them. That read-only reach is
-  accepted for project metadata and non-secret configuration, and should be
-  revisited if the org later holds a repo the bot must not see.
+- **Plus every project and variable in the org** — because **organization
+  permissions are org-scoped and the selected-repo list does not bound them**. A
+  repository permission stops at the repos you picked; an organization permission
+  does not. That reach is accepted for Variables (non-secret config, read-only)
+  and Projects (board writes for the claim lifecycle — the write is deliberate,
+  and its cost is that a compromised token can write to every board the org
+  owns). Revisit the day the org holds a repo the bot should not see.
 
 **Read is cheap; write is the line.** Variables are read-only deliberately:
 write could opt a private repository into paid CodeQL or mutate another
@@ -245,6 +359,13 @@ CI workflows that act on the repo as a bot — release-please, the
 GitHub org (and personal account) gets its own App**, named **`<owner>-ci`** —
 for this repo, **`ponderousdev-ci`**. One App per org keeps a leaked key
 contained to a single org (no cross-org reach).
+
+One deliberate exception inside the `claude-*` workflows: the claim-lifecycle
+label writes (`claim:claude` on and off the target) use the built-in
+`GITHUB_TOKEN` under the job's own `issues: write` permission, not the App
+token — it stays valid for the whole job (an App token expires in an hour, and
+the release runs at the very end) and its writes never trigger another workflow
+run. Everything the model does, and every PR it opens, still uses the App token.
 
 Each job mints a short-lived (1h) installation token at runtime via
 `actions/create-github-app-token`, reading:
@@ -371,7 +492,7 @@ even the in-org radius small:
 | `CLAUDE_CODE_OAUTH_TOKEN` | claude-* workflows | repo Actions secret | re-run `claude setup-token` |
 | `GH_TOKEN` (bot **write** PAT) | foreman's supervisor writes (push, PR, labels, comments); operator `gh`/git in the devcontainer; `uvx` fetches of private deps | 1Password Environment → devcontainer `--env-file` | manual; re-issue before expiry ([guides/bot-account.md](../guides/bot-account.md)) |
 | `FOREMAN_AGENT_GH_TOKEN` (bot **read-only** PAT) | handed to dispatched agents as their `GH_TOKEN` (#13); permission matrix in [branch-protection.md](branch-protection.md#agent-read-only-pat-permissions) — every level Read-only, verified at creation | 1Password Environment → devcontainer `--env-file` (bot profile only) | manual; rotate alongside the write PAT |
-| `SNYK_TOKEN` | optional Snyk CLI scans | local env / 1Password by default | manual |
+| `SNYK_TOKEN` | optional Snyk CLI scans + `snyk-scheduled.yml` | local env / 1Password by default; Actions secret for the generated schedule | manual |
 
 > **`CLAUDE_CODE_OAUTH_TOKEN` must be an OAuth token, not an API key.** Generate
 > it with `claude setup-token`; the value starts **`sk-ant-oat01-`** and bills the

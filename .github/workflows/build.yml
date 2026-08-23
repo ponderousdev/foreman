@@ -32,7 +32,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -41,13 +41,50 @@ jobs:
       - name: Lint
         run: task check
       - run: task test:tasks
+      # These run in local `verify` and must run here too, or CI is strictly
+      # weaker than the local gate (harmon-init#962). Each is a unit test
+      # needing no container, network, or credential.
+      #
+      # NOT here, deliberately: `validate` and `test`. Both are in `verify`
+      # unconditionally, but CI only invokes them from the build-test job,
+      # which is gated on use_node. So a repo with
+      # `(include_terraform or include_ansible) and not use_node` runs real
+      # terraform/ansible checks locally and none in CI. Adding them here is
+      # not a one-liner — `terraform validate` needs an init step CI does not
+      # have — so it is tracked as harmon-init#978 rather than fixed in the
+      # same breath as these.
+      - run: task audit:agent-instructions
+      - run: task test:agent-instructions-size
+      - run: task test:agent-skill-links
+      - run: task test:output
+      - run: task test:meta-install
+      - run: task test:session-cleanup
+      - run: task test:setup-github
+      - run: task test:agent-registry
+      - run: task test:registry-drift
+      - run: task test:registry-docs
+      - run: task test:label-registry
+      - run: task test:codex-review
+      - run: task test:ci-results
+      - run: task test:status
+      - run: task test:gh-scopes
+      - run: task test:worktree
+      - run: task test:lint-hygiene
       - run: task test:release-title
       - run: task test:image:pin
       - run: task test:image:digest
+      - run: task test:setup-github-project
+      - run: task test:setup-github-issue-fields
+      - run: task test:sync-devkit-release
       - name: Skills drift check (vendored skills vs pinned harmon-devkit ref)
         run: task verify:skills
       - run: task test:hooks
+      - run: task test:statusline
       - run: task test:devcontainer:permissions
+      # Same devcontainer gate their `verify` entries carry (#962).
+      - run: task test:link-claude-json
+      - run: task test:image-staleness
+      - run: task test:open-devcontainer
 
   security:
     # Runner switch: CI_RUNS_ON repo/org variable unset -> the rendered
@@ -58,7 +95,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -70,6 +107,7 @@ jobs:
       - name: Dependency audit
         run: task security:audit
       - name: SAST (Semgrep Community Edition)
+        if: github.event.repository.private && vars.FULL_SECURITY_SCAN != 'true'
         run: task security:sast
 
   test:
@@ -96,18 +134,39 @@ jobs:
     # Runner switch: CI_RUNS_ON repo/org variable unset -> the rendered
     # default; set it to a JSON runner spec to override without a commit.
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    env:
+      IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
     steps:
-      - name: Check job results
+      # Never check out or run fork-controlled repository code on this path.
+      - name: Verify deliberate skips at the untrusted-fork boundary
+        if: env.IS_FORK == 'true'
+        env:
+          LINT_RESULT: ${{ needs.lint.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
         run: |
           fail=0
-          check() {
-            [ "$2" = "success" ] || [ "$2" = "skipped" ] || { echo "Job $1 result: $2"; fail=1; }
+          check_skipped() {
+            if [ "$2" != "skipped" ]; then
+              echo "Job $1 result: $2 (expected skipped for an untrusted fork)"
+              fail=1
+            fi
           }
-          check lint "${{ needs.lint.result }}"
-          check security "${{ needs.security.result }}"
-          check test "${{ needs.test.result }}"
+          check_skipped lint "$LINT_RESULT"
+          check_skipped security "$SECURITY_RESULT"
           if [ "$fail" -ne 0 ]; then
-            echo "One or more required jobs failed."
             exit 1
           fi
-          echo "All required jobs passed."
+          echo "Untrusted fork trust boundary enforced: all repository-controlled jobs were deliberately skipped."
+      - if: env.IS_FORK != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify required jobs succeeded
+        if: env.IS_FORK != 'true'
+        env:
+          EXPECTED_RESULT: success
+          LINT_RESULT: ${{ needs.lint.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+        run: ./scripts/verify-ci-results.sh "lint=${LINT_RESULT}" "security=${SECURITY_RESULT}"
+# Keep a literal final line after the inline Jinja conditionals above; with
+# trim_blocks enabled, ending on a block tag would strip the workflow's EOF newline.

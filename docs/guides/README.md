@@ -19,8 +19,14 @@ Calm, repeatable how-tos read *in advance* (the crisis counterpart is
   **Coder** setup.
 - [devcontainer-performance.md](devcontainer-performance.md) — tuning CPU/RAM
   for the devcontainer; the real levers live in Coder and WSL2, not this repo.
+- [devcontainer-incidents.md](devcontainer-incidents.md) — worked diagnoses of
+  real devcontainer failures (lifecycle chain aborts, Claude auth lost on
+  rebuild, stale Coder volumes) and where the shipped fix for each lives.
 - [foreman-migration.md](foreman-migration.md) — move a consumer off vendored
   `scripts/foreman/` onto the pinned `uvx` dependency (idempotent), plus the
   v1→v2 `.foreman.toml` key migration.
+- [codex-review.md](codex-review.md) — second-model review via the OpenAI
+  Codex CLI: `task challenge` / `task review`, the automatic Claude → Codex
+  stop-gate toggle, and where the finding-adjudication protocol lives.
 
 TODO: add more guides, e.g. "local development setup", "add a feature", "how X works".
