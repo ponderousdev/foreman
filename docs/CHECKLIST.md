@@ -70,7 +70,7 @@ environment — against the items below
       revisions via the item's edit-history menu ("edited" dropdown) — GitHub
       keeps prior versions publicly viewable on public repos, so an edit
       without revision deletion hides nothing.
-- [ ] Import the branch ruleset (see [architecture/branch-protection.md](architecture/branch-protection.md)) — do this once `build.yml` are on `main` so the required `verify`/`security` checks resolve. **Use the UI import:** Settings → Rules → Rulesets → **New ruleset ▸ Import a ruleset** → select `.github/Branch Protection Ruleset - Protect Main.json`. (Prefer the UI over `gh api … rulesets`: the API `POST` is not idempotent — re-running creates a duplicate ruleset — and currently rejects the `merge_queue` rule. To later change the ruleset, edit the existing one in the UI rather than re-importing.)
+- [ ] Import the branch ruleset (see [architecture/branch-protection.md](architecture/branch-protection.md)) — do this once `build.yml`, `codeql.yml` are on `main` so the required `verify`/`security`/`codeql-verify` checks resolve. **Use the UI import:** Settings → Rules → Rulesets → **New ruleset ▸ Import a ruleset** → select `.github/Branch Protection Ruleset - Protect Main.json`. (Prefer the UI over `gh api … rulesets`: the API `POST` is not idempotent — re-running creates a duplicate ruleset — and currently rejects the `merge_queue` rule. To later change the ruleset, edit the existing one in the UI rather than re-importing.)
 
 - [ ] **Install and activate Renovate** — install the
       [Renovate app](https://github.com/apps/renovate) for **Only select
@@ -144,11 +144,13 @@ environment — against the items below
       review at the head, or a 👍 from that login on foreman's own request
       comment — still mean what the readiness gate assumes, and that required
       checks run on draft PRs (foreman promotes only after they conclude).
-- [ ] **SAST coverage** — this profile has no CodeQL workflow, so Semgrep CE runs
-      in `build.yml` for public and private repositories. Add CodeQL later if the
-      repo gains supported first-party source: set `use_codeql=true`, select its
-      `codeql_languages`, and ensure it is public (free) or has paid GitHub Code
-      Security (private/internal).
+- [ ] **SAST coverage** — public repositories run CodeQL automatically and for
+      free for the selected `codeql_languages`; confirm a successful upload in
+      the Security tab. Free private repos
+      run Semgrep CE in `build.yml`. Only set `FULL_SECURITY_SCAN=true` on a
+      private/internal repository after enabling paid GitHub Code Security; the
+      variable is a run switch, not an entitlement. It cannot disable public
+      CodeQL.
 - [ ] **Choose the Snyk posture** — the default is manual/local only via
       `task security:sast:snyk` and `task security:sca:snyk`; it is not part of
       `task security` or required PR CI. Free private-repository tests share the

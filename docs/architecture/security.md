@@ -33,7 +33,7 @@ repositories and for profiles without a CodeQL workflow.
 
 | Axis | Catches | Default tool | Where it runs |
 |---|---|---|---|
-| **SAST** — flaws in *your own code* | injection, XSS, SSRF, path traversal, crypto/auth misuse | **Semgrep CE** | CI and `task security:sast`; this profile has no generated CodeQL workflow |
+| **SAST** — flaws in *your own code* | injection, XSS, SSRF, path traversal, crypto/auth misuse | **CodeQL** for public repos; **Semgrep CE** for free private repos | CodeQL runs automatically in public CI. Private CI uses Semgrep unless paid GitHub Code Security + `FULL_SECURITY_SCAN=true` opts into CodeQL |
 | **SCA** — CVEs in *dependencies* | vulnerable third-party packages | **Dependabot alerts** + **`task security:audit`** (`pip-audit`) | Dependabot continuous; audit in the CI `security` job + `task security` locally |
 | **Secrets** — committed credentials | keys, tokens, certs, `.env` | **gitleaks** (`task security:secrets`) | pre-push git hook + CI `security` job |
 | **IaC** — insecure infrastructure | open security groups, public buckets, … | **checkov** (`task lint:terraform:security`) | CI `lint` job + `task check` locally (Terraform repos) |
@@ -53,11 +53,11 @@ The repository-class policy is:
   (Semgrep CE) + `security:secrets` (gitleaks) + `security:audit` (the
   package-manager audit). It does **not** run Snyk.
 - **CI routes SAST by visibility** instead of running duplicate engines:
-  this profile has no CodeQL workflow, so Semgrep CE runs for both public and
-  private repositories.
+  public → CodeQL; free private → Semgrep CE; private with GitHub Code Security +
+  `FULL_SECURITY_SCAN=true` → CodeQL.
 - **`task setup:github`** turns on the GitHub-native layers: Dependabot alerts,
   and Private Vulnerability Reporting when the repository is public; the branch
-  ruleset makes `verify` + `security` required checks. See
+  ruleset makes `verify` + `security` + `codeql-verify` required checks. See
   [../CHECKLIST.md](../CHECKLIST.md).
 - Which tools apply depends on the stack: SAST/SCA need code + a manifest (web/app,
   or Python for iac); IaC scanning is Terraform-only.
@@ -67,13 +67,26 @@ not CodeQL-equivalent: its community analysis is principally intraprocedural
 and normally has shallower data-flow coverage than CodeQL or commercial engines.
 It is the private-repository floor, not a claim of full vulnerability coverage.
 
-### Semgrep is the SAST baseline
+### Enable CodeQL when the repository is eligible
 
-CodeQL is deliberately omitted for this profile. The build workflow runs Semgrep
-CE for public and private repositories. If the repository later gains a
-CodeQL-supported application stack, set `use_codeql=true`, select its
-first-party `codeql_languages`, and re-apply the template for public coverage or
-for paid private GitHub Code Security coverage.
+The template includes `codeql.yml` when `use_codeql=true` and analyzes exactly
+the first-party languages recorded in `codeql_languages`. It runs
+automatically on every **public** repository: GitHub code scanning and standard
+GitHub-hosted Actions runners are free there. CodeQL is preferred over Semgrep CE
+for these stacks because its queries include deeper interprocedural and data-flow
+analysis and integrate directly with GitHub's Security tab.
+
+For **private/internal** repositories, CodeQL code scanning requires an
+organization on GitHub Team or Enterprise with
+[GitHub Code Security enabled](https://docs.github.com/en/code-security/reference/code-scanning/troubleshoot-analysis-errors/private-repository-enablement).
+That product is
+[billed by active committer](https://docs.github.com/en/billing/concepts/product-billing/github-advanced-security),
+and GitHub-hosted Actions usage can also consume the plan's minutes. Leave
+`FULL_SECURITY_SCAN` unset when that entitlement is unavailable; the build
+workflow runs Semgrep CE instead. When the paid entitlement is enabled, set
+`FULL_SECURITY_SCAN=true`, confirm a successful upload in the Security tab, and
+then count private CodeQL as coverage. The variable cannot disable public
+CodeQL.
 
 ### Dependency monitoring and update ownership
 

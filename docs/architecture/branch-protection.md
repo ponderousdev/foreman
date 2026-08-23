@@ -8,9 +8,9 @@ This document explains the branch protection ruleset applied to `main` and how i
 
 An importable copy of the ruleset ships in this repo at
 `.github/Branch Protection Ruleset - Protect Main.json`. Apply it through the
-GitHub **UI import** — do this only once `build.yml` are on
+GitHub **UI import** — do this only once `build.yml`, `codeql.yml` are on
 `main`, so the required
-`verify`/`security` checks can actually report.
+`verify`/`security`/`codeql-verify` checks can actually report.
 Importing first wedges the repository: a required check with no workflow to emit
 it stays pending forever and blocks every pull request.
 
@@ -223,6 +223,10 @@ This mirrors the importable
           {
             "context": "security",
             "integration_id": 15368
+          },
+          {
+            "context": "codeql-verify",
+            "integration_id": 15368
           }
         ]
       }
@@ -308,17 +312,23 @@ This is the core rule that prevents the AI agent from pushing directly to `main`
 
 All specified CI checks must pass before the PR can merge. The `strict_required_status_checks_policy: true` setting means the PR branch must be up-to-date with `main` before merging — if `main` advances after the checks ran, the checks must re-run. The `do_not_enforce_on_create: true` setting skips enforcement when the branch is first created (before any CI has had a chance to run).
 
-The required checks are the build gates (see
+The required checks are the build gates plus CodeQL's stable aggregate (see
 [ci-cd.md](ci-cd.md)):
 
 | Check      | Purpose                                                                                          |
 | ---------- | ----------------------------------------------------------------------------------------------- |
 | `verify`   | Aggregate gate — rolls up `lint`, `security`, and `test` so one check reports overall pass/fail |
 | `security` | gitleaks + dependency audit; Semgrep CE when this job owns the visibility/profile SAST route |
+| `codeql-verify` | Requires CodeQL success on public and paid-private routes; reports not-applicable on free private repos and fork PRs |
 
 Requiring the aggregate `verify` (rather than each leaf job) keeps the required-check
 list stable as jobs are added inside `build.yml`.
 
+`codeql-verify` is stable across visibility: public and paid-private CodeQL must
+succeed for the selected `codeql_languages`; free private repositories and fork
+PRs get a successful not-applicable result while the required `security` job
+carries the Semgrep fallback. It runs on `merge_group`, so it is safe for the
+merge queue.
 Snyk PR/App checks are absent by default. The generated
 scheduled Snyk workflow is advisory and never a required check; it has no PR or
 push trigger. Only a high-consequence repository that deliberately adopts

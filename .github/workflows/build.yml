@@ -107,6 +107,7 @@ jobs:
       - name: Dependency audit
         run: task security:audit
       - name: SAST (Semgrep Community Edition)
+        if: github.event.repository.private && vars.FULL_SECURITY_SCAN != 'true'
         run: task security:sast
 
   test:

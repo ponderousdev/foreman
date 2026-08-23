@@ -5,6 +5,7 @@ verifies it, opens a PR per unit, and shepherds those PRs to mergeable —
 **humans merge, always.**
 
 [![Build & Validate](https://github.com/ponderousdev/foreman/actions/workflows/build.yml/badge.svg)](https://github.com/ponderousdev/foreman/actions/workflows/build.yml)
+[![CodeQL](https://github.com/ponderousdev/foreman/actions/workflows/codeql.yml/badge.svg)](https://github.com/ponderousdev/foreman/actions/workflows/codeql.yml)
 [![Devcontainer Build](https://github.com/ponderousdev/foreman/actions/workflows/devcontainer-build.yml/badge.svg)](https://github.com/ponderousdev/foreman/actions/workflows/devcontainer-build.yml)
 [![Clone in Local Dev Container](https://img.shields.io/static/v1?label=Local%20Dev%20Container&message=Clone&color=blue&logo=visualstudiocode)](https://vscode.dev/redirect?url=vscode%3A//ms-vscode-remote.remote-containers/cloneInVolume%3Furl%3Dhttps%3A//github.com/ponderousdev/foreman)
 [![Renovate](https://img.shields.io/badge/maintained%20with-renovate-blue?logo=renovatebot)](https://github.com/apps/renovate)
@@ -274,13 +275,14 @@ runner checks are a separate tier.
 | Workflow | Purpose |
 |---|---|
 | `build.yml` | lint, test, security → aggregate `verify` gate (required checks) |
+| `codeql.yml` | CodeQL SAST: automatic and free for public repos; private/internal repos require GitHub Code Security + `FULL_SECURITY_SCAN=true` |
 | `snyk-scheduled.yml` | Optional weekly Snyk SAST/SCA second opinion; advisory and never a required PR check |
 | `devcontainer-build.yml` | Prebuilds devcontainer images to GHCR on merge to main |
 | `claude-plan/implement/review.yml` | Mention-only: an `@claude` mention naming `plan`/`implement`/`review` from an authorized sender; each run holds `claim:claude` |
 | `release.yml` | release-please maintains a release PR; merging it cuts the release |
 
 Branch protection: `main` requires a PR with code-owner approval and the
-`verify` + `security` checks (importable ruleset in `.github/`; see
+`verify` + `security` + `codeql-verify` checks (importable ruleset in `.github/`; see
 [docs/architecture/branch-protection.md](docs/architecture/branch-protection.md)).
 **Releases are intentional** — release-please keeps a rolling release PR from
 conventional commits; merging it cuts the tag, GitHub release, and CHANGELOG.
