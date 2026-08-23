@@ -11,22 +11,28 @@
 # provides. Dispatch therefore refuses here BY DESIGN until SpriteRunner
 # (#8) ships. plan still runs and REPORTS the refusal (exiting nonzero);
 # vet skips refused units; status and preflight are unaffected.
-runner = "local"
 
+# Where units execute: local today; sprite and docker are roadmap names.
+runner = "local"
 backend = "claude"
 require_approval = true
-inputs = "auto"
+inputs = "labels"
+max_parallel = 3
+branch_prefix = "foreman"
+# Identity asserted before any write.
 expected_login = "evanharmon1-bot"
 
-# The accounts whose issue content and arming are trusted (D4/D13). Keep
-# this tight — it is the trust boundary for local dispatch. Renovate and
-# CodeRabbit author issues/PRs here; list the bots you actually trust to
-# arm and to author dispatchable content.
-trusted_actors = ["evanharmon1", "evanharmon1-bot", "AdmiralFraggle", "admiralfraggle-bot", "Jessedroptable"]
+# Accounts (humans and apps) whose content and arming events are trusted:
+# who may arm an issue, and whose review/comment content may be embedded in
+# agent prompts. Empty = nobody is trusted (fail closed). App accounts are
+# spelled with the `[bot]` suffix. A configured `[reviewer]` login belongs in
+# this list — requiring review evidence whose content cannot be embedded
+# would wedge shepherding on unadjudicatable findings. chatgpt-codex-connector[bot]
+# is the codex cloud-review reviewer (use_codex_cloud_review).
+trusted_actors = ["evanharmon1", "evanharmon1-bot", "admiralfraggle", "admiralfraggle-bot", "Jessedroptable", "chatgpt-codex-connector[bot]"]
 
-# DECLARED hard requirements: none — the baseline gate needs no special
-# capabilities. Refusal still happens anyway: D4 injects `untrusted-input`
-# on this public repo regardless of this list (see the runner note above).
+# Hard capability requirements: the baseline gate cannot run without these;
+# a mismatch is refused before dispatch.
 required_capabilities = []
 
 # subscription (default): claude inherits CLAUDE_CODE_OAUTH_TOKEN; USD budgets
@@ -63,3 +69,15 @@ shepherd_usd = 10.0
 [timeouts]
 dispatch_min = 90
 shepherd_min = 30
+
+# Current-head reviewer gate (foreman >= 2.2.0): the same `@codex review`
+# contract the shepherd stage documents in AGENTS.md — fail-closed, bounded
+# attempts, evidence bound to the current head. Success is an APPROVED review
+# at the head or a thumbs-up from `login` on foreman's own request comment;
+# missing, stale, pending, contradictory, or unreadable evidence blocks
+# promotion.
+[reviewer]
+login = "chatgpt-codex-connector[bot]"
+request = "@codex review"
+timeout_min = 15
+max_attempts = 2

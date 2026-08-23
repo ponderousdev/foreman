@@ -53,9 +53,10 @@ class ConfigLoading(unittest.TestCase):
             [
                 "evanharmon1",
                 "evanharmon1-bot",
-                "AdmiralFraggle",
+                "admiralfraggle",
                 "admiralfraggle-bot",
                 "Jessedroptable",
+                "chatgpt-codex-connector[bot]",
             ],
         )
         self.assertEqual(cfg.runner, "local")

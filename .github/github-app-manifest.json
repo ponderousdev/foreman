@@ -15,5 +15,6 @@
     "metadata": "read",
     "actions": "read",
     "members": "read",
-    "organization_projects": "write"  }
+    "organization_projects": "write"
+  }
 }

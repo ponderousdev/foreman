@@ -17,12 +17,100 @@ it points here.
   major bump.
 - **Feature branches only.** Direct commits to `main` are blocked by the
   `guard:no-commit-to-main` pre-commit hook and the branch ruleset. Land changes
-  via a PR; code-owner review and the `verify` + `security`  checks are required.
+  via a PR; code-owner review and the `verify` + `security` + `codeql-verify`
+  checks are required.
 - **Never bypass hooks** (`--no-verify` is forbidden) — fix the underlying issue.
   In the devcontainer a Claude Code hook actively blocks `--no-verify` and
   validates commit messages.
 - Run **`task verify`** before pushing; the pre-push hook runs secret scanning
   (and type/IaC checks where applicable).
+
+## Worktrees
+
+- **`.worktrees/` is THE location** for linked git worktrees, and it is
+  gitignored. Lint globs and security-scan excludes already assume it; put a
+  tree anywhere else and those excludes stop applying.
+- **Create them with `task worktree:new -- <name>`**, never a bare
+  `git worktree add`. The task (`scripts/worktree-new.sh`) creates or attaches
+  the branch — including one that exists only on a remote, which it tracks
+  rather than recreating — installs **this tree's** dependencies, proves the
+  git hooks fire inside it, prints the ready path, and rolls the tree back if
+  any of that fails. A new branch is based on the **main worktree's HEAD**, not
+  the caller's — and when that branch's configured upstream resolves, the base
+  is first verified against it: behind means the fresh upstream tip is used
+  (announced), diverged refuses with a `--base` remedy, so a tree never
+  silently starts from stale history. Running the task from inside a worktree
+  does not silently stack the new branch on that one; `--base HEAD` stacks
+  deliberately. Creating a genuinely new branch also probes every configured
+  remote for a same-named branch first — a branch that exists remotely is
+  tracked, never recreated — so that path needs the remotes reachable: an
+  offline run fails closed with the fix in the message, and an explicit
+  `--base <ref>` skips the remote lookup entirely.
+  `--branch` and `--no-install` cover the rest.
+  One entrypoint means a second agent session, a terminal multiplexer, or a
+  human all get the same tree instead of each rediscovering the setup.
+- **Remove them with `task worktree:rm -- <name>`** (`--force` to discard
+  uncommitted work). It refuses on uncommitted changes **and** on ignored local
+  files such as a `.env` — `git worktree remove` counts modified and untracked
+  files but not ignored ones, so a plain remove would take those with it.
+  Edits hidden by `skip-worktree`/`assume-unchanged` refuse too, a deleted
+  flagged file included. In a sparse checkout an absent flagged path is exempt
+  only when the tree's active sparse rules exclude it (asked via
+  `git sparse-checkout check-rules`); on git < 2.42, which lacks
+  `check-rules`, the exemption deliberately stays per-tree rather than
+  failing closed, so clean sparse worktrees remain removable on e.g. macOS
+  system git (harmon-init#919).
+  Ignored *directories* (`node_modules/`, `.venv/`, `dist/`) do not block it:
+  `worktree:new` reinstalls them, and refusing there would make `--force`
+  routine and so meaningless. It also prunes the registry and clears leftover
+  gitlink directories — stale ones make later tooling treat a dead path as a
+  live checkout.
+- **Sweep leftover admin records with `task clean:worktree-records`**, never a
+  raw `git worktree prune` — a stale record's detached HEAD can be the only
+  thing keeping a commit alive, and a raw prune makes it unreachable. The task
+  removes records only (never a worktree directory), refuses records carrying
+  single-copy state, and pins a detached commit as
+  `refs/session-cleanup/pin/<record>` *before* the record goes; pins are
+  settled only by explicit human action (`task audit:session-artifacts` lists
+  the pending ones). Removal serializes with `worktree:new`/`worktree:rm`
+  through the shared lifecycle lock — for trees under the blessed
+  `.worktrees/` layout; a tree from a raw `git worktree add` elsewhere is
+  outside that protocol — as is a `git worktree lock` racing the removal
+  itself — which is the documented residual for keeping to the tasks.
+- **A fresh worktree has no `node_modules`/`.venv`.** Working files are per-tree,
+  so dependency install is per-tree too; that is what `worktree:new` runs and
+  why "it worked in the main checkout" is not evidence.
+- **The Node installer is selected from the repo's own signals** — a
+  `package.json` alone proves "Node repo", never "pnpm repo". Precedence:
+  the `packageManager` field in `package.json` (the Corepack declaration)
+  wins — including over a stale foreign lockfile, when its own manager's
+  files are present; otherwise exactly one manager's files at the tree
+  root — `pnpm-lock.yaml`/`pnpm-workspace.yaml` → pnpm,
+  `package-lock.json`/`npm-shrinkwrap.json` → npm, `yarn.lock` → Yarn,
+  `bun.lock`/`bun.lockb` → Bun. Every contradiction fails loudly before
+  any install touches the tree: files from two managers with no
+  declaration, a declaration whose manager has no files here while other
+  managers' files exist (installing would write a second lockfile), an
+  unsupported `packageManager` value, and a declared numeric major that
+  the installed binary does not match (a drifted major can rewrite the
+  committed lockfile; corepack-shimmed binaries report the pinned version
+  and pass). When the selected manager's own lockfile exists the install
+  runs in its immutable mode (`npm ci`, `--frozen-lockfile`, Yarn Berry
+  `--immutable`), so lockfile drift fails and rolls back instead of
+  rewriting a committed file; with no lockfile, plain `install` runs and
+  may create one. A bare `package.json` with no signal skips the install
+  with a note — declare `packageManager` to make it deterministic.
+- **Never pass `-c core.hooksPath=.git/hooks` to git in a worktree.** In a
+  linked worktree `.git` is a **file**, not a directory, so that path resolves
+  to nothing and commits run **hook-less and silently**. Git's own defaults are
+  correct: hooks live in the shared `$GIT_COMMON_DIR/hooks` and
+  `git rev-parse --git-path hooks` resolves them from any tree. Plain
+  `git commit` is the right command.
+- **Devcontainer smoke tests are an explicit exclusion.** Only the workspace
+  folder is mounted, and a linked worktree's `.git` file points outside it, so
+  post-create sees no repository. `scripts/devcontainer-smoke.sh` detects this
+  and says so instead of failing opaquely. Run it from the main checkout, or
+  build the image and `docker run` it directly.
 
 ## Task runner (Taskfile)
 
@@ -44,6 +132,10 @@ it points here.
   is a sibling of lint under `check`, never named "lint". Shipped defaults are
   **generic** (no consumer's framework); stack-specific illustrations, clearly
   marked as examples, live in [examples/](examples/README.md).
+- **`task ci` mirrors CI** — every check the build workflow *gates on* that can
+  run locally belongs there. The one exception is a check that needs **CI-only
+  infrastructure**: document it in `AGENTS.md` as an exception instead of faking
+  it locally.
 - **`lint:*` and `check` are read-only gates** — they report and fail, never
   modify files. All auto-fixing lives in **`task format`**, **`task format:file
   -- <path>`**, and **`task fix`** (= format then lint). Pre-commit hooks run the
@@ -71,7 +163,7 @@ it points here.
 
 - **YAML:** 2-space indent, linted by yamllint. Use whichever extension
   (`.yml` or `.yaml`) each tool conventionally uses (e.g. `Taskfile.yml`,
-  `.coderabbit.yaml`) — don't normalize extensions repo-wide.
+  `.yamllint.yml`) — don't normalize extensions repo-wide.
 - **Markdown:** markdownlint — ATX headings, no duplicate headings, emphasis and
   strong markers consistent within a file; line-length and first-line-heading
   rules are off.
@@ -112,6 +204,14 @@ it points here.
   repo** — create, edit, and delete it freely; `task sync:skills` and the
   `verify:skills*` drift checks never touch or report it. Never hand-edit the
   managed (vendored) skills — change them in harmon-devkit and bump the pin.
+- **Vendored vs local agents:** the same rule, one directory over. The
+  `agents:` block in `.skills-sync.yaml` vendors harmon-devkit's shared
+  subagents into `.claude/agents/`, and the sync manages only the files on the
+  `# managed:` line of `.claude/agents/.AGENTS_PROVENANCE`. Any other `.md`
+  there is a local agent this repo owns, and the sync never touches it. Agents
+  are pinned by the **same `source.ref` as the skills** — a shared agent is thin
+  and defers to a skill by reading it, so two pins that could disagree would
+  leave an agent following a procedure that no longer exists.
 - **Doc filenames are kebab-case** (`branch-protection.md`, `ci-cd.md`). The
   conventional uppercase project files keep their names: `README.md`,
   `AGENTS.md`, `DESIGN.md`, `CHANGELOG.md`, `CONTRIBUTING.md`,
@@ -131,3 +231,11 @@ it points here.
   Fixes** (patch), `feat!` / `BREAKING CHANGE:` → major. The rest (`build`,
   `chore`, `ci`, `docs`, `perf`, `refactor`, `revert`, `style`, `test`) don't cut
   a release on their own — they ride along in the next one.
+- Issue types map many-to-one onto these commit types. Personal-account repos
+  use the equivalent work-type labels as that mapping's substrate because native
+  issue Type is unavailable there; organization repos use native Type and no
+  work-type label. See [project-management.md](project-management.md).
+- **Milestones use an explicit naming mode**: a version milestone is named after
+  its git tag (`v1.1.0`), while a rolling-release or tooling repo may use a
+  finite scope-batch name when the version is not a planning input. See
+  [project-management.md](project-management.md).

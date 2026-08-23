@@ -1,5 +1,5 @@
 {
-  // Primary profile for AI agents (Claude Code, Codex, Gemini).
+  // Primary profile for AI agents (Claude Code, Codex, Gemini, OpenCode).
   // Secrets (GH_TOKEN) come from the --env-file, not containerEnv.
   // Tailscale is not installed in this profile — see dev/ for the human profile.
   "name": "BOT - devcontainer-foreman",
@@ -20,10 +20,21 @@
   // container has no Tailscale feature installed, and we don't want a tailnet
   // auth key sitting in its env-file. init-env.sh will strip any stale
   // TS_AUTHKEY entry on every rebuild.
-  "initializeCommand": "bash .devcontainer/scripts/init-env.sh .devcontainer/devcontainer.env GH_TOKEN FOREMAN_AGENT_GH_TOKEN CLAUDE_CODE_OAUTH_TOKEN FOREMAN_DEEPSEEK_API_KEY FOREMAN_KIMI_API_KEY FOREMAN_GLM_API_KEY FOREMAN_CODEX_MODEL AGENT_DECK_TELEGRAM_KEY",
+  // FOREMAN_DEEPSEEK/KIMI/GLM_API_KEY + FOREMAN_CODEX_MODEL configure Foreman's
+  // own backend adapters. The alt-model provider keys (KIMI/DEEPSEEK/ZAI/...)
+  // are opt-in via use_alternative_claude_providers; when on they land in this
+  // env-file too, so a headless/bypass bot can read them — a deliberate posture
+  // extension.
+  "initializeCommand": "bash .devcontainer/scripts/init-env.sh .devcontainer/devcontainer.env GH_TOKEN FOREMAN_AGENT_GH_TOKEN CLAUDE_CODE_OAUTH_TOKEN FOREMAN_DEEPSEEK_API_KEY FOREMAN_KIMI_API_KEY FOREMAN_GLM_API_KEY FOREMAN_CODEX_MODEL AGENT_DECK_TELEGRAM_KEY KIMI_API_KEY MOONSHOT_API_KEY DEEPSEEK_API_KEY ZAI_API_KEY QWEN_API_KEY",
   "runArgs": [
     "--init",
     "--shm-size=2g",
+    // Linux hosts don't resolve host.docker.internal by default (unlike Docker
+    // Desktop on mac/win/WSL2); this mapping makes it resolve everywhere,
+    // which claude-qwen-local() (.devcontainer/config/claude-providers.sh)
+    // relies on to reach an Ollama/LM Studio endpoint on the host. Supported
+    // since Docker 20.10, harmless where the platform already resolves it.
+    "--add-host=host.docker.internal:host-gateway",
     "--env-file",
     ".devcontainer/devcontainer.env"
   ],
@@ -34,19 +45,21 @@
     "ghcr.io/devcontainers/features/docker-in-docker:2": {
       "dockerDashComposeVersion": "v2"
     },
-    "ghcr.io/devcontainers/features/github-cli:1": {},
     // No 1Password CLI in the bot profile — this container must hold no path
     // to production secrets (docs/guides/devcontainers.md). The human dev
     // profile (.devcontainer/dev/) keeps its own op feature.
-    "ghcr.io/devcontainers-extra/features/go-task:1": {}
+    "ghcr.io/devcontainers/features/github-cli:1": {}
   },
   "mounts": [
-    "source=claude-code-config-${localWorkspaceFolderBasename},target=/home/vscode/.claude,type=volume",
-    "source=codex-config-${localWorkspaceFolderBasename},target=/home/vscode/.codex,type=volume",
-    "source=gemini-config-${localWorkspaceFolderBasename},target=/home/vscode/.gemini,type=volume",
-    "source=agent-deck-config-${localWorkspaceFolderBasename},target=/home/vscode/.agent-deck,type=volume",
-    "source=shell-history-${localWorkspaceFolderBasename},target=/home/vscode/.shell-history,type=volume",
-    "source=zoxide-data-${localWorkspaceFolderBasename},target=/home/vscode/.local/share/zoxide,type=volume"
+    "source=claude-code-config-ponderousdev-foreman,target=/home/vscode/.claude,type=volume",
+    "source=codex-config-ponderousdev-foreman,target=/home/vscode/.codex,type=volume",
+    "source=gemini-config-ponderousdev-foreman,target=/home/vscode/.gemini,type=volume",
+    "source=agent-deck-config-ponderousdev-foreman,target=/home/vscode/.agent-deck,type=volume",
+    "source=herdr-config-ponderousdev-foreman,target=/home/vscode/.config/herdr,type=volume",
+    "source=opencode-config-ponderousdev-foreman,target=/home/vscode/.config/opencode,type=volume",
+    "source=opencode-data-ponderousdev-foreman,target=/home/vscode/.local/share/opencode,type=volume",
+    "source=shell-history-ponderousdev-foreman,target=/home/vscode/.shell-history,type=volume",
+    "source=zoxide-data-ponderousdev-foreman,target=/home/vscode/.local/share/zoxide,type=volume"
   ],
   // Secrets (GH_TOKEN) are populated into the --env-file by init-env.sh
   // (from 1Password locally, or from host env on Coder/Codespaces).
@@ -60,6 +73,8 @@
   // accepts low|medium|high|max. Resolution order at runtime: env var >
   // settings.json effortLevel > model default.
   //
+  // AGY_CLI_DISABLE_AUTO_UPDATE: pins the Antigravity CLI (use_antigravity_cli).
+  //
   // FOREMAN_DEVCONTAINER: the D2 startup tripwire marker — Foreman refuses
   // to start without it. Lives in this profile's runtime config, NOT the
   // shared Dockerfile: the dev/human profile builds from the same image, and
@@ -67,6 +82,7 @@
   "containerEnv": {
     "CODER": "${localEnv:CODER}",
     "CLAUDE_CODE_EFFORT_LEVEL": "max",
+    "AGY_CLI_DISABLE_AUTO_UPDATE": "true",
     "FOREMAN_DEVCONTAINER": "bot"
   },
   "postCreateCommand": "bash .devcontainer/post-create.sh",
