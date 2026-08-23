@@ -230,16 +230,44 @@
       "color": "FBCA04",
       "values": [
         {
-          "value": "auth",
-          "description": "Authentication and authorization"
+          "value": "scheduling",
+          "description": "Milestone/dependency graph, waves, readiness, unit ordering"
         },
         {
-          "value": "billing",
-          "description": "Billing and payments"
+          "value": "dispatch",
+          "description": "Handing units to isolated agents: worktrees, agent env, handoff, backend selection"
         },
         {
-          "value": "platform",
-          "description": "CI, build, test infra, and tooling in this repo"
+          "value": "runners",
+          "description": "Where units execute — the Runner seam: local subprocess, Sprite microVM, Docker"
+        },
+        {
+          "value": "verification",
+          "description": "Deterministic gates on agent output: verify, vet, doneness, result/write contracts"
+        },
+        {
+          "value": "shepherding",
+          "description": "PR lifecycle after dispatch: CI repair, review adjudication, rebase, readiness, ready-for-review"
+        },
+        {
+          "value": "protocol",
+          "description": "The GitHub-side contract: foreman:* arming, tier/method/rigor labels, project fields, PR labels"
+        },
+        {
+          "value": "security",
+          "description": "Trust model: actor provenance, signatures, capabilities, credential leakage, hardening"
+        },
+        {
+          "value": "observability",
+          "description": "Knowing what Foreman is doing: watch, progress, status events, reports"
+        },
+        {
+          "value": "infra",
+          "description": "Runtime environment: bot devcontainer, agent image digest pins, Fly/Docker plumbing"
+        },
+        {
+          "value": "tooling",
+          "description": "Foreman's CLI ergonomics and developer tooling — legacy catch-all; prefer a narrower domain"
         }
       ]
     },
@@ -301,6 +329,70 @@
         {
           "value": "gauntlet",
           "description": "The challenge/review second-model stage: scripts, gates, and skill wiring"
+        },
+        {
+          "value": "cli",
+          "description": "src/foreman/cli.py, __main__ — commands, flags, exit codes"
+        },
+        {
+          "value": "config",
+          "description": "config.py and the .foreman.toml schema and defaults"
+        },
+        {
+          "value": "graph",
+          "description": "graph.py, inputs.py, spec.py — milestone/issue graph and unit spec parsing"
+        },
+        {
+          "value": "dispatch",
+          "description": "dispatch.py, handoff.py, worktree.py, gitops.py"
+        },
+        {
+          "value": "runner",
+          "description": "src/foreman/runner/ — the Runner protocol and local/sprite/docker implementations"
+        },
+        {
+          "value": "backends",
+          "description": "src/foreman/backends/*.sh and lib/ — claude, codex, deepseek/glm/kimi, mock"
+        },
+        {
+          "value": "prompts",
+          "description": "src/foreman/prompts/*.md — implementer preamble, vet, shepherd prompts"
+        },
+        {
+          "value": "gate",
+          "description": "gate.py, verify.py, preflight.py — verification and doneness gates"
+        },
+        {
+          "value": "trust",
+          "description": "trust.py, signatures.py, capabilities.py, lint-leakage.sh"
+        },
+        {
+          "value": "github",
+          "description": "github.py, pr.py — GitHub API client, PR/issue/label writes"
+        },
+        {
+          "value": "shepherd",
+          "description": "shepherd.py, reviewer.py — PR repair, adjudication, rebase"
+        },
+        {
+          "value": "status",
+          "description": "watch.py, progress.py, report.py — events, progress, reports"
+        },
+        {
+          "value": "agent-image",
+          "description": "scripts/agent-image-digest/pin — the agent container image and its digest pins"
+        },
+        {
+          "value": "runbooks",
+          "description": "docs/runbooks/ and operational guides (foreman-migration, deploying)"
+        },
+        {
+          "value": "agents-md",
+          "description": "AGENTS.md and docs/ policy prose (constitution, Dev Loop, conventions); not area:docs content"
+        },
+        {
+          "value": "specs",
+          "description": "specs/ (foreman-v2.md)"
         }
       ]
     },
