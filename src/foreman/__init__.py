@@ -17,4 +17,4 @@ from importlib.metadata import PackageNotFoundError, version
 try:
     __version__ = version("foreman")
 except PackageNotFoundError:  # running from a bare checkout without install
-    __version__ = "2.7.0"
+    __version__ = "2.8.0"

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are intentional: release-please maintains a rolling release PR from
 conventional commits, and merging it cuts the tag, GitHub release, and this
 changelog (`task release:*` remains as a manual override).
+## [2.8.0](https://github.com/ponderousdev/foreman/compare/v2.7.0...v2.8.0) (2026-08-24)
+
+
+### Features
+
+* **pm:** fit label registry to foreman — domains, areas ([#176](https://github.com/ponderousdev/foreman/issues/176)) ([2c39671](https://github.com/ponderousdev/foreman/commit/2c396717eac0df228f80ad960eab3fc8aa98b425))
+
+
+### Bug Fixes
+
+* sync harmon-devkit skills to v0.35.0 ([#177](https://github.com/ponderousdev/foreman/issues/177)) ([547423d](https://github.com/ponderousdev/foreman/commit/547423d97bae7df454ed8a2f8345feddd5cbd5a6))
+
 ## [2.7.0](https://github.com/ponderousdev/foreman/compare/v2.6.0...v2.7.0) (2026-08-22)
 
 
