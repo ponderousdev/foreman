@@ -58,7 +58,7 @@ wheels = [
 
 [[package]]
 name = "foreman"
-version = "2.8.1"
+version = "2.8.2"
 source = { editable = "." }
 
 [package.dev-dependencies]
