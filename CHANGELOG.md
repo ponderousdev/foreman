@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases are intentional: release-please maintains a rolling release PR from
 conventional commits, and merging it cuts the tag, GitHub release, and this
 changelog (`task release:*` remains as a manual override).
+## [2.8.2](https://github.com/ponderousdev/foreman/compare/v2.8.1...v2.8.2) (2026-09-08)
+
+
+### Bug Fixes
+
+* **ci:** fix devcontainer publish timing and test cleanup race ([#194](https://github.com/ponderousdev/foreman/issues/194)) ([3e67f48](https://github.com/ponderousdev/foreman/commit/3e67f487434cbb303f97aa3059db5f081fa15415))
+* sync harmon-devkit skills to v0.39.0 ([#190](https://github.com/ponderousdev/foreman/issues/190)) ([38edf6e](https://github.com/ponderousdev/foreman/commit/38edf6e9ab0777399fe42b18917fe551bbe9daff))
+
 ## [2.8.1](https://github.com/ponderousdev/foreman/compare/v2.8.0...v2.8.1) (2026-08-31)
 
 
