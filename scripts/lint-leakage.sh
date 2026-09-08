@@ -19,13 +19,15 @@ self='^scripts/lint-leakage\.sh$'
 # Live D13 trust config must name real accounts; the disclosure there is a
 # deliberate maintainer decision (see #34). Everything else is denied.
 trust_cfg='^(\.foreman\.toml|tests/test_config\.py)$'
+# harmon-init template schemas, fixtures, tests, and documentation
+template_schemas='^(ai/schemas/.*|docs/guides/herdr\.md|scripts/test-result-schemas\.sh)$'
 
 # '-' in the allowed column = no exceptions anywhere.
 rules="
 mowing-bidder-web	${self}
 ponderous-(site|infra|hub|docs)	${self}
 lawnomator	${self}
-(^|[^[:alnum:]])omator	${self}
+(^|[^[:alnum:]])omator	${self}|${template_schemas}
 harmonops	${self}
 harmon-infra	${self}
 Jessedroptable	${self}|${trust_cfg}
