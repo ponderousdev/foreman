@@ -249,7 +249,16 @@ jobs:
           # provenance tag a digest pin is resolved from. Both tags are
           # MUTABLE by registry semantics — the digest is the identity.
           imageTag: latest,sha-${{ github.sha }}
-          push: ${{ github.event_name == 'push' && 'always' || 'never' }}
+          push: never
+      - name: Push ${{ matrix.name }} devcontainer
+        # devcontainers/ci's push input pushes in its `post:` hook, which
+        # executes after all job steps finish. Explicitly push before
+        # `Resolve published digest` so the image manifest exists on the
+        # registry when `agent-image-digest.sh` queries it.
+        if: github.event_name == 'push'
+        run: |
+          docker push "${{ matrix.image_name }}:latest"
+          docker push "${{ matrix.image_name }}:sha-${{ github.sha }}"
       - name: Resolve published digest
         # devcontainers/ci exposes no digest output, so re-read the manifest
         # from the registry (the login above still applies): prints the

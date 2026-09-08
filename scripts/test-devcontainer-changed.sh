@@ -16,7 +16,12 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 helper="$repo_root/scripts/devcontainer-changed.sh"
 
 tmp="$(mktemp -d -t test-devcontainer-changed-XXXXXX)"
-trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+cleanup() {
+    cd "$repo_root" 2>/dev/null || true
+    chmod -R u+rwx "$tmp" 2>/dev/null || true
+    rm -rf "$tmp"
+}
+trap cleanup EXIT HUP INT TERM
 
 repo="$tmp/repo"
 mkdir -p "$repo/.devcontainer" "$repo/src" "$repo/.github/workflows" "$repo/scripts"
@@ -24,6 +29,8 @@ cd "$repo"
 git init -q .
 git config user.email test@example.com
 git config user.name Test
+git config gc.auto 0
+git config gc.autoDetach false
 
 printf '%s\n' 'FROM scratch' >.devcontainer/Dockerfile
 printf '%s\n' 'x' >src/app.js
