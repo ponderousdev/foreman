@@ -9,4 +9,7 @@ paths = [
     '''\.git/''',
     '''\.task/''',
     '''\.worktrees/''',
+    '''\.foreman/''',
+    # BMad installer content-hash manifest.
+    '''_bmad/_config/files-manifest\.csv''',
 ]
