@@ -1,12 +1,13 @@
 # Changes here will be overwritten by Copier
-_commit: 8a587ce353451297420056fe432d7117244ad638
+_commit: b7c520f0f86d42189ab79a7a3834b7ab2818db11
 _src_path: https://github.com/evanharmon1/harmon-init
 bunch_add: false
 ci_runner: ubuntu-latest
 claude_authorized_members: evanharmon1
 code_owner: evanharmon1
 codeql_languages:
-  - python
+- python
+decisions_seed_date: '2026-06-19'
 devcontainer: true
 devcontainer_coder_folder_uri: ''
 foreman_additional_trusted_actors: admiralfraggle
@@ -18,7 +19,8 @@ include_ansible: false
 include_terraform: false
 license: private
 obsidian_project_add: false
-project_description: Deterministic supervisor for dispatching agent work across local, Docker, and Sprite runners.
+project_description: Deterministic supervisor for dispatching agent work across local,
+    Docker, and Sprite runners.
 project_management: github
 project_name: Foreman
 project_slug: foreman
@@ -26,8 +28,8 @@ project_type: general
 release_content_paths: ''
 run_task_install: false
 skill_categories:
-  - universal
-  - repo
+- universal
+- repo
 snyk_scan_schedule: weekly
 use_alternative_claude_providers: true
 use_antigravity_cli: true
@@ -35,7 +37,9 @@ use_codeql: true
 use_coderabbit: false
 use_codex_cloud_review: true
 use_codex_review: true
+use_copilot_cli: false
 use_foreman: true
 use_release_please: true
 use_shared_agents: true
 use_skills_sync: true
+use_statusline_pr_lookup: false
