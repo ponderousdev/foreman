@@ -447,6 +447,7 @@ tasks:
     cmds:
       - ./scripts/test-lint-hygiene.sh
 
+
   test:release-title:
     desc: Unit-test the release-content title guard (require-release-title.sh)
     cmds:
@@ -501,6 +502,7 @@ tasks:
     desc: Unit-assert devcontainer permission invariants (no container needed)
     cmds:
       - ./scripts/devcontainer-assert.sh unit
+      - ./scripts/test-devcontainer-git-ownership.sh
 
   test:statusline:
     desc: Unit-test the devcontainer status line renderer (no container needed)
