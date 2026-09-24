@@ -21,6 +21,8 @@ self='^scripts/lint-leakage\.sh$'
 trust_cfg='^(\.foreman\.toml|tests/test_config\.py)$'
 # harmon-init template schemas, fixtures, tests, and documentation
 template_schemas='^(ai/schemas/.*|docs/guides/herdr\.md|scripts/test-result-schemas\.sh)$'
+# harmon-devkit vendored skills
+vendored_skills='^(\.claude/skills/.*|\.agents/skills/.*)$'
 
 # '-' in the allowed column = no exceptions anywhere.
 rules="
@@ -28,8 +30,8 @@ mowing-bidder-web	${self}
 ponderous-(site|infra|hub|docs)	${self}
 lawnomator	${self}
 (^|[^[:alnum:]])omator	${self}|${template_schemas}
-harmonops	${self}
-harmon-infra	${self}
+harmonops	${self}|${vendored_skills}
+harmon-infra	${self}|${vendored_skills}
 Jessedroptable	${self}|${trust_cfg}
 "
 

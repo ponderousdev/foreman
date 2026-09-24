@@ -73,5 +73,5 @@ The immutable v2 decisions (D1–D14) live in
 [ADR 0003](docs/decisions/0003-foreman-v2-runner-seam.md); the living
 requirements and acceptance criteria in
 [`specs/foreman-v2.md`](specs/foreman-v2.md). Significant or hard-to-reverse
-choices get a new ADR — supersede, never silently drift. Deviating from a
+choices get a new ADR in [`docs/decisions/`](docs/decisions/index.md) — supersede, never silently drift. Deviating from a
 rule here is allowed when justified; record *why* in an ADR.
