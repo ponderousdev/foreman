@@ -4,8 +4,8 @@ Business and problem-space knowledge: why it exists and who it's for — the
 non-code, non-how layer.
 
 **Belongs here:** why the product exists, who it serves, where it's going, and the
-conceptual model. **Not here:** how it's built (→ [../architecture/](../architecture/)),
-why a choice was made (→ [../decisions/](../decisions/)), or what to build next
+conceptual model. **Not here:** how it's built (→ [../architecture/index.md](../architecture/index.md)),
+why a choice was made (→ [../decisions/index.md](../decisions/index.md)), or what to build next
 (→ [../../specs/](../../specs/)).
 
 - [vision.md](vision.md) — why the product exists, who it serves, the
@@ -16,6 +16,4 @@ why a choice was made (→ [../decisions/](../decisions/)), or what to build nex
   lifecycles, business rules, the ubiquitous language. Highest-leverage AI doc —
   an agent's domain prior is empty, so this is what it can't infer from code.
 
-Personas and success signals live in [vision.md](vision.md); the deeper design
-rationale is in [../../DESIGN.md](../../DESIGN.md) and the
-[ADRs](../decisions/).
+TODO: add personas, success metrics, or market context as the product takes shape.

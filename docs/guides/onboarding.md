@@ -51,6 +51,6 @@ Orient yourself around the seam and the loop:
 
 ## Where things are
 
-See [the docs map](../README.md) for all documentation, the
+See [the docs map](../index.md) for all documentation, the
 [root README](../../README.md) for usage + project structure, and
 [../architecture/foreman.md](../architecture/foreman.md) for the deep dive.

@@ -231,7 +231,7 @@ the hood and syncs the venv automatically. New here? Start with
 │   ├── dispatch.py      #   per-unit pipeline; shepherd.py, watch.py, graph.py, …
 │   ├── trust.py         #   D4/D13 trust; capabilities.py, gate.py, preflight.py
 │   └── backends/        #   agent adapters (Claude direct/DeepSeek/Kimi/GLM; Codex CLI; mock seam proof)
-├── docs/                # Documentation (see docs/README.md)
+├── docs/                # Documentation (see docs/index.md)
 ├── scripts/             # Repo utility scripts (hygiene, status, summaries)
 ├── specs/               # Specifications (specs/foreman-v2.md)
 ├── taskfiles/           # foreman:* task namespace (dogfood)
