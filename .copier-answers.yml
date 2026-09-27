@@ -30,7 +30,6 @@ run_task_install: false
 skill_categories:
 - universal
 - matt-pocock
-- repo
 snyk_scan_schedule: weekly
 tailscale_required: false
 use_alternative_claude_providers: true
