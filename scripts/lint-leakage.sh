@@ -29,7 +29,7 @@ rules="
 mowing-bidder-web	${self}
 ponderous-(site|infra|hub|docs)	${self}
 lawnomator	${self}
-(^|[^[:alnum:]])omator	${self}|${template_schemas}
+(^|[^[:alnum:]])omator	${self}|${template_schemas}|${vendored_skills}
 harmonops	${self}|${vendored_skills}
 harmon-infra	${self}|${vendored_skills}
 Jessedroptable	${self}|${trust_cfg}
