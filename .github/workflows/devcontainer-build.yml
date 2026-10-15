@@ -204,6 +204,9 @@ jobs:
           - name: dev
             config_file: .devcontainer/dev/devcontainer.json
             image_name: ghcr.io/ponderousdev/foreman-devcontainer-dev
+          - name: agent
+            config_file: .devcontainer/agent/devcontainer.json
+            image_name: ghcr.io/ponderousdev/foreman-devcontainer-agent
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
