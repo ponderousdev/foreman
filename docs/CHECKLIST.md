@@ -71,7 +71,7 @@ environment — against the items below
       `scripts/setup-github.sh` with `--replace-ci-runs-on`. Do not add
       `dependabot.yml`: Renovate owns routine
       and vulnerability-remediation PRs; Dependabot owns advisory alerts.
-- [ ] **Bot PAT** — the agent's `GH_TOKEN`. If a fine-grained PAT already covers
+- [ ] Import the branch ruleset (see [architecture/branch-protection.md](architecture/branch-protection.md)) — do this once `build.yml`, `codeql.yml`, `devcontainer-build.yml` are on `main` so the required `verify`/`security`/`codeql-verify`/`devcontainer-verify` checks resolve. **Use the UI import:** Settings → Rules → Rulesets → **New ruleset ▸ Import a ruleset** → select `.github/Branch Protection Ruleset - Protect Main.json`. (Prefer the UI over `gh api … rulesets`: the API `POST` is not idempotent — re-running creates a duplicate ruleset — and currently rejects the `merge_queue` rule. To later change the ruleset, edit the existing one in the UI rather than re-importing.) **Import it before provisioning the bot and agent PATs below:** those postures carry no local merge guard, so this ruleset's code-owner approval and required checks are the only thing between their PAT and an unreviewed merge into `main`.- [ ] **Bot PAT** — the agent's `GH_TOKEN`. If a fine-grained PAT already covers
 `ponderousdev`,
       just add this repo to its **selected repositories**; a token is scoped to one
       resource owner, so a **new owner needs a new PAT**. Both layers are required —
@@ -82,6 +82,12 @@ environment — against the items below
       keeps prior versions publicly viewable on public repos, so an edit
       without revision deletion hides nothing.
 - [ ] Import the branch ruleset (see [architecture/branch-protection.md](architecture/branch-protection.md)) — do this once `build.yml`, `codeql.yml`, `devcontainer-build.yml` are on `main` so the required `verify`/`security`/`codeql-verify`/`devcontainer-verify` checks resolve. **Use the UI import:** Settings → Rules → Rulesets → **New ruleset ▸ Import a ruleset** → select `.github/Branch Protection Ruleset - Protect Main.json`. (Prefer the UI over `gh api … rulesets`: the API `POST` is not idempotent — re-running creates a duplicate ruleset — and currently rejects the `merge_queue` rule. To later change the ruleset, edit the existing one in the UI rather than re-importing.)
+- [ ] **[human-only] Agent PAT** — only if this repo allows unattended remote
+      lanes (the agent devcontainer, `.devcontainer/agent/`). A **separate**
+      fine-grained PAT on the bot account, same permissions as the bot's, expiry
+      of 180 days at most, its own repository list, one per resource owner;
+      supplied as `AGENT_GH_TOKEN`, never as `GH_TOKEN`. Procedure:
+      [guides/devcontainers.md](guides/devcontainers.md) (agent posture).
 - [ ] **[human-only] Add `closing-keywords` to the live branch ruleset** —
       **required, not optional, and no longer deferrable.** Until
       harmon-init#1328 the guard was enforced *transitively*: the job sat in
@@ -227,22 +233,30 @@ environment — against the items below
       to pin into `.foreman.toml`'s `image` key (docs/guides/devcontainers.md)
 - [ ] GitHub Project: run `task setup:github-project` (needs
       `gh auth refresh -s project`) to create the owner's default project (titled
-      `ponderousdev Project`) and idempotently sync its `Status` pipeline and
-      `Size` number field — see
-      [project-management.md](project-management.md).
+      `ponderousdev Project`) and idempotently sync its `Status` pipeline —
+      see [project-management.md](project-management.md).
       It also writes the project id to the `ORG_PROJECT_ID` org variable that
       project-automation.yml and the claude-* workflows read (they fall back to
       the project title).
 - [ ] Org issue fields: run `task setup:github-issue-fields` (needs `gh` with the
-      `admin:org` scope) to add the org's **Product** issue field. There is
-      deliberately no Domain or Layer issue field — see
-      [project-management.md](project-management.md), "Label or field?".
-      Priority/Effort (and the date fields) are GitHub built-in issue fields, left
-      at their defaults — tune options in the org's issue-field settings if you
-      like. **The numeric estimate is the `Size` project number field** (created
-      by `task setup:github-project`; only project number fields sum in view
-      group headers). Idempotent: it creates the field if missing and leaves it
-      alone if already present.
+      `admin:org` scope) to add the org's **Product** field and the
+      issue-classification fields **Impact**, **Risk**, **Complexity**, and
+      **Priority (AI)**, and to add the modified Fibonacci ladder
+      `1, 2, 3, 5, 8, 13, 20` to the built-in **Effort** field beside GitHub's
+      shipped High/Medium/Low options. Removing those shipped options is left
+      to you, because removing an option blanks it on every issue that holds
+      it: the run reports how many issues its search finds for each, but a count
+      of 0 only means no issue that search can see — not one in a repository
+      your token cannot read, and its index can lag an edit — so enumerate the
+      issues that hold a value first, and once none does, delete the option in
+      the org's issue-field settings (**Settings → Planning → Issue fields**).
+      There is deliberately no Tier, Domain, or Layer issue field —
+      see [project-management.md](project-management.md), "Label or field?".
+      Priority (the human override of Priority (AI)) and the date fields are
+      GitHub built-in issue fields, left as shipped. Idempotent and additive: a
+      re-run creates only what is missing and never removes a field or an
+      option; an old `Agent` field is reported, not deleted — enumerate the
+      issues that hold a value before removing it yourself.
 - [ ] **Upgrading from a release before harmon-init#875?**
       Check the org's issue-field settings (**Settings → Planning → Issue
       fields**), not just this repo's board — `Domain`/`Layer` from an
@@ -251,6 +265,20 @@ environment — against the items below
       Retiring them is a deliberate, irreversible operator step — see
       [project-management.md](project-management.md), "Migrating a board that
       still has one."
+- [ ] **[human-only] Delete the `Priority` and `Size` project fields on an
+      existing board** — only if this repo's board was set up by a release
+      before harmon-init#1451; they are not deleted automatically, and
+      deleting a field destroys every value on it, unrecoverably. Do it after
+      the classification labels exist (on a personal account,
+      `task setup:github-labels` provisions the `priority:*` labels that
+      replace `Priority`, plus `priority-ai:*` for the AI's separate
+      suggestion beside it) and
+      after enumerating every board and view that references each field
+      (harmon-init#910), as [project-management.md](project-management.md),
+      "Migrating a board that still has one" (the Priority / Size entry) lays
+      out. On a personal account both fields go; on an organization only `Size`
+      was ever a project field — its `Priority` is GitHub's built-in issue
+      field and stays.
 - [ ] **Upgrading from a release before harmon-init#1047
       (`method:*` → `strategy:*`)?** Run `task setup:github-labels` first so
       the `strategy:*` destinations exist, then use the read-only report and
@@ -268,7 +296,18 @@ environment — against the items below
       is product-independent and normally needs no edits. Labels are per-repo,
       so run it in each repo; org default labels (org Settings → Repository,
       UI-only) only seed new repos.
-- [ ] **After a `copier update` that adds label families** (e.g. `tier:*` — a
+- [ ] **[human-only] Pin any hand-applied Tier before the first classification
+      write** — on an existing repository an unqualified `tier:<value>` label
+      used to be a human's implementer override; it is now the cache automation
+      rewrites. On an unpinned issue with Risk and Complexity set, a writer of
+      those axes (such as the triage skill, once its pin carries
+      harmon-devkit#1250) adds the derived Tier and removes every other tier
+      label.
+      The classification reconciler does the same on its schedule (daily on a
+      personal-account repository, monthly on an organization one).
+      Before that first write, add `tier:pinned` to each open issue whose
+      hand-set tier label you want to keep.
+- [ ] **After a `copier update` that adds label families** (e.g. `impact:*` — a
       pure addition), re-run `task setup:github-labels` to provision the new
       labels here — it is additive and never deletes, so existing labels and
       the issues they sit on are untouched — then classify open issues with the
@@ -293,11 +332,17 @@ environment — against the items below
       run. `--report-unregistered` is read-only, but its counts are a snapshot;
       run it again immediately before `--prune`.
 
+      `suggest:*` (superseded by the derived Tier) and `tier:adaptive` (no rung
+      on the Tier scale) have no `--migrate` destination, and the command
+      refuses one: remove the label from every issue, pull request and
+      discussion that carries it (an issue then resolves through its derived
+      Tier), then run `--prune`.
+
       For fixed-family sources, these mappings are authoritative:
       `agent:claude-code` → `claim:claude`, `agent:codex` → `claim:gpt`,
       `agent:gemini-cli` → `claim:gemini`, `agent:kimi-k2` → `claim:kimi`, `agent:qwen-code` →
-      `claim:qwen`, `suggest:codex` → `suggest:gpt`, and `claim:codex` →
-      `claim:gpt`. Pass one repeatable `--migrate OLD=NEW` per exact live
+      `claim:qwen`, and `claim:codex` → `claim:gpt`. Pass one repeatable
+      `--migrate OLD=NEW` per exact live
       source, together with `--prune`; for example,
       `./scripts/setup-github-labels.sh --repo <owner/repo> --prune
       --migrate agent:gemini-cli=claim:gemini`. `--migrate` does not match a
@@ -305,8 +350,8 @@ environment — against the items below
       `OLD=NEW` form contains exactly one `=`; a label name containing `=` must
       be relabeled per record instead of passed to bulk migration. Move only
       the family segment for fixed mappings and preserve the recorded model
-      suffix, e.g. `suggest:codex:sol` → `suggest:gpt:sol` and
-      `claim:codex:sol` → `claim:gpt:sol`; model-level labels refine rather
+      suffix, e.g. `claim:codex:sol` → `claim:gpt:sol`; model-level labels
+      refine rather
       than replace their family-level label, and the command retains or adds
       both associations. If a recognized model-level
       destination is absent, the command creates it after confirmation by
@@ -322,7 +367,7 @@ environment — against the items below
       shows the source has zero associations. Enumerate
       model-level names explicitly with `gh label list --repo <owner/repo>
       --limit 1000 --json name --jq '.[].name' | grep -E
-      '^(suggest|claim):(codex|copilot):'`; for each source, inspect all-state
+      '^claim:(codex|copilot):'`; for each source, inspect all-state
       `gh issue list --label <old> --state all --limit 1000` **and**
       `gh pr list --label <old> --state all --limit 1000`. An exactly-full
       manual result is capped; increase the limit and rerun before writes. The
@@ -331,16 +376,13 @@ environment — against the items below
 
       Copilot is a broker, not a fixed family: `mai` is only the picker default
       and is never a guessed destination. Do **not** pass
-      `agent:github-copilot*`, `suggest:copilot*`, or `claim:copilot*` to bulk
+      `agent:github-copilot*` or `claim:copilot*` to bulk
       `--migrate` — the command rejects broker-derived sources because one
-      destination cannot represent mixed runtime records. For
-      `suggest:copilot`, there is no claim/session record: re-express each
-      issue/PR's planning intent as `suggest:<actual-family>` or drop the old
-      association; do not rename it to `suggest:mai`. For `claim:copilot`,
+      destination cannot represent mixed runtime records. For `claim:copilot`,
       inspect each issue/PR's claim/session record and relabel that record to
       `claim:<actual-family>`; use `claim:mai` only when the record confirms
       MAI. Apply the same per-record distinction to
-      `suggest:copilot:<model>`/`claim:copilot:<model>` and preserve a model
+      `claim:copilot:<model>` and preserve a model
       suffix only after the actual family is known. Include Discussions in that
       per-record inventory: the read-only report gives their association count,
       and the Discussions UI or GraphQL API identifies the records to relabel.
@@ -367,10 +409,11 @@ environment — against the items below
       the operation as incomplete, reconcile live associations, and rerun in a
       new quiet window; do not infer association preservation from a successful
       exit alone; this is a guarded best-effort operation at that API boundary.
-- [ ] Project views: create the starter views (Board / Triage / Agent queue /
-      Planning / Mine) in the Project UI — Projects V2 has no view API,
-      so this is a one-time manual step. Filters/layouts are in
-      [project-management.md](project-management.md).
+- [ ] Project views: create the starter views that the Views section of
+      [project-management.md](project-management.md) specifies — including
+      Needs review and Human queue — in the Project UI. Projects V2 has no view
+      API, so this is a one-time manual step; the filters and layouts are in
+      that section.
 - [ ] GitHub Project auto-add (**adds every issue to the board**): in the
       Project's **Settings → Workflows**, turn on **"Auto-add to project"** and
       point it at this repo (filter `is:issue`, `is:pr`) so *every* new issue and
@@ -394,12 +437,14 @@ environment — against the items below
       `.env.example`-style files
 - [ ] Devcontainer secrets: create a **1Password environment** that mounts
       `.devcontainer/devcontainer.env` (and `.devcontainer/dev/devcontainer.env`)
-      with `CLAUDE_CODE_OAUTH_TOKEN` and `AGENT_DECK_TELEGRAM_KEY` in both
-      profiles, plus `GH_TOKEN` and `FOREMAN_AGENT_GH_TOKEN` (the read-only
-      agent PAT, #13, required before any dispatch) for the bot profile and
-      `TS_AUTHKEY` for the dev one — the dev profile carries no `GH_TOKEN` and
-      runs `gh auth login` instead. `init-env.sh` enforces the per-profile
-      allow-list; on Coder the values come from workspace parameters. See
+      with `CLAUDE_CODE_OAUTH_TOKEN` and `AGENT_DECK_TELEGRAM_KEY`, plus
+      `GH_TOKEN` and `FOREMAN_AGENT_GH_TOKEN` (the separate read-only agent PAT required before dispatch) for the bot profile and `TS_AUTHKEY` for the dev one — the dev
+      profile carries no `GH_TOKEN` and runs `gh auth login` instead.
+      `init-env.sh` enforces the per-profile
+      allow-list; on Coder the values come from workspace parameters. The
+      agent posture's `.devcontainer/agent/devcontainer.env` takes only
+      `AGENT_GH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` (plus opted-in provider
+      keys) and refuses to build with anything else. See
       [guides/devcontainers.md](guides/devcontainers.md)
 
 ## 5. Docs & meta

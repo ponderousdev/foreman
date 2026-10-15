@@ -3,11 +3,7 @@
 # run time: a Taskfile that no longer compiles, and setup tasks that fail when
 # they should be safe no-ops. Run via `task test:tasks`.
 #
-# Coverage note: the bootstrap assertion only exercises the "Homebrew already
-# installed" path, so it is skipped on runners without brew (e.g. the default
-# ubuntu-latest CI). It still guards the common local/macOS case — the exact
-# regression where `task bootstrap` aborted on a sudo precheck despite brew
-# already being installed.
+# Setup uses isolated stubs: tests never install a global toolchain.
 set -euo pipefail
 
 repo="$(git rev-parse --show-toplevel)"
@@ -25,6 +21,47 @@ echo "==> Taskfile compiles (every task parses)"
 if ! task --list-all >/dev/null 2>&1; then
     fail "task --list-all failed — the Taskfile does not compile"
 fi
+
+check_taskfile_paths() {
+    local taskfile matches
+    for taskfile in "$@"; do
+        [ -f "$taskfile" ] || continue
+        matches="$(grep -nHE '\{\{[^}]*\.PWD[^A-Za-z0-9_]' "$taskfile" || true)"
+        [ -z "$matches" ] ||
+            fail "$matches — derive paths from ROOT_DIR or TASKFILE_DIR, never PWD"
+    done
+}
+
+echo "==> Taskfile paths derive from ROOT_DIR or TASKFILE_DIR, never PWD"
+# Assemble the copier marker so this verbatim script ships without an
+# unrendered marker, just like the path-safe formatter fixture below.
+taskfile_jinja_open='[%'
+template_taskfiles="template/${taskfile_jinja_open} if use_foreman %]taskfiles${taskfile_jinja_open} endif %]"
+check_taskfile_paths Taskfile.yml taskfiles/*.yml template/Taskfile.yml.jinja "$template_taskfiles"/*.yml
+
+echo "==> Taskfile PWD guard rejects bare, trimmed and piped references (negative controls)"
+pwd_taskfile="${test_tmp}/Taskfile.yml"
+for pwd_reference in '{{.PWD}}' '{{ .PWD }}' '{{- .PWD -}}' '{{.PWD | dir}}'; do
+    printf '%s\n' 'version: "3"' 'tasks:' '  probe:' '    cmds:' \
+        "      - echo \"$pwd_reference\"" >"$pwd_taskfile"
+    out=$(check_taskfile_paths "$pwd_taskfile" 2>&1) && rc=0 || rc=$?
+    [ "$rc" -ne 0 ] || fail "Taskfile PWD guard accepted $pwd_reference"
+    case "$out" in
+    *"${pwd_taskfile}:5:"*"${pwd_reference}"*'never PWD'*) ;;
+    *) fail "Taskfile PWD guard failed for the wrong reason: $out" ;;
+    esac
+done
+
+echo "==> Taskfile PWD guard accepts PWD_ROOT and shell PWD references"
+cat >"$pwd_taskfile" <<'EOF'
+version: "3"
+tasks:
+  probe:
+    cmds:
+      - echo "{{.PWD_ROOT}} $PWD"
+EOF
+out=$(check_taskfile_paths "$pwd_taskfile" 2>&1) && rc=0 || rc=$?
+[ "$rc" -eq 0 ] || fail "Taskfile PWD guard rejected PWD_ROOT or shell PWD: $out"
 
 echo "==> closing-keyword preflight delegates to a linted script, not inline Taskfile bash"
 # The logic lives in scripts/guard-closing-keywords.sh so shellcheck/shfmt see
@@ -58,8 +95,71 @@ for guard in scripts/guard-closing-keywords.sh template/scripts/guard-closing-ke
     fi
     grep -Fq '[ -z "${PR_TITLE+x}" ] || [ -z "${PR_BODY+x}" ]' "$guard" ||
         fail "${guard}: closing-keyword guard does not distinguish unset metadata from an empty body"
-    grep -Fq 'gh pr list --head "$branch" --state open --limit 2 --json title,body' "$guard" ||
-        fail "${guard}: closing-keyword guard does not distinguish a missing PR from an API failure"
+    grep -Fq 'gh_rest_paginate_array "repos/${repo}/pulls?state=open&sort=updated&direction=desc" 100' "$guard" ||
+        fail "${guard}: closing-keyword guard does not list open PRs through the bounded helper, so a failed listing cannot be told from a missing PR"
+done
+
+echo "==> every REST pagination caller passes an explicit bound"
+# The helpers refuse a missing MAX_ITEMS and cap every walk at GH_REST_MAX_PAGES,
+# but a caller that passes 0 still asks for every page under that ceiling. The
+# session scripts' reads are all answerable from a bounded window, so each one
+# names its bound here (challenge r1: the REST rewrite had turned bounded single
+# reads into whole-repository walks).
+for status in scripts/status.sh template/scripts/status.sh; do
+    [ -f "$status" ] || continue
+    grep -Fq '"repos/${status_repo}/pulls?state=open&sort=updated&direction=desc" 10' "$status" ||
+        fail "${status}: open-PR list is not bounded to 10"
+    grep -Fq '"repos/${OWNER}/${REPO}/pulls?state=all&sort=updated&direction=desc" 100' "$status" ||
+        fail "${status}: renovate heuristic is not bounded to the 100 most recent PRs"
+    grep -Fq '"repos/${OWNER}/${REPO}/pulls/comments?sort=updated&direction=desc" 100' "$status" ||
+        fail "${status}: coderabbit heuristic is not bounded to the 100 most recent review comments"
+done
+for audit in scripts/audit-session-artifacts.sh template/scripts/audit-session-artifacts.sh; do
+    [ -f "$audit" ] || continue
+    grep -Fq '"repos/${gh_repo}/pulls?state=closed&sort=updated&direction=desc" "$pr_limit"' "$audit" ||
+        fail "${audit}: closed-PR scan does not pass pr_limit as its pagination bound"
+done
+for lib in scripts/lib/gh-rest.sh template/scripts/lib/gh-rest.sh; do
+    [ -f "$lib" ] || continue
+    grep -Fq 'GH_REST_MAX_PAGES:-10' "$lib" ||
+        fail "${lib}: the page ceiling no longer defaults to 10"
+done
+
+echo "==> the closing-keyword workflow fetches every library the guard sources"
+# The workflow runs the guard from a FETCH, not a checkout: it pulls
+# scripts/check-closing-keywords.sh out of the contents API and executes it. The
+# moment that guard grew `. "${script_dir}/lib/gh-rest.sh"`, a one-file fetch
+# became a program that dies on a missing file — and no PR's own CI can catch
+# that, because GitHub takes the workflow definition from the DEFAULT BRANCH:
+# every PR keeps running the pair already on main, and the new script and the
+# new workflow only meet after the merge, in the NEXT PR's required check. So the
+# pairing is asserted here instead — each library the guard sources is fetched
+# from the same parameterised ref, written where ${script_dir} resolves it, and
+# removed by the step's trap.
+for pair in \
+    'scripts/check-closing-keywords.sh|.github/workflows/closing-keywords.yml' \
+    'template/scripts/check-closing-keywords.sh|template/.github/workflows/closing-keywords.yml.jinja'; do
+    guard_script="${pair%%|*}"
+    workflow="${pair#*|}"
+    { [ -f "$guard_script" ] && [ -f "$workflow" ]; } || continue
+    trap_line="$(grep -F "trap 'rm -f" "$workflow" || true)"
+    sourced="$(sed -n 's|^\. "[$]{script_dir}/\([^"]*\)".*|\1|p' "$guard_script")"
+    [ -n "$sourced" ] ||
+        fail "${guard_script}: no \${script_dir} library is sourced, so this assertion checks nothing — remove it, or fix the extraction"
+    while IFS= read -r lib; do
+        grep -Fq "contents/scripts/${lib}?ref=\$1" "$workflow" ||
+            fail "${workflow}: ${guard_script} sources ${lib}, but the workflow never fetches scripts/${lib} from the ref it fetches the guard from — the guard it runs would die on a missing file"
+        grep -Fq "> ./${lib}" "$workflow" ||
+            fail "${workflow}: scripts/${lib} is not written to ./${lib}, where the guard's \${script_dir}/${lib} resolves"
+        grep -Fq "./${lib}" <<<"$trap_line" ||
+            fail "${workflow}: ./${lib} is fetched into the workspace and never removed by the step's trap"
+        libdir="$(dirname "$lib")"
+        if [ "$libdir" != . ] &&
+            ! grep -Fq "rmdir ./${libdir}" <<<"$trap_line" &&
+            ! grep -Fq "rm -rf ./${libdir}" <<<"$trap_line"; then
+            fail "${workflow}: the trap removes ./${lib} but leaves the ./${libdir} directory behind"
+        fi
+    done <<<"$sourced"
 done
 
 guard_bin="${test_tmp}/closing-keywords-bin"
@@ -77,6 +177,7 @@ merge-base)
     printf '%s\n' merge-base
     ;;
 rev-list) printf '%s\n' "${GIT_COMMIT_COUNT:-1}" ;;
+rev-parse) printf '%s\n' headsha ;;
 branch) printf '%s\n' feature ;;
 log) printf '%s\n' "$@" >"${GIT_ARGS:?}" ;;
 *) exit 1 ;;
@@ -87,11 +188,11 @@ cat >"${guard_bin}/gh" <<'EOF'
 printf '%s\n' "$*" >>"${GH_ARGS:?}"
 [ -z "${GH_PR_LIST_FAIL:-}" ] || exit 1
 case "${1:-} ${2:-}" in
-"pr list")
+"api repos/acme/repo/pulls?state=open&sort=updated&direction=desc&per_page=100&page=1")
     if [ -n "${GH_NO_PR:-}" ]; then
         printf '%s\n' '[]'
     else
-        printf '%s\n' '[{"title":"Fixes #2","body":""}]'
+        printf '%s\n' '[{"title":"Fixes #2","body":"","head":{"sha":"headsha","ref":"feature"}}]'
     fi
     ;;
 *) exit 1 ;;
@@ -106,7 +207,7 @@ out=$(env -u PR_TITLE -u PR_BODY PATH="${guard_bin}:${PATH}" \
 [ "$rc" -ne 0 ] || fail "closing-keyword guard did not use fetched PR metadata: $out"
 grep -Fxq 'merge-base..head' "$guard_git_args" ||
     fail "closing-keyword guard did not scan exactly merge-base..head"
-[ "$(grep -c '^pr list ' "$guard_gh_args")" -eq 1 ] ||
+[ "$(grep -c '^api repos/acme/repo/pulls?state=open&sort=updated&direction=desc&per_page=100&page=1$' "$guard_gh_args")" -eq 1 ] ||
     fail "closing-keyword guard did not fetch missing PR metadata atomically"
 
 out=$(env -u PR_TITLE -u PR_BODY PATH="${guard_bin}:${PATH}" \
@@ -148,6 +249,66 @@ case "$out" in
 *'exceeding the workflow'*) ;;
 *) fail "closing-keyword guard reported the wrong commit-cap failure: $out" ;;
 esac
+
+echo "==> brew-less setup requires a positive toolchain marker"
+brewless_bin="${test_tmp}/brewless-bin"
+toolchain_manifest="${test_tmp}/toolchain-manifest.json"
+mkdir -p "$brewless_bin"
+# Restrict PATH rather than assuming the runner has no Homebrew or Node.
+for tool in bash dirname; do
+    ln -s "$(command -v "$tool")" "${brewless_bin}/${tool}"
+done
+printf '%s\n' '{}' >"$toolchain_manifest"
+for helper in scripts/install-brewfile.sh scripts/bootstrap-pnpm.sh; do
+    [ -x "$helper" ] || continue
+    out=$(PATH="$brewless_bin" HARMON_TOOLCHAIN_MANIFEST="$toolchain_manifest" \
+        "$helper" 2>&1) && rc=0 || rc=$?
+    [ "$rc" -eq 0 ] || fail "$helper rejected the toolchain manifest: $out"
+    out=$(PATH="$brewless_bin" HARMON_TOOLCHAIN_MANIFEST="${test_tmp}/absent-manifest" \
+        "$helper" 2>&1) && rc=0 || rc=$?
+    [ "$rc" -ne 0 ] || fail "$helper silently skipped setup on a brew-less host"
+    case "$out" in
+    *"Homebrew not found"*"task bootstrap"*) ;;
+    *) fail "$helper failed without setup instructions: $out" ;;
+    esac
+done
+if [ -x scripts/bootstrap-pnpm.sh ]; then
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"${brewless_bin}/node"
+    chmod +x "${brewless_bin}/node"
+    out=$(PATH="$brewless_bin" HARMON_TOOLCHAIN_MANIFEST="${test_tmp}/absent-manifest" \
+        ./scripts/bootstrap-pnpm.sh 2>&1) && rc=0 || rc=$?
+    [ "$rc" -ne 0 ] || fail "Node alone allowed an unmarked brew-less bootstrap"
+    case "$out" in
+    *"Homebrew not found"*"task bootstrap"*) ;;
+    *) fail "Node-only bootstrap failed without setup instructions: $out" ;;
+    esac
+fi
+# Generated installs must reach dependency installation and hook setup. Stubs
+# prove task wiring; a real consumer devcontainer install remains a QA check.
+if [ ! -f scripts/install-copier.sh ]; then
+    install_marker="${test_tmp}/dependencies-installed"
+    for tool in task; do
+        ln -s "$(command -v "$tool")" "${brewless_bin}/${tool}"
+    done
+    for stub in pnpm uv lefthook; do
+        printf '%s\n' '#!/usr/bin/env bash' 'echo "$0 $*" >>"${INSTALL_MARKER:?}"' >"${brewless_bin}/${stub}"
+        chmod +x "${brewless_bin}/${stub}"
+    done
+    PATH="$brewless_bin" HARMON_TOOLCHAIN_MANIFEST="$toolchain_manifest" \
+        INSTALL_MARKER="$install_marker" task install >/dev/null ||
+        fail "rendered task install failed with the toolchain manifest"
+    grep -q 'lefthook install' "$install_marker" || fail "rendered install never installed hooks"
+    if [ -f package.json ]; then
+        grep -q 'pnpm install' "$install_marker" || fail "rendered install never installed Node dependencies"
+    fi
+    if [ -f pyproject.toml ]; then
+        grep -q 'uv sync' "$install_marker" || fail "rendered install never installed Python dependencies"
+    fi
+    if PATH="$brewless_bin" HARMON_TOOLCHAIN_MANIFEST="${test_tmp}/absent-manifest" \
+        INSTALL_MARKER="$install_marker" task install >/dev/null 2>&1; then
+        fail "rendered task install succeeded on an unmarked brew-less host"
+    fi
+fi
 
 echo "==> bootstrap is a no-op when Homebrew is already installed"
 # Run against STUBS, never the real toolchain. `test:tasks` is part of `verify`,
@@ -268,6 +429,74 @@ fi
 
 if [ -n "${HARMON_TEST_PNPM_BOOTSTRAP_ONLY:-}" ]; then
     exit 0
+fi
+
+echo "==> Markdown lint excludes lane artifact paths regardless of Git tracking"
+markdown_repo="${test_tmp}/markdown-repo"
+mkdir -p "${markdown_repo}/.lane"
+git -C "$markdown_repo" init -q
+printf '%s\n' '.lane/' '.lane-report.md' >>"${markdown_repo}/.git/info/exclude"
+printf '%s\n' '# Fixture' >"${markdown_repo}/valid.md"
+printf '%s\n' '| A | B |' '| --- | --- |' '| one |' >"${markdown_repo}/.lane-report.md"
+cp "${markdown_repo}/.lane-report.md" "${markdown_repo}/.lane/x.md"
+printf '%s\n' '{"unformatted":true}' >"${markdown_repo}/.lane/x.json"
+(
+    cd "$markdown_repo"
+    "$repo/scripts/markdownlint.sh" check
+) || fail "Markdown lint scanned untracked lane artifacts"
+git -C "$markdown_repo" add -f .lane/x.md
+(
+    cd "$markdown_repo"
+    "$repo/scripts/markdownlint.sh" check
+) || fail "Markdown lint scanned tracked files under .lane/"
+# A non-lane Markdown file must still be checked, including spaces in paths.
+cp "${markdown_repo}/.lane/x.md" "${markdown_repo}/bad file.md"
+out=$(
+    cd "$markdown_repo"
+    "$repo/scripts/markdownlint.sh" check 2>&1
+) && rc=0 || rc=$?
+[ "$rc" -ne 0 ] || fail "Markdown lint skipped non-lane Markdown"
+case "$out" in
+*'MD056'*) ;;
+*) fail "non-lane Markdown failed for the wrong reason: $out" ;;
+esac
+rm "${markdown_repo}/bad file.md"
+
+prettier_ignore="$repo/.prettierignore"
+if [ ! -f "$prettier_ignore" ]; then
+    prettier_ignore="$repo/template/${taskfile_jinja_open} if use_node %].prettierignore${taskfile_jinja_open} endif %].jinja"
+fi
+if [ -f "$prettier_ignore" ]; then
+    echo "==> Prettier excludes lane reports and envelopes"
+    cp "$prettier_ignore" "${markdown_repo}/.prettierignore"
+    prettier_bin=""
+    if prettier_bin="$(command -v prettier)"; then
+        :
+    elif [ -x "$repo/node_modules/.bin/prettier" ]; then
+        prettier_bin="$repo/node_modules/.bin/prettier"
+    fi
+    if [ -n "$prettier_bin" ]; then
+        (
+            cd "$markdown_repo"
+            "$prettier_bin" --check .
+        ) || fail "Prettier scanned lane artifacts"
+        cp "${markdown_repo}/.lane/x.json" "${markdown_repo}/bad.json"
+        out=$(
+            cd "$markdown_repo"
+            "$prettier_bin" --check . 2>&1
+        ) && rc=0 || rc=$?
+        [ "$rc" -ne 0 ] || fail "Prettier fixture did not detect nonignored unformatted JSON"
+        case "$out" in
+        *'bad.json'*) ;;
+        *) fail "Prettier negative control failed for the wrong reason: $out" ;;
+        esac
+    else
+        grep -Fxq '.lane/' "${markdown_repo}/.prettierignore" ||
+            fail "Prettier ignore entries omit .lane/"
+        grep -Fxq '.lane-report.md' "${markdown_repo}/.prettierignore" ||
+            fail "Prettier ignore entries omit .lane-report.md"
+        echo "SKIP: live Prettier check — Prettier is not installed; ignore entries verified."
+    fi
 fi
 
 echo "==> Semgrep wrapper preserves explicit scan targets"
