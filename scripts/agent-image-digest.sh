@@ -44,7 +44,7 @@ ref="${image}:${tag}"
 # buildx prints the digest without a trailing newline; strip whitespace anyway.
 digest=$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')
 digest=$(printf '%s' "$digest" | tr -d '[:space:]')
-if ! printf '%s\n' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+if ! grep -Eq '^sha256:[0-9a-f]{64}$' <<<"$digest"; then
     echo "error: unexpected digest for ${ref}: '${digest}'" >&2
     exit 1
 fi

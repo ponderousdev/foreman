@@ -274,7 +274,7 @@ runner checks are a separate tier.
 
 | Workflow | Purpose |
 |---|---|
-| `build.yml` | lint, test, security → aggregate `verify` gate (required checks) |
+| `build.yml` | check, repo-guards, devcontainer-permissions, Python test, security → aggregate `verify` gate (required checks) |
 | `codeql.yml` | CodeQL SAST: automatic and free for public repos; private/internal repos require GitHub Code Security + `FULL_SECURITY_SCAN=true` |
 | `snyk-scheduled.yml` | Optional weekly Snyk SAST/SCA second opinion; advisory and never a required PR check |
 | `devcontainer-build.yml` | Prebuilds devcontainer images to GHCR on merge to main |

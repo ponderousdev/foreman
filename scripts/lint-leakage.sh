@@ -44,22 +44,22 @@ while IFS="$(printf '\t')" read -r pattern allowed; do
         # The pathname itself is shipped content (a denied name can leak as a
         # filename), and so is a symlink's stored target — neither is covered
         # by a content grep.
-        if printf '%s\n' "$f" | grep -Eiq "$pattern"; then
-            if ! printf '%s\n' "$f" | grep -Eq "$allowed"; then
+        if grep -Eiq "$pattern" <<<"$f"; then
+            if ! grep -Eq "$allowed" <<<"$f"; then
                 printf '%s (pathname)\n' "$f"
                 continue
             fi
         fi
         if [ -L "$f" ]; then
             if readlink "$f" | grep -Eiq "$pattern" &&
-                ! printf '%s\n' "$f" | grep -Eq "$allowed"; then
+                ! grep -Eq "$allowed" <<<"$f"; then
                 printf '%s (symlink target)\n' "$f"
             fi
             continue
         fi
         [ -f "$f" ] || continue
         if grep -aiq -E "$pattern" "$f" 2>/dev/null; then
-            if ! printf '%s\n' "$f" | grep -Eq "$allowed"; then
+            if ! grep -Eq "$allowed" <<<"$f"; then
                 printf '%s\n' "$f"
             fi
         fi
@@ -85,7 +85,7 @@ while IFS="$(printf '\t')" read -r pattern allowed; do
             esac
         done
     } | sort -u | while IFS= read -r f; do
-        if ! printf '%s\n' "$f" | grep -Eq "$allowed"; then
+        if ! grep -Eq "$allowed" <<<"$f"; then
             printf '%s (committed on HEAD)\n' "$f"
         fi
     done)"

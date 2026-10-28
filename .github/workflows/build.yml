@@ -33,7 +33,25 @@ permissions:
   contents: read
 
 jobs:
-  lint:
+  changes:
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Both parents of the PR merge ref: first parent is the live base.
+          fetch-depth: 2
+      - name: Classify docs-only changes (fail closed)
+        id: classify
+        run: ./scripts/ci-changes-classify.sh >> "$GITHUB_OUTPUT"
+
+  check:
     # Runner switch: CI_RUNS_ON repo/org variable unset -> the rendered
     # default; set it to a JSON runner spec to override without a commit.
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
@@ -53,39 +71,51 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           lint-tools: "true"
-      - name: Lint
+      - name: Check
         run: task check
-      # Outside the suite: `audit:*` is not a `test:*` target, so `test:suite`
-      # does not carry it, and `verify` runs it between `check` and the suite.
-      - run: task audit:agent-instructions
-      # Its own step, outside the suite it guards: it is also a suite member (so
-      # `verify` runs it), but deleting the suite step below would delete the
-      # only CI step that could notice — this one still fails then.
-      - name: Verify-CI parity guard (runs outside the suite it guards)
-        run: task test:verify-ci-parity
-      # The ONE step for every `test:*` target `task verify` runs. The list
-      # lives in Taskfile.yml's `test:suite` and nowhere else, so a check added
-      # to `verify` can no longer be missed here (harmon-init#962, #1461) —
-      # each entry carries the same answer gate in both places.
-      # `test:verify-ci-parity` (the step above) fails if this step is ever
-      # dropped.
-      #
-      # NOT here, deliberately: `validate` and `test`. Both are in `verify`
-      # unconditionally, but CI only invokes them from the build-test job,
-      # which is gated on use_node. So a repo with
-      # `(include_terraform or include_ansible) and not use_node` runs real
-      # terraform/ansible checks locally and none in CI. Adding them here is
-      # not a one-liner — `terraform validate` needs an init step CI does not
-      # have — so it is tracked as harmon-init#978 rather than fixed in the
-      # same breath.
-      - name: Test suite (every test:* target verify runs)
-        run: task test:suite
-      # Outside the suite, on purpose: a NETWORK check (`verify` stays offline).
-      - name: Skills drift check (vendored skills vs pinned harmon-devkit ref)
-        run: task verify:skills
-      # Outside the suite, on purpose: a `ci`-only unit check, not in `verify`.
-      - run: task test:devcontainer:permissions
 
+
+  repo-guards:
+    # Runner switch: CI_RUNS_ON repo/org variable unset -> the rendered
+    # default; set it to a JSON runner spec to override without a commit.
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+        with:
+          lint-tools: "true"
+      # Outside ci:repo-guards: deleting its suite call must not silence this guard.
+      - name: Verify-CI parity guard (runs outside the task it guards)
+        run: task test:verify-ci-parity
+      - name: Repository guards
+        run: task ci:repo-guards
+
+  devcontainer-permissions:
+    needs: changes
+    # Runner switch: CI_RUNS_ON repo/org variable unset -> the rendered
+    # default; set it to a JSON runner spec to override without a commit.
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    if: >-
+      !cancelled() &&
+      (github.event_name != 'pull_request' ||
+       (github.event.pull_request.head.repo.full_name == github.repository &&
+        (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true')))
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+      - name: Devcontainer permissions
+        run: task test:devcontainer:permissions
 
   security:
     # Runner switch: CI_RUNS_ON repo/org variable unset -> the rendered
@@ -131,20 +161,24 @@ jobs:
 
   verify:
     if: always()
-    needs: [lint, security, test]
+    needs: [changes, check, repo-guards, devcontainer-permissions, security, test]
     # Runner switch: CI_RUNS_ON repo/org variable unset -> the rendered
     # default; set it to a JSON runner spec to override without a commit.
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     env:
+      CI_EVENT_NAME: ${{ github.event_name }}
+      CHANGES_RESULT: ${{ needs.changes.result }}
+      DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
       IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
     steps:
       # Never check out or run fork-controlled repository code on this path.
       - name: Verify deliberate skips at the untrusted-fork boundary
         if: env.IS_FORK == 'true'
         env:
-          LINT_RESULT: ${{ needs.lint.result }}
+          CHECK_RESULT: ${{ needs.check.result }}
+          REPO_GUARDS_RESULT: ${{ needs.repo-guards.result }}
+          DEVCONTAINER_PERMISSIONS_RESULT: ${{ needs.devcontainer-permissions.result }}
           SECURITY_RESULT: ${{ needs.security.result }}
-          TEST_RESULT: ${{ needs.test.result }}
         run: |
           fail=0
           check_skipped() {
@@ -153,9 +187,11 @@ jobs:
               fail=1
             fi
           }
-          check_skipped lint "$LINT_RESULT"
+          check_skipped changes "$CHANGES_RESULT"
+          check_skipped check "$CHECK_RESULT"
+          check_skipped repo-guards "$REPO_GUARDS_RESULT"
+          check_skipped devcontainer-permissions "$DEVCONTAINER_PERMISSIONS_RESULT"
           check_skipped security "$SECURITY_RESULT"
-          check_skipped test "$TEST_RESULT"
           if [ "$fail" -ne 0 ]; then
             exit 1
           fi
@@ -168,9 +204,25 @@ jobs:
         if: env.IS_FORK != 'true'
         env:
           EXPECTED_RESULT: success
-          LINT_RESULT: ${{ needs.lint.result }}
+          DOCS_ONLY_JOBS: "devcontainer-permissions "
+          CHECK_RESULT: ${{ needs.check.result }}
+          REPO_GUARDS_RESULT: ${{ needs.repo-guards.result }}
+          DEVCONTAINER_PERMISSIONS_RESULT: ${{ needs.devcontainer-permissions.result }}
           SECURITY_RESULT: ${{ needs.security.result }}
+        run: ./scripts/verify-ci-results.sh "changes=${CHANGES_RESULT}" "check=${CHECK_RESULT}" "repo-guards=${REPO_GUARDS_RESULT}" "devcontainer-permissions=${DEVCONTAINER_PERMISSIONS_RESULT}" "security=${SECURITY_RESULT}"
+      # Keep the repo-specific Python job in the gate independently of the
+      # template aggregate; its fork check must run without checking out code.
+      - name: Verify Python test result
+        env:
           TEST_RESULT: ${{ needs.test.result }}
-        run: ./scripts/verify-ci-results.sh "lint=${LINT_RESULT}" "security=${SECURITY_RESULT}" "test=${TEST_RESULT}"
+        run: |
+          expected=success
+          if [ "$IS_FORK" = 'true' ]; then
+            expected=skipped
+          fi
+          if [ "$TEST_RESULT" != "$expected" ]; then
+            echo "::error::Python test result: $TEST_RESULT (expected $expected)"
+            exit 1
+          fi
 # Keep a literal final line after the inline Jinja conditionals above; with
 # trim_blocks enabled, ending on a block tag would strip the workflow's EOF newline.
