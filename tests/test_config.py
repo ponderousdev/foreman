@@ -56,6 +56,8 @@ class ConfigLoading(unittest.TestCase):
                 "admiralfraggle",
                 "admiralfraggle-bot",
                 "Jessedroptable",
+                "Copilot",
+                "coderabbitai[bot]",
                 "chatgpt-codex-connector[bot]",
             ],
         )

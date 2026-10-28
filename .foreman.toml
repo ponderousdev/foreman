@@ -29,7 +29,7 @@ expected_login = "evanharmon1-bot"
 # this list — requiring review evidence whose content cannot be embedded
 # would wedge shepherding on unadjudicatable findings. chatgpt-codex-connector[bot]
 # is the codex cloud-review reviewer (use_codex_cloud_review).
-trusted_actors = ["evanharmon1", "evanharmon1-bot", "admiralfraggle", "admiralfraggle-bot", "Jessedroptable", "chatgpt-codex-connector[bot]"]
+trusted_actors = ["evanharmon1", "evanharmon1-bot", "admiralfraggle", "admiralfraggle-bot", "Jessedroptable", "Copilot", "coderabbitai[bot]", "chatgpt-codex-connector[bot]"]
 
 # Hard capability requirements: the baseline gate cannot run without these;
 # a mismatch is refused before dispatch.

@@ -36,7 +36,7 @@ repositories and for profiles without a CodeQL workflow.
 | **SAST** — flaws in *your own code* | injection, XSS, SSRF, path traversal, crypto/auth misuse | **CodeQL** for public repos; **Semgrep CE** for free private repos | CodeQL runs automatically in public CI. Private CI uses Semgrep unless paid GitHub Code Security + `FULL_SECURITY_SCAN=true` opts into CodeQL |
 | **SCA** — CVEs in *dependencies* | vulnerable third-party packages | **Dependabot alerts** + **`task security:audit`** (`pip-audit`) | Dependabot continuous; audit in the CI `security` job + `task security` locally |
 | **Secrets** — committed credentials | keys, tokens, certs, `.env` | **gitleaks** (`task security:secrets`) | pre-push git hook + CI `security` job |
-| **IaC** — insecure infrastructure | open security groups, public buckets, … | **checkov** (`task lint:terraform:security`) | CI `lint` job + `task check` locally (Terraform repos) |
+| **IaC** — insecure infrastructure | open security groups, public buckets, … | **checkov** (`task lint:terraform:security`) | CI `check` job + `task check` locally (Terraform repos) |
 | **Freshness/remediation** — stale or vulnerable dependencies | a widening exposure window | **Renovate** (`minimumReleaseAge: 3 days`, Dependabot-alert remediation enabled) | continuous update and vulnerability-fix PRs |
 
 The repository-class policy is:
@@ -75,6 +75,17 @@ automatically on every **public** repository: GitHub code scanning and standard
 GitHub-hosted Actions runners are free there. CodeQL is preferred over Semgrep CE
 for these stacks because its queries include deeper interprocedural and data-flow
 analysis and integrate directly with GitHub's Security tab.
+
+With the shipped advanced CodeQL workflow, GitHub's CodeQL **Default setup**
+must be off (**Settings → Advanced Security → CodeQL analysis**, or
+`gh api --method PATCH repos/OWNER/REPO/code-scanning/default-setup -f state=not-configured`),
+because GitHub refuses advanced uploads while Default setup is on. If Default
+setup was enabled after the advanced workflow existed, GitHub disabled that
+workflow — then re-enable the CodeQL workflow (**Actions → CodeQL → "Enable
+workflow"**, or `gh workflow enable codeql.yml`). Public repositories
+frequently have Default setup auto-enabled, which causes `analyze` and the
+required `codeql-verify` check to fail on SARIF upload until Default setup is
+disabled; keep it off after disabling it.
 
 For **private/internal** repositories, CodeQL code scanning requires an
 organization on GitHub Team or Enterprise with
@@ -659,11 +670,13 @@ nothing more:
 | Contents | Read and write | commits, branches, tags, releases |
 | Pull requests | Read and write | open/update the release PR and claude PRs |
 | Issues | Read and write | claude comments/labels/updates issues |
+| Checks | Read-only | claude-implement watches CI with `gh pr checks`, including on private repos |
+| Commit statuses | Read-only | claude-implement reads the status rollup with `gh pr checks` |
+| Actions | Read-only | claude-implement reads workflow-run metadata with `gh pr checks`; org project-automation reads CI run results |
 | Workflows | Read and write | claude may edit files under `.github/workflows/` |
 | Metadata | Read-only | required baseline |
 | Projects | Read and write (org) | project-automation + claude status sync |
 | Members | Read-only (org) | claude-review verifies the sender is an org member |
-| Actions | Read-only | project-automation reads CI (Build & Validate) run results |
 
 ### Blast radius & key protection
 
