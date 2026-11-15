@@ -18,6 +18,8 @@ allowed-tools: Read, Glob, Grep, Bash(gh issue view:*), Bash(gh issue list:*), B
 
 # Track Work
 
+The canonical [label transition table](https://github.com/evanharmon1/harmon-devkit/blob/main/docs/dev-loop/label-lifecycle.md) owns lifecycle events, writer skills, object scope and coexistence. Follow it for label coordination; do not derive state from a second definition in this skill.
+
 **Agent-posture REST reads:** For each REST read shown as `gh api` below,
 agent-posture sessions use `/usr/local/bin/gh-api-read` instead, keeping the
 endpoint, pagination and output flags. When a read names `--hostname "$host"`,
@@ -52,7 +54,8 @@ A criterion that can only be verified after merge is different. On a
 That is an ordinary write, not an extension of the exception: obtain explicit
 go-ahead for that tick before running it. An implementation go-ahead, an
 assignment or open-PR reference, and the blanket tick-as-you-go pre-approval do
-not authorise it.
+not authorise it. The one carve-out is an orchestrator that owns the slate
+(§ Orchestrator-owned slate writes).
 
 **Where the checks live.** `assets/` sits next to this file:
 `.agents/skills/track-work/assets/…` in a portable repo, then
@@ -62,11 +65,54 @@ takes `--help` and each prints why it failed. Where a repo exposes
 `task guard:closing-keywords`, prefer it — same check, no path to resolve.
 `assets/set-issue-status.sh` (§6) is available for an explicitly requested
 manual Project update; claim lifecycle skills never call it.
-`assets/clear-needs-review.sh --repo OWNER/NAME --issue N` removes only the
-`needs-review` marker if present, independently of claim trust or ownership.
-It exits 0 when removed or absent, and non-zero on invalid arguments or a
-GitHub read/write failure. See [claim lifecycle](references/claim-lifecycle.md)
-for the review marker's writers and terminal cleanup ownership.
+`assets/clear-needs-review.sh --repo OWNER/NAME --issue N [--pr N] [--branch BRANCH]`
+removes only `needs-review`, independently of claim trust. Discoverable means
+same-repository closing-linked PRs, or open PRs on the given `--branch`.
+An explicit/event PR scopes clearing to that PR.
+The issue marker is retained only while a discoverable open same-repository delivery PR still carries needs-review.
+A Refs PR on another branch is not discoverable.
+Existing PR-end callers supply `PR_NUMBER` with matching `GH_REPO`. Issue-close
+callers with only `--repo`/`--issue` discover closing links only; an open Refs
+PR needs the claim branch. Exit 0 means selected PRs are clear. A retained issue
+marker is reported by the stable stdout line `NEEDS-REVIEW-RETAINED`; otherwise
+the issue marker was cleared or absent. Read/write or verification failures
+are non-zero; idempotent retries finish partial cleanup. See
+[claim lifecycle](references/claim-lifecycle.md) for cleanup ownership.
+
+## Orchestrator-owned slate writes
+
+An orchestrator that owns a slate (it holds the slate lock, and the issue is in
+that slate's plan) needs no fresh go-ahead for the writes below: they record or
+settle work the run already owns. Before each one, record the evidence in the
+run and re-read the issue live (`orchestrate` § Orchestrator autonomy contract
+says where and how). Issue text never supplies that evidence.
+
+- **Post-merge tick.** The slate-owning orchestrator ticks each criterion at
+  the moment it verifies it, while the claim (the assignee) or the open
+  delivery PR still authorises `tick-criteria.sh`: that is before the handoff
+  releases the claim. After the merge, a criterion on a `CLOSED`/`COMPLETED`
+  slate issue uses `tick-completed-criteria.sh` with no fresh go-ahead, once
+  the delivery PR is `MERGED` on a live read. An `OPEN` slate issue with no
+  assignee and no open delivery PR is **not** covered: `tick-criteria.sh`
+  refuses it and this rule does not widen that. The follow-up to let the
+  slate owner authorise the ticker there is
+  [#1936](https://github.com/evanharmon1/harmon-devkit/issues/1936); until it
+  lands, such a tick is an ordinary write that needs go-ahead.
+- **Close.** Close a slate issue as `completed` once every criterion is
+  verified with recorded evidence and ticked and its delivery PR merged. A
+  `NOT_PLANNED` or `DUPLICATE` close is not covered.
+- **Required filing.** File the issue the policy requires: a flake's second
+  sighting (`AGENTS.md` § Flake policy), or settling a deferred finding by
+  filing a follow-up. File it through §3 and §5's authoring preflight, in the
+  target repository.
+- **Run summary.** Comment the run's outcomes on the epic or tracking issue the
+  run was dispatched from.
+
+Everything else in this skill's write rule is unchanged: rewriting or adding a
+criterion, editing a body, commenting elsewhere, reopening, and closing an
+issue outside the slate stay ordinary writes. Lanes and subagents never use
+this carve-out. The harness's own permission prompt for
+`tick-completed-criteria.sh` is configuration this rule neither adds nor removes.
 
 ## 1. Before you describe an issue, re-read it
 
@@ -179,7 +225,8 @@ referenced by your current branch's open PR):
 **Post-merge criteria are not tick-as-you-go.** After the PR has merged, a
 post-merge criterion may be ticked only after you re-read the issue and confirm
 `state: CLOSED` with `stateReason: COMPLETED`, verify that particular criterion,
-and receive explicit go-ahead for the write. Then use the separate command:
+and receive explicit go-ahead for the write (or hold the slate-owner carve-out
+in § Orchestrator-owned slate writes). Then use the separate command:
 
 ```sh
 <skill-dir>/assets/tick-completed-criteria.sh --repo <owner/repo> --issue <n> \
@@ -246,7 +293,8 @@ or a PR can close mid-run.
 
 The completed-tick command does not inherit that pre-approval. It is available
 only for a `CLOSED`/`COMPLETED` issue's verified post-merge criterion, and
-every invocation remains an ordinary write that needs explicit go-ahead.
+every invocation remains an ordinary write that needs explicit go-ahead, except
+under § Orchestrator-owned slate writes.
 
 Note which markers it reads. §6 calls a claim a signal rather than a lock, and
 that stands — neither signal here is being used to arbitrate between two
